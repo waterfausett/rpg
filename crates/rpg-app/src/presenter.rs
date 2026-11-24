@@ -12,12 +12,15 @@ pub const ACHIEVEMENT_TITLE: &str = "✦ NEW ACHIEVEMENT ✦";
 pub const LEVEL_UP_TITLE: &str = "✦ LEVEL UP ✦";
 pub const AWAY_TITLE: &str = "✦ WHILE YOU WERE AWAY ✦";
 pub const STORM_TITLE: &str = "✦ ACHIEVEMENT STORM ✦";
+pub const NOTICE_TITLE: &str = "✦ RPG ✦";
 pub const AWAY_LABEL: &str = "while you were away";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Toast {
     pub amount: u64,
     pub label: String,
+    /// A plain message (e.g. "Hooks installed") instead of "+N exp".
+    pub notice: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,6 +28,8 @@ pub enum BannerKind {
     Achievement,
     LevelUp,
     AwaySummary,
+    /// The result of something the user asked for (tray install/uninstall failed).
+    Notice,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,6 +37,7 @@ pub enum SoundKey {
     Achievement { rule_id: String, tier: Tier },
     LevelUp,
     Summary,
+    Silent,
 }
 
 /// What an achievement banner needs to resolve its flavor text right before it
@@ -83,7 +89,7 @@ impl Presenter {
         let storm = away || unlocks.len() > STORM_CAP;
         if !storm {
             if !self.dnd {
-                self.toasts.extend(gains.map(|g| Toast { amount: g.amount, label: g.label.clone() }));
+                self.toasts.extend(gains.map(|g| Toast { amount: g.amount, label: g.label.clone(), notice: false }));
             }
             self.banners.extend(unlocks.iter().map(|(e, u)| achievement(e, u)));
             self.banners.extend(level_ups.into_iter().map(level_up));
@@ -92,13 +98,34 @@ impl Presenter {
 
         let sum: u64 = gains.map(|g| g.amount).sum();
         if sum > 0 && !self.dnd {
-            self.toasts.push(Toast { amount: sum, label: if away { AWAY_LABEL.into() } else { String::new() } });
+            self.toasts.push(Toast { amount: sum, label: if away { AWAY_LABEL.into() } else { String::new() }, notice: false });
         }
         let achs = unlocks.iter().map(|(e, u)| achievement(e, u)).collect();
         self.banners.extend(collapse(achs, (0, 0), away));
         if let Some(&top) = level_ups.iter().max() {
             self.banners.push_back(level_up(top));
         }
+    }
+
+    /// Report the result of a user action. Success is a small toast; failure a
+    /// silent banner at the head of the queue. Both ignore DND: the user just asked.
+    pub fn notice(&mut self, ok: bool, title: &str, detail: &str) {
+        if ok {
+            self.toasts.push(Toast { amount: 0, label: title.into(), notice: true });
+            return;
+        }
+        self.banners.push_front(Banner {
+            kind: BannerKind::Notice,
+            title: NOTICE_TITLE.into(),
+            name: title.into(),
+            text: detail.into(),
+            text_ready: true,
+            reward: String::new(),
+            tier: None,
+            sound_key: SoundKey::Silent,
+            flavor: None,
+            more: None,
+        });
     }
 
     /// DND on: pending and new toasts are dropped and banners wait. Off: banners flow again.
@@ -122,8 +149,10 @@ impl Presenter {
         let mut achievements = vec![];
         let mut carried = (0, 0);
         let mut last_level_up = None;
+        let mut notices = vec![];
         for b in self.banners.drain(..) {
             match b.kind {
+                BannerKind::Notice => notices.push(b),
                 BannerKind::Achievement => achievements.push(b),
                 BannerKind::AwaySummary => {
                     let (n, xp) = b.more.unwrap_or_default();
@@ -133,6 +162,7 @@ impl Presenter {
                 BannerKind::LevelUp => last_level_up = Some(b),
             }
         }
+        self.banners.extend(notices);
         self.banners.extend(collapse(achievements, carried, false));
         self.banners.extend(last_level_up);
     }
@@ -142,9 +172,11 @@ impl Presenter {
         std::mem::take(&mut self.toasts)
     }
 
-    /// The next banner to show, or `None` while one is showing, DND is on, or the queue is empty.
+    /// The next banner to show, or `None` while one is showing, DND is on (unless a
+    /// notice is next), or the queue is empty.
     pub fn next_banner(&mut self) -> Option<Banner> {
-        if self.showing || self.dnd {
+        let notice_next = self.banners.front().is_some_and(|b| b.kind == BannerKind::Notice);
+        if self.showing || (self.dnd && !notice_next) {
             return None;
         }
         let b = self.banners.pop_front()?;
@@ -167,7 +199,7 @@ impl Presenter {
     /// Last check before a taken banner goes on screen: `Some` to show it, or
     /// `None` when DND came on meanwhile (it is requeued at the front).
     pub fn confirm_show(&mut self, b: Banner) -> Option<Banner> {
-        if self.dnd {
+        if self.dnd && b.kind != BannerKind::Notice {
             self.requeue_front(b);
             return None;
         }
@@ -315,7 +347,7 @@ mod tests {
         p.push(&batch(vec![unlock(1, Tier::Bronze, 250), unlock(2, Tier::Silver, 500)]), false);
         let toasts = p.next_toasts();
         assert_eq!(toasts.len(), 4, "every xp gain is a toast: {toasts:?}");
-        assert_eq!(toasts[0], Toast { amount: 10, label: "commit".into() });
+        assert_eq!(toasts[0], Toast { amount: 10, label: "commit".into(), notice: false });
         assert!(p.next_toasts().is_empty(), "toasts are drained");
 
         let first = p.next_banner().expect("first banner");
@@ -349,7 +381,7 @@ mod tests {
         p.push(&batch(us), true);
         let toasts = p.next_toasts();
         let total = 7 * 10 + 100 + 200 + 250 + 400 + 500 + 500 + 1000;
-        assert_eq!(toasts, vec![Toast { amount: total, label: AWAY_LABEL.into() }]);
+        assert_eq!(toasts, vec![Toast { amount: total, label: AWAY_LABEL.into(), notice: false }]);
 
         let bs = drain(&mut p);
         assert_eq!(bs.len(), 4, "3 achievements + 1 summary");
@@ -369,7 +401,7 @@ mod tests {
         let mut p = Presenter::new();
         p.push(&batch(vec![unlock(1, Tier::Bronze, 100), unlock(2, Tier::Gold, 1000)]), true);
         assert_eq!(names(&mut p), vec!["Ach 2", "Ach 1"], "sorted, no summary");
-        assert_eq!(p.next_toasts(), vec![Toast { amount: 20 + 1100, label: AWAY_LABEL.into() }]);
+        assert_eq!(p.next_toasts(), vec![Toast { amount: 20 + 1100, label: AWAY_LABEL.into(), notice: false }]);
     }
 
     #[test]
@@ -384,7 +416,7 @@ mod tests {
         ];
         p.push(&batch(us), false);
         let toasts = p.next_toasts();
-        assert_eq!(toasts, vec![Toast { amount: 50 + 100 + 500 + 300 + 1000 + 250, label: String::new() }]);
+        assert_eq!(toasts, vec![Toast { amount: 50 + 100 + 500 + 300 + 1000 + 250, label: String::new(), notice: false }]);
         let bs = drain(&mut p);
         let got: Vec<&str> = bs.iter().map(|b| b.name.as_str()).collect();
         assert_eq!(&got[..3], &["Ach 4", "Ach 2", "Ach 3"]);
@@ -490,6 +522,48 @@ mod tests {
         let b = p.next_banner().expect("released after DND");
         assert_eq!(b.name, "Ach 1");
         assert!(p.confirm_show(b).is_some(), "shown when DND is off");
+    }
+
+    #[test]
+    fn ok_notice_is_a_toast_even_under_dnd() {
+        let mut p = Presenter::new();
+        p.set_dnd(true);
+        p.notice(true, "Hooks installed", "git + Claude Code");
+        assert_eq!(p.next_toasts(), vec![Toast { amount: 0, label: "Hooks installed".into(), notice: true }]);
+        assert!(p.next_banner().is_none(), "success needs no banner");
+    }
+
+    #[test]
+    fn failed_notice_banner_jumps_queue_and_ignores_dnd() {
+        let mut p = Presenter::new();
+        p.push(&batch(vec![unlock(1, Tier::Bronze, 100), unlock(2, Tier::Bronze, 100)]), false);
+        p.set_dnd(true);
+        p.notice(false, "Hooks not installed", "includeIf sets core.hooksPath");
+        let b = p.next_banner().expect("notice shows despite DND");
+        assert_eq!((b.kind, b.name.as_str(), b.text.as_str()), (BannerKind::Notice, "Hooks not installed", "includeIf sets core.hooksPath"));
+        assert!(b.text_ready);
+        assert_eq!(b.sound_key, SoundKey::Silent);
+        let b = p.confirm_show(b).expect("not requeued by DND");
+        assert_eq!(b.kind, BannerKind::Notice);
+        p.banner_done();
+        assert!(p.next_banner().is_none(), "achievements still wait for DND");
+    }
+
+    #[test]
+    fn dnd_backlog_collapse_keeps_notices_first() {
+        let mut p = Presenter::new();
+        p.set_dnd(true);
+        let us = vec![unlock(1, Tier::Bronze, 100), unlock(2, Tier::Bronze, 200), unlock(3, Tier::Bronze, 300), unlock(4, Tier::Bronze, 400)];
+        p.push(&batch(us), false);
+        p.notice(false, "Hooks not removed", "not rpg's");
+        // Queued behind a showing notice is fine too: take it, then release DND.
+        let n = p.next_banner().expect("notice");
+        p.banner_done();
+        p.requeue_front(n);
+        p.set_dnd(false);
+        let bs = drain(&mut p);
+        assert_eq!(bs[0].kind, BannerKind::Notice);
+        assert_eq!(bs.len(), 1 + 3 + 1, "notice + 3 biggest + summary");
     }
 
     #[test]

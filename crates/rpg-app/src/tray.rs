@@ -3,7 +3,6 @@ use crate::overlay::OverlaySink;
 use crate::runtime::{log, AppState};
 use rpg_core::install;
 use rpg_core::paths::Paths;
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
@@ -72,8 +71,8 @@ pub fn build(app: &AppHandle, state: &AppState, toggles: Arc<Toggles>) -> tauri:
                     log(paths, &format!("open rules folder failed: {e}"));
                 }
             }
-            INSTALL => run_installer(paths.clone(), true),
-            UNINSTALL => run_installer(paths.clone(), false),
+            INSTALL => run_installer(app.clone(), paths.clone(), true),
+            UNINSTALL => run_installer(app.clone(), paths.clone(), false),
             QUIT => app.exit(0),
             _ => {}
         }
@@ -82,52 +81,101 @@ pub fn build(app: &AppHandle, state: &AppState, toggles: Arc<Toggles>) -> tauri:
     Ok(())
 }
 
-/// The `rpg` CLI next to this executable; hook shims call it.
-fn sibling_rpg_bin() -> anyhow::Result<PathBuf> {
-    let exe = std::env::current_exe()?;
-    let bin = exe.with_file_name(format!("rpg{}", std::env::consts::EXE_SUFFIX));
-    anyhow::ensure!(bin.is_file(), "rpg CLI not found at {}", bin.display());
-    Ok(bin)
-}
-
-/// Install or uninstall git + Claude Code hooks off the UI thread, logging each step
-/// (same steps as `rpg install-hooks` / `rpg uninstall-hooks`).
-fn run_installer(paths: Paths, install_hooks: bool) {
+/// Install or uninstall git + Claude Code hooks off the UI thread (same steps as
+/// `rpg install-hooks` / `rpg uninstall-hooks`). The hooks call this executable
+/// (`rpg-app emit …`, see `main`), so installers need no separate CLI (#12).
+/// Each step is logged; the outcome is shown in the overlay.
+fn run_installer(app: AppHandle, paths: Paths, install_hooks: bool) {
     std::thread::spawn(move || {
         let git = install::GitEnv::inherit();
-        let steps: [(&str, anyhow::Result<()>); 2] = if install_hooks {
-            match sibling_rpg_bin() {
-                Ok(bin) => [
-                    ("install git hooks", install::install_git_hooks(&paths, &bin, &git)),
+        let steps: Vec<(&str, anyhow::Result<bool>)> = if install_hooks {
+            match std::env::current_exe() {
+                Ok(bin) => vec![
+                    ("git hooks", install::install_git_hooks(&paths, &bin, &git).map(|()| true)),
                     (
-                        "install claude hooks",
-                        install::claude_settings_path().and_then(|s| install::install_claude_hooks(&s, &bin, paths.home.as_deref())),
+                        "Claude Code hooks",
+                        install::claude_settings_path()
+                            .and_then(|s| install::install_claude_hooks(&s, &bin, paths.home.as_deref()))
+                            .map(|()| true),
                     ),
                 ],
-                Err(e) => {
-                    log(&paths, &format!("install hooks: {e:#}"));
-                    return;
-                }
+                Err(e) => vec![("hooks", Err(anyhow::Error::from(e).context("cannot locate rpg-app")))],
             }
         } else {
-            [
-                ("uninstall git hooks", install::uninstall_git_hooks(&paths, &git)),
+            vec![
+                ("git hooks", install::uninstall_git_hooks(&paths, &git)),
                 (
-                    "uninstall claude hooks",
+                    "Claude Code hooks",
                     install::claude_settings_path().and_then(|s| install::uninstall_claude_hooks(&s)),
                 ),
             ]
         };
-        for (step, res) in steps {
+        let verb = if install_hooks { "install" } else { "uninstall" };
+        for (step, res) in &steps {
             match res {
-                Ok(()) => log(&paths, &format!("{step}: ok")),
-                Err(e) => log(&paths, &format!("{step}: FAILED: {e:#}")),
+                Ok(true) => log(&paths, &format!("{verb} {step}: ok")),
+                Ok(false) => log(&paths, &format!("{verb} {step}: nothing to do")),
+                Err(e) => log(&paths, &format!("{verb} {step}: FAILED: {e:#}")),
             }
         }
+        let (ok, title, detail) = installer_notice(install_hooks, &steps);
+        if let Some(overlay) = app.try_state::<Arc<OverlaySink>>() {
+            overlay.notice(ok, &title, &detail);
+        }
     });
+}
+
+/// What to tell the user about an install/uninstall: `(ok, title, detail)`. Each step is
+/// `Ok(changed)`; an uninstall where nothing changed means the hooks weren't installed.
+fn installer_notice(install_hooks: bool, steps: &[(&str, anyhow::Result<bool>)]) -> (bool, String, String) {
+    let failed: Vec<String> = steps
+        .iter()
+        .filter_map(|(step, r)| r.as_ref().err().map(|e| format!("{step}: {e:#}")))
+        .collect();
+    let done = if install_hooks { "installed" } else { "removed" };
+    if failed.is_empty() {
+        let changed = steps.iter().any(|(_, r)| matches!(r, Ok(true)));
+        let title = if changed { format!("Hooks {done}") } else { "Hooks weren't installed".into() };
+        return (true, title, String::new());
+    }
+    let title = if failed.len() == steps.len() { format!("Hooks not {done}") } else { format!("Hooks partly {done}") };
+    (false, title, format!("{} (details in rpg.log)", failed.join(" · ")))
 }
 
 /// Build the tray around the shared toggles.
 pub fn setup(app: &tauri::App, state: &AppState, toggles: Arc<Toggles>) -> tauri::Result<()> {
     build(app.handle(), state, toggles)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn notice_for_full_success() {
+        let steps = [("git hooks", Ok(true)), ("Claude Code hooks", Ok(true))];
+        assert_eq!(installer_notice(true, &steps), (true, "Hooks installed".into(), String::new()));
+        assert_eq!(installer_notice(false, &steps).1, "Hooks removed");
+        let partial = [("git hooks", Ok(false)), ("Claude Code hooks", Ok(true))];
+        assert_eq!(installer_notice(false, &partial).1, "Hooks removed");
+    }
+
+    #[test]
+    fn uninstall_with_nothing_installed_says_so() {
+        let steps = [("git hooks", Ok(false)), ("Claude Code hooks", Ok(false))];
+        assert_eq!(installer_notice(false, &steps), (true, "Hooks weren't installed".into(), String::new()));
+    }
+
+    #[test]
+    fn notice_names_each_failed_step() {
+        let steps = [("git hooks", Err(anyhow::anyhow!("not installed: includeIf"))), ("Claude Code hooks", Ok(true))];
+        let (ok, title, detail) = installer_notice(true, &steps);
+        assert!(!ok);
+        assert_eq!(title, "Hooks partly installed");
+        assert_eq!(detail, "git hooks: not installed: includeIf (details in rpg.log)");
+        let all = [("git hooks", Err(anyhow::anyhow!("a"))), ("Claude Code hooks", Err(anyhow::anyhow!("b")))];
+        let (_, title, detail) = installer_notice(false, &all);
+        assert_eq!(title, "Hooks not removed");
+        assert_eq!(detail, "git hooks: a · Claude Code hooks: b (details in rpg.log)");
+    }
 }

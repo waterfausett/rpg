@@ -3780,6 +3780,7 @@ name = "rpg-app"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "assert_cmd",
  "axum",
  "chrono",
  "fastrand",
@@ -3804,9 +3805,7 @@ dependencies = [
 name = "rpg-cli"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "assert_cmd",
- "clap",
  "rpg-core",
  "serde_json",
  "tempfile",
@@ -3818,6 +3817,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "clap",
  "directories",
  "include_dir",
  "rusqlite",

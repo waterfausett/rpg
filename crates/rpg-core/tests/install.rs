@@ -199,8 +199,25 @@ fn uninstall_unsets_when_nothing_was_set() {
     let sb = Sandbox::new();
     sb.install(&sb.root().join("nope"));
     assert!(sb.global_hooks_path().is_some());
-    install::uninstall_git_hooks(&sb.paths, &sb.genv()).unwrap();
+    assert!(install::uninstall_git_hooks(&sb.paths, &sb.genv()).unwrap(), "something was removed");
     assert_eq!(sb.global_hooks_path(), None);
+}
+
+#[test]
+fn uninstall_when_not_installed_is_a_noop() {
+    let sb = Sandbox::new();
+    assert!(!install::uninstall_git_hooks(&sb.paths, &sb.genv()).unwrap(), "nothing to remove");
+    assert_eq!(sb.global_hooks_path(), None);
+}
+
+#[test]
+fn uninstall_refuses_someone_elses_hookspath() {
+    let sb = Sandbox::new();
+    let theirs = slash(&sb.root().join("theirs"));
+    sb.git_ok(sb.root(), &["config", "--global", "core.hooksPath", &theirs]);
+    let e = install::uninstall_git_hooks(&sb.paths, &sb.genv()).unwrap_err();
+    assert!(format!("{e:#}").contains("not rpg's"), "{e:#}");
+    assert_eq!(sb.global_hooks_path().as_deref(), Some(theirs.as_str()));
 }
 
 #[test]
@@ -283,7 +300,8 @@ fn claude_settings_merge_preserves_and_is_idempotent() {
     let backup = std::fs::read_to_string(tmp.path().join("settings.json.rpg-backup")).unwrap();
     assert_eq!(backup, orig_text, "backup must be the pre-install file, even after a second install");
 
-    install::uninstall_claude_hooks(&settings).unwrap();
+    assert!(install::uninstall_claude_hooks(&settings).unwrap(), "entries removed");
+    assert!(!install::uninstall_claude_hooks(&settings).unwrap(), "second uninstall finds nothing");
     let raw = std::fs::read_to_string(&settings).unwrap();
     assert!(!raw.contains("emit claude-session-"), "{raw}");
     let v: serde_json::Value = serde_json::from_str(&raw).unwrap();

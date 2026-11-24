@@ -21,7 +21,7 @@ The automated and scripted checks cannot see these. Do them once on your machine
 
 ## Real install
 - [ ] First note `git config --global --get core.hooksPath` (probably unset) and keep a copy of `~/.claude/settings.json`.
-- [ ] Tray **Install hooks** (or `rpg install-hooks`, with `rpg.exe` beside `rpg-app.exe`). Check that `git config --global core.hooksPath` points at `...\rpg\data\git-hooks` and that `~/.claude/settings.json` has the rpg `SessionStart`/`SessionEnd` entries with your other settings intact.
+- [ ] Tray **Install hooks** (a "Hooks installed" pop-up appears; or `rpg install-hooks` from a terminal). Check that `git config --global core.hooksPath` points at `...\rpg\data\git-hooks` and that `~/.claude/settings.json` has the rpg `SessionStart`/`SessionEnd` entries with your other settings intact.
 - [ ] Make a real commit in a real repo: the pop-up appears. A repo with its own pre-commit hook still runs it, and a failing one still blocks the commit.
 - [ ] End a real Claude Code session: `+15 exp · Claude session` appears.
 - [ ] Open a real PR and wait up to `poll_minutes`: `+50 exp · PR opened`. The backfilled PRs showed 0 XP and you started at level 1.

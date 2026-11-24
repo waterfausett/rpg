@@ -10,10 +10,14 @@
   function addToast(t) {
     const pill = document.createElement("div");
     pill.className = "xp";
-    pill.textContent = "+" + t.amount + " exp";
-    const label = document.createElement("small");
-    label.textContent = t.label || "";
-    pill.appendChild(label);
+    if (t.notice) {
+      pill.textContent = t.label || "";
+    } else {
+      pill.textContent = "+" + t.amount + " exp";
+      const label = document.createElement("small");
+      label.textContent = t.label || "";
+      pill.appendChild(label);
+    }
     pill.addEventListener("animationend", () => pill.remove());
     document.getElementById("toasts").appendChild(pill);
   }

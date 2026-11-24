@@ -14,3 +14,4 @@ pub mod records;
 pub mod engine;
 pub mod flavor;
 pub mod github;
+pub mod cli;

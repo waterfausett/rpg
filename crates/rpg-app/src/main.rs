@@ -55,6 +55,12 @@ fn init_state() -> anyhow::Result<AppState> {
 }
 
 fn main() {
+    // Installed hooks call this binary as `rpg-app emit …` (#12): record the event and
+    // exit before any Tauri setup, so the single-instance plugin never sees these calls.
+    if rpg_core::cli::is_emit(std::env::args_os()) {
+        rpg_core::cli::run(std::env::args_os());
+        return;
+    }
     let app = tauri::Builder::default()
         // Must be the first plugin: a second launch just exits.
         .plugin(tauri_plugin_single_instance::init(|_app, _argv, _cwd| {}))

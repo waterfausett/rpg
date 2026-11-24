@@ -14,6 +14,7 @@ pub fn resolve_sound(key: &SoundKey, cfg: &SoundConfig, files: &[PathBuf]) -> Op
         }
         SoundKey::LevelUp => vec![cfg.level_up.as_ref()],
         SoundKey::Summary => vec![cfg.achievement.as_ref()],
+        SoundKey::Silent => return None,
     };
     let find = |name: &str| files.iter().find(|f| f.file_name().is_some_and(|n| n == name)).cloned();
     if let Some(found) = configured.into_iter().flatten().find_map(|n| find(n)) {
