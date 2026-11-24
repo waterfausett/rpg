@@ -16,6 +16,21 @@ pub struct Config {
     pub sound: SoundConfig,
     pub site: SiteConfig,
     pub paths: PathFilter,
+    pub updates: UpdatesConfig,
+}
+
+/// Background checks for a new release. The tray's "Check for updates" works either way.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct UpdatesConfig {
+    /// Hours between automatic checks (the first runs shortly after startup); 0 turns them off.
+    pub check_hours: u64,
+}
+
+impl Default for UpdatesConfig {
+    fn default() -> Self {
+        Self { check_hours: 6 }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]

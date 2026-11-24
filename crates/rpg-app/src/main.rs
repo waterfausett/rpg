@@ -8,6 +8,7 @@ mod runtime;
 mod site;
 mod sound;
 mod tray;
+mod update;
 
 use overlay::OverlaySink;
 use rpg_core::config::Config;
@@ -64,6 +65,7 @@ fn main() {
     let app = tauri::Builder::default()
         // Must be the first plugin: a second launch just exits.
         .plugin(tauri_plugin_single_instance::init(|_app, _argv, _cwd| {}))
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             platform::configure_app(app);
             let state = init_state().map_err(|e| {

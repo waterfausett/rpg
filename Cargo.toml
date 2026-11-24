@@ -1,3 +1,7 @@
 [workspace]
 resolver = "2"
 members = ["crates/rpg-core", "crates/rpg-cli", "crates/rpg-app"]
+
+# The one place to bump for a release (the app, installer and updater all read it).
+[workspace.package]
+version = "0.2.0"

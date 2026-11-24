@@ -34,3 +34,7 @@ port = 47474
 [paths]
 include = []
 exclude = []
+
+# Hours between automatic update checks; 0 = only from the tray's "Check for updates".
+[updates]
+check_hours = 6
