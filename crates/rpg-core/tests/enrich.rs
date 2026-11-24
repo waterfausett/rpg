@@ -2,9 +2,12 @@ use rpg_core::enrich::file_ages;
 use std::path::Path;
 use std::process::Command;
 
+/// Runs git without the user's global/system config, so an installed rpg `core.hooksPath`
+/// can't record these test commits as real work.
 fn git(dir: &Path, args: &[&str], date: Option<&str>) {
     let mut c = Command::new("git");
     c.arg("-C").arg(dir).args(args);
+    c.env("GIT_CONFIG_GLOBAL", dir.join("no-global-gitconfig")).env("GIT_CONFIG_NOSYSTEM", "1");
     if let Some(d) = date {
         c.env("GIT_AUTHOR_DATE", d).env("GIT_COMMITTER_DATE", d);
     }

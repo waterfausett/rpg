@@ -4,8 +4,17 @@ use rpg_core::inbox;
 use std::path::Path;
 use std::process::Command;
 
+/// Runs git without the user's global/system config, so an installed rpg `core.hooksPath`
+/// can't record these test commits as real work.
 fn git(dir: &Path, args: &[&str]) {
-    let s = Command::new("git").arg("-C").arg(dir).args(args).status().unwrap();
+    let s = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .env("GIT_CONFIG_GLOBAL", dir.join("no-global-gitconfig"))
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .status()
+        .unwrap();
     assert!(s.success(), "git {args:?}");
 }
 
