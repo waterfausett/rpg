@@ -1,4 +1,5 @@
 //! Tray icon and menu.
+use crate::overlay::OverlaySink;
 use crate::runtime::{log, AppState};
 use rpg_core::install;
 use rpg_core::paths::Paths;
@@ -9,7 +10,8 @@ use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Manager};
 
-/// User toggles from the tray; the overlay (Task 10) reads them.
+/// User toggles from the tray (not persisted). The overlay reads `muted` when
+/// it plays a sound; `dnd` is pushed to the overlay when toggled.
 #[derive(Default)]
 pub struct Toggles {
     pub muted: AtomicBool,
@@ -58,7 +60,13 @@ pub fn build(app: &AppHandle, state: &AppState, toggles: Arc<Toggles>) -> tauri:
                 }
             }
             MUTE => toggles.muted.store(mute.is_checked().unwrap_or(false), Ordering::Relaxed),
-            DND => toggles.dnd.store(dnd.is_checked().unwrap_or(false), Ordering::Relaxed),
+            DND => {
+                let on = dnd.is_checked().unwrap_or(false);
+                toggles.dnd.store(on, Ordering::Relaxed);
+                if let Some(overlay) = app.try_state::<Arc<OverlaySink>>() {
+                    overlay.set_dnd(on);
+                }
+            }
             OPEN_RULES => {
                 if let Err(e) = tauri_plugin_opener::open_path(paths.rules(), None::<&str>) {
                     log(paths, &format!("open rules folder failed: {e}"));
@@ -119,9 +127,7 @@ fn run_installer(paths: Paths, install_hooks: bool) {
     });
 }
 
-/// Register the tray's shared toggles as Tauri state and build the tray.
-pub fn setup(app: &tauri::App, state: &AppState) -> tauri::Result<()> {
-    let toggles = Arc::new(Toggles::default());
-    app.manage(toggles.clone());
+/// Build the tray around the shared toggles.
+pub fn setup(app: &tauri::App, state: &AppState, toggles: Arc<Toggles>) -> tauri::Result<()> {
     build(app.handle(), state, toggles)
 }

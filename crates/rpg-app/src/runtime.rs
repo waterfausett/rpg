@@ -7,7 +7,7 @@ use rpg_core::config::Config;
 use rpg_core::engine::{self, Outcome};
 use rpg_core::enrich::{self, FileAge};
 use rpg_core::event::{Event, EventKind};
-use rpg_core::flavor::{self, TextGen};
+use rpg_core::flavor::TextGen;
 use rpg_core::paths::Paths;
 use rpg_core::rules::{self, Rules};
 use rpg_core::store::Store;
@@ -67,11 +67,11 @@ pub fn load_rules(paths: &Paths) -> Rules {
 }
 
 /// The local UTC offset in effect at `ts` (DST-aware per event).
-fn local_offset(ts: chrono::DateTime<chrono::Utc>) -> FixedOffset {
+pub fn local_offset(ts: chrono::DateTime<chrono::Utc>) -> FixedOffset {
     Local.from_utc_datetime(&ts.naive_utc()).offset().fix()
 }
 
-fn panic_message(p: &(dyn std::any::Any + Send)) -> String {
+pub fn panic_message(p: &(dyn std::any::Any + Send)) -> String {
     p.downcast_ref::<&str>()
         .map(|s| s.to_string())
         .or_else(|| p.downcast_ref::<String>().cloned())
@@ -80,9 +80,9 @@ fn panic_message(p: &(dyn std::any::Any + Send)) -> String {
 
 type ProcessFn<'a> = &'a dyn Fn(&Store, &Rules, &Config, &Event, &[FileAge], FixedOffset) -> Result<Outcome>;
 
-/// Drain the inbox in order, run each event through the engine, store flavor
-/// text for unlocks, and delete each processed file. A failing event is logged
-/// and moved to `bad/`; the rest still run.
+/// Drain the inbox in order, run each event through the engine, and delete each
+/// processed file. A failing event is logged and moved to `bad/`; the rest still
+/// run. Flavor text is rendered later, by the overlay, only for unlocks that get a banner.
 pub fn process_inbox_once(state: &AppState) -> Result<Vec<(Event, Outcome)>> {
     process_inbox_with(state, &engine::process)
 }
@@ -92,7 +92,7 @@ fn process_inbox_with(state: &AppState, process: ProcessFn) -> Result<Vec<(Event
     if items.is_empty() {
         return Ok(vec![]);
     }
-    // Snapshots, so a rules reload never waits on a slow flavor call.
+    // Snapshots, so a rules reload never waits on processing.
     let rules = read(&state.rules);
     let cfg = read(&state.cfg);
     let mut out = Vec::new();
@@ -117,7 +117,6 @@ fn process_inbox_with(state: &AppState, process: ProcessFn) -> Result<Vec<(Event
                 continue;
             }
         };
-        store_flavors(state, &rules, &cfg, &ev, &outcome, tz);
         if let Err(e) = std::fs::remove_file(&path) {
             // Harmless if it lingers: the engine ignores already-recorded event ids.
             log(&state.paths, &format!("could not delete {}: {e}", path.display()));
@@ -159,22 +158,6 @@ fn file_ages(state: &AppState, ev: &Event) -> Vec<FileAge> {
         log(&state.paths, &format!("file ages for {hash} in {} failed: {e:#}", repo.display()));
         vec![]
     })
-}
-
-/// Render and store the announcement line for each unlock. Failures are logged;
-/// the event itself is already committed.
-fn store_flavors(state: &AppState, rules: &Rules, cfg: &Config, ev: &Event, outcome: &Outcome, tz: FixedOffset) {
-    for u in &outcome.unlocks {
-        let Some(rule) = rules.list.iter().find(|r| r.id == u.rule_id) else { continue };
-        let text = catch_unwind(AssertUnwindSafe(|| flavor::render(rule, u, ev, &cfg.llm, state.gen.as_deref(), tz)))
-            .unwrap_or_else(|p| {
-                log(&state.paths, &format!("flavor for {} panicked: {}", u.rule_id, panic_message(&*p)));
-                rule.fallback.clone()
-            });
-        if let Err(e) = state.store.set_unlock_flavor(u.unlock_id, &text) {
-            log(&state.paths, &format!("storing flavor for unlock {} failed: {e:#}", u.unlock_id));
-        }
-    }
 }
 
 enum Msg {
@@ -250,7 +233,12 @@ fn watch(paths: &Paths, dir: &Path, on_change: impl Fn() + Send + 'static) -> Op
 
 fn run_once(state: &AppState, sink: &dyn OutcomeSink, away: bool) {
     match process_inbox_once(state) {
-        Ok(batch) if !batch.is_empty() => sink.present(batch, away),
+        Ok(batch) if !batch.is_empty() => {
+            // A presenter bug must not kill the inbox thread.
+            if let Err(p) = catch_unwind(AssertUnwindSafe(|| sink.present(batch, away))) {
+                log(&state.paths, &format!("presenting a batch panicked: {}", panic_message(&*p)));
+            }
+        }
         Ok(_) => {}
         Err(e) => log(&state.paths, &format!("inbox drain failed: {e:#}")),
     }
@@ -327,9 +315,7 @@ mod tests {
     use anyhow::anyhow;
     use rpg_core::event::{EventKind, Source};
     use rpg_core::inbox;
-    use rpg_core::rules::parse_rule;
     use std::path::Path;
-    use std::time::Duration;
 
     struct Fixture {
         _tmp: tempfile::TempDir,
@@ -439,34 +425,20 @@ mod tests {
         assert_eq!(bad_files(&inbox_dir), 1);
     }
 
-    struct FakeGen;
-    impl TextGen for FakeGen {
-        fn generate(&self, _prompt: &str, _t: Duration) -> Result<String> {
-            Ok("FAKE FLAVOR".into())
+    struct PanicSink;
+    impl OutcomeSink for PanicSink {
+        fn present(&self, _batch: Vec<(Event, Outcome)>, _away: bool) {
+            panic!("presenter bug");
         }
     }
 
     #[test]
-    fn llm_flavor_stored_on_unlock() {
-        let rule = parse_rule(
-            r#"
-id = "first_push"
-name = "First Push"
-tier = "bronze"
-trigger = ["push"]
-detector = { type = "first", scope = "ever" }
-repeatable = false
-fallback = "STATIC"
-flavor = { type = "llm", prompt = "Rewrite {fallback} {context}" }
-"#,
-        )
-        .unwrap();
-        let f = fixture(Rules { list: vec![rule] }, Some(Arc::new(FakeGen)));
+    fn presenter_panic_is_logged_not_fatal() {
+        let f = fixture(Rules::default(), None);
         inbox::write_event(&f.state.paths.inbox(), &push(1)).unwrap();
-        let out = process_inbox_once(&f.state).unwrap();
-        assert_eq!(out[0].1.unlocks.len(), 1);
-        let unlocks = f.state.store.list_unlocks().unwrap();
-        assert_eq!(unlocks[0].flavor_text.as_deref(), Some("FAKE FLAVOR"));
+        run_once(&f.state, &PanicSink, false);
+        let log = std::fs::read_to_string(f.state.paths.log()).unwrap();
+        assert!(log.contains("presenting a batch panicked: presenter bug"), "{log}");
     }
 
     #[test]

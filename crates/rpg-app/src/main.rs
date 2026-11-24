@@ -1,29 +1,22 @@
 // No console window in release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod overlay;
 mod platform;
+mod presenter;
 mod runtime;
+mod sound;
 mod tray;
 
+use overlay::OverlaySink;
 use rpg_core::config::Config;
-use rpg_core::engine::Outcome;
-use rpg_core::event::Event;
 use rpg_core::flavor::{ClaudeCli, TextGen};
 use rpg_core::paths::Paths;
 use rpg_core::store::Store;
 use runtime::{log, AppState, OutcomeSink};
 use std::sync::{Arc, RwLock};
-
-/// Placeholder sink until the overlay (Task 10): records batches in the log.
-struct LogSink(Paths);
-
-impl OutcomeSink for LogSink {
-    fn present(&self, batch: Vec<(Event, Outcome)>, away: bool) {
-        let xp: u64 = batch.iter().flat_map(|(_, o)| &o.xp_gains).map(|g| g.amount).sum();
-        let unlocks: Vec<&str> = batch.iter().flat_map(|(_, o)| &o.unlocks).map(|u| u.name.as_str()).collect();
-        log(&self.0, &format!("presented {} events (away={away}): +{xp} exp, unlocks {unlocks:?}", batch.len()));
-    }
-}
+use tauri::Manager;
+use tray::Toggles;
 
 fn init_state() -> anyhow::Result<AppState> {
     let paths = Paths::resolve()?;
@@ -59,16 +52,18 @@ fn main() {
                 }
                 e
             })?;
-            tray::setup(app, &state)?;
-            let sink: Arc<dyn OutcomeSink> = Arc::new(LogSink(state.paths.clone()));
-            runtime::spawn(state, sink);
+            let toggles = Arc::new(Toggles::default());
+            let overlay = Arc::new(OverlaySink::new(app.handle(), state.clone(), toggles.clone())?);
+            app.manage(overlay.clone());
+            tray::setup(app, &state, toggles)?;
+            runtime::spawn(state, overlay as Arc<dyn OutcomeSink>);
             Ok(())
         })
         .build(tauri::generate_context!())
         .expect("building tauri app");
 
     app.run(|_app, event| {
-        // No windows: keep running until Quit (which exits with an explicit code).
+        // Overlay windows only: keep running until Quit (which exits with an explicit code).
         if let tauri::RunEvent::ExitRequested { code: None, api, .. } = event {
             api.prevent_exit();
         }
