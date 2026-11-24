@@ -5,7 +5,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use std::path::Path;
 use std::sync::Mutex;
 
-const SCHEMA_VERSION: &str = "1";
+const SCHEMA_VERSION: &str = "2";
 
 /// SQLite-backed store. Timestamps are stored as fixed-width RFC3339 UTC
 /// strings with millisecond precision, which sort lexicographically.
@@ -38,7 +38,10 @@ pub struct UnlockRow {
 #[derive(Debug, Clone)]
 pub struct EventRow {
     pub event: Event,
+    /// Total XP the event earned.
     pub xp: u64,
+    /// The ledger entries behind `xp`, in the order they were awarded: `(reason, amount)`.
+    pub gains: Vec<(String, u64)>,
 }
 
 fn conv_err<E: std::error::Error + Send + Sync + 'static>(e: E) -> rusqlite::Error {
@@ -113,7 +116,31 @@ impl Store {
              CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);",
         )?;
         conn.execute("INSERT OR IGNORE INTO meta(key, value) VALUES('schema_version', ?1)", params![SCHEMA_VERSION])?;
+        Self::migrate(&conn)?;
         Ok(Store { conn: Mutex::new(conn) })
+    }
+
+    /// Bring an older database up to `SCHEMA_VERSION`.
+    fn migrate(conn: &Connection) -> Result<()> {
+        let v: String = conn.query_row("SELECT value FROM meta WHERE key='schema_version'", [], |r| r.get(0))?;
+        if v == "1" {
+            // v2: repos are normalized at ingest; rewrite the ones stored before that.
+            let tx = conn.unchecked_transaction()?;
+            let repos: Vec<String> = {
+                let mut st = tx.prepare("SELECT DISTINCT repo FROM events WHERE repo IS NOT NULL")?;
+                let rows = st.query_map([], |r| r.get(0))?;
+                rows.collect::<rusqlite::Result<_>>()?
+            };
+            for r in repos {
+                let n = crate::event::normalize_repo(&r);
+                if n != r {
+                    tx.execute("UPDATE events SET repo=?1 WHERE repo=?2", params![n, r])?;
+                }
+            }
+            tx.execute("UPDATE meta SET value='2' WHERE key='schema_version'", [])?;
+            tx.commit()?;
+        }
+        Ok(())
     }
 
     fn conn(&self) -> std::sync::MutexGuard<'_, Connection> {
@@ -280,9 +307,15 @@ impl Store {
         );
         let mut st = conn.prepare(&sql)?;
         let rows = st.query_map(params![kind.map(|k| k.as_str()), limit as i64], |r| {
-            Ok(EventRow { event: event_from_row(r)?, xp: r.get::<_, i64>(7)?.max(0) as u64 })
+            Ok(EventRow { event: event_from_row(r)?, xp: r.get::<_, i64>(7)?.max(0) as u64, gains: vec![] })
         })?;
-        Ok(rows.collect::<rusqlite::Result<_>>()?)
+        let mut rows: Vec<EventRow> = rows.collect::<rusqlite::Result<_>>()?;
+        let mut gains = conn.prepare("SELECT reason, amount FROM xp_ledger WHERE event_id=?1 ORDER BY id")?;
+        for row in &mut rows {
+            let g = gains.query_map(params![row.event.id], |r| Ok((r.get(0)?, r.get::<_, i64>(1)?.max(0) as u64)))?;
+            row.gains = g.collect::<rusqlite::Result<_>>()?;
+        }
+        Ok(rows)
     }
 
     pub fn meta_get(&self, key: &str) -> Result<Option<String>> {
@@ -305,6 +338,27 @@ mod tests {
 
     fn ev(id: &str, kind: EventKind, ts: DateTime<Utc>) -> Event {
         Event { id: id.into(), kind, ts, source: Source::Git, repo: Some("r".into()), backfill: false, data: serde_json::json!({}) }
+    }
+
+    #[test]
+    fn v1_database_gets_repos_normalized() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rpg.db");
+        {
+            let s = Store::open(&path).unwrap();
+            let mut a = ev("a", EventKind::Commit, Utc::now());
+            a.repo = Some(r"c:\work\rpg".into());
+            let mut b = ev("b", EventKind::Commit, Utc::now());
+            b.repo = Some("octo/widgets".into());
+            s.insert_event(&a).unwrap();
+            s.insert_event(&b).unwrap();
+            s.meta_set("schema_version", "1").unwrap();
+        }
+        let s = Store::open(&path).unwrap();
+        let repos: Vec<_> = s.list_events(None, 10).unwrap().into_iter().map(|r| r.event.repo.unwrap()).collect();
+        assert!(repos.contains(&"C:/work/rpg".to_string()), "{repos:?}");
+        assert!(repos.contains(&"octo/widgets".to_string()), "{repos:?}");
+        assert_eq!(s.meta_get("schema_version").unwrap().as_deref(), Some("2"));
     }
 
     #[test]
@@ -385,10 +439,11 @@ mod tests {
         assert!(!s.has_prior_event(EventKind::Commit, Some("x"), "other").unwrap());
         let rows = s.list_events(Some(EventKind::Commit), 10).unwrap();
         assert_eq!((rows.len(), rows[0].xp), (1, 15));
+        assert_eq!(rows[0].gains.iter().map(|g| g.1).sum::<u64>(), 15);
         assert_eq!(s.list_events(None, 10).unwrap().len(), 2);
         s.meta_set("k", "v").unwrap();
         assert_eq!(s.meta_get("k").unwrap().as_deref(), Some("v"));
-        assert_eq!(s.meta_get("schema_version").unwrap().as_deref(), Some("1"));
+        assert_eq!(s.meta_get("schema_version").unwrap().as_deref(), Some("2"));
         let id = s.insert_unlock(&nu("r1", now)).unwrap();
         s.set_unlock_flavor(id, "hi").unwrap();
         let u = s.list_unlocks().unwrap();

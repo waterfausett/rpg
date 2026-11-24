@@ -23,7 +23,8 @@ pub fn write_event(inbox: &Path, ev: &Event) -> Result<()> {
     Ok(())
 }
 
-/// Parse all `*.json` files in the inbox, sorted by filename. Unparseable files move to `bad/`;
+/// Parse all `*.json` files in the inbox, sorted by filename, with each event's repo
+/// normalized (this is the single ingest point for every source). Unparseable files move to `bad/`;
 /// if that move fails the file is left in place and skipped, so one bad file never blocks the
 /// rest. The caller deletes each returned file after processing it.
 pub fn drain(inbox: &Path) -> Result<Vec<(PathBuf, Event)>> {
@@ -42,7 +43,10 @@ pub fn drain(inbox: &Path) -> Result<Vec<(PathBuf, Event)>> {
             .map_err(anyhow::Error::from)
             .and_then(|b| serde_json::from_slice::<Event>(&b).map_err(anyhow::Error::from));
         match parsed {
-            Ok(ev) => out.push((p, ev)),
+            Ok(mut ev) => {
+                ev.normalize();
+                out.push((p, ev));
+            }
             Err(_) => {
                 let _ = quarantine(inbox, &p);
             }
@@ -58,4 +62,20 @@ pub fn quarantine(inbox: &Path, file: &Path) -> Result<()> {
     let name = file.file_name().with_context(|| format!("no file name: {}", file.display()))?;
     std::fs::rename(file, bad.join(name)).with_context(|| format!("moving {} to bad/", file.display()))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::event::{EventKind, Source};
+
+    #[test]
+    fn drain_normalizes_repo() {
+        let dir = tempfile::tempdir().unwrap();
+        let ev = Event::new(EventKind::ClaudeSessionStart, Source::Claude, Some(r"c:\work\rpg".into()), serde_json::json!({}));
+        write_event(dir.path(), &ev).unwrap();
+        let got = drain(dir.path()).unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].1.repo.as_deref(), Some("C:/work/rpg"));
+    }
 }

@@ -66,22 +66,40 @@ pub fn process(
     }
 }
 
-fn base_xp(store: &Store, cfg: &Config, ev: &Event) -> Result<Option<(u64, &'static str)>> {
-    Ok(match ev.kind {
-        EventKind::Commit => Some((cfg.xp.commit, "commit")),
-        EventKind::Push => Some((cfg.xp.push, "push")),
-        EventKind::PrOpened => Some((cfg.xp.pr_opened, "PR opened")),
-        EventKind::PrMerged => Some((cfg.xp.pr_merged, "PR merged")),
-        EventKind::ReviewSubmitted => Some((cfg.xp.review, "review")),
+/// The ledger reason for an event kind's base XP. Any other reason on an event's
+/// ledger entries is the name of an achievement it unlocked.
+pub fn base_label(kind: EventKind) -> Option<&'static str> {
+    match kind {
+        EventKind::Commit => Some("commit"),
+        EventKind::Push => Some("push"),
+        EventKind::PrOpened => Some("PR opened"),
+        EventKind::PrMerged => Some("PR merged"),
+        EventKind::ReviewSubmitted => Some("review"),
         EventKind::ClaudeSessionStart => None,
+        EventKind::ClaudeSessionEnd => Some("Claude session"),
+    }
+}
+
+fn base_xp(store: &Store, cfg: &Config, ev: &Event) -> Result<Option<(u64, &'static str)>> {
+    let amount = match ev.kind {
+        EventKind::Commit => cfg.xp.commit,
+        EventKind::Push => cfg.xp.push,
+        EventKind::PrOpened => cfg.xp.pr_opened,
+        EventKind::PrMerged => cfg.xp.pr_merged,
+        EventKind::ReviewSubmitted => cfg.xp.review,
+        EventKind::ClaudeSessionStart => return Ok(None),
         EventKind::ClaudeSessionEnd => {
             let has_start = match ev.data["session_id"].as_str() {
                 Some(id) => store.find_session_start(id)?.is_some(),
                 None => false,
             };
-            has_start.then_some((cfg.xp.claude_session, "Claude session"))
+            if !has_start {
+                return Ok(None);
+            }
+            cfg.xp.claude_session
         }
-    })
+    };
+    Ok(base_label(ev.kind).map(|label| (amount, label)))
 }
 
 fn process_inner(
