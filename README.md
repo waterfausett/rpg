@@ -10,20 +10,18 @@ Requirements: Rust, `cargo install tauri-cli`, and (Windows) WebView2. Optional:
 
 ```
 cargo test --workspace
-cargo build --release -p rpg-cli     # the `rpg` CLI (target/release/rpg.exe)
 cd crates/rpg-app && cargo tauri build
+cargo build --release -p rpg-cli     # optional: the `rpg` terminal CLI
 ```
 
-Output: `target/release/rpg-app.exe` plus installers in `target/release/bundle/{msi,nsis}/`.
-
-The tray's "Install hooks" looks for `rpg.exe` **next to `rpg-app.exe`** (the hook shims call it). The Tauri bundle does not include the CLI yet (see Known limitations), so keep both binaries in one folder, or use the CLI directly.
+Output: `target/release/rpg-app.exe` plus installers in `target/release/bundle/{msi,nsis}/`. The app is the only binary you need: the hooks call it as `rpg-app emit …`, which records the event and exits without starting the tray. The separate `rpg` CLI does the same jobs from a terminal, with printed output.
 
 ## Install and first run
 
-1. Put `rpg-app.exe` and `rpg.exe` in the same folder and launch `rpg-app.exe`. A tray icon appears. The first run creates the data and config dirs, seeds starter achievements and runs a read-only GitHub backfill.
+1. Install with the `.msi` or `-setup.exe` (or run `rpg-app.exe` from anywhere) and launch it. A tray icon appears. The first run creates the data and config dirs, seeds starter achievements and runs a read-only GitHub backfill.
 2. Install the hooks, either:
-   - tray icon, **Install hooks**, or
-   - `rpg install-hooks`
+   - tray icon, **Install hooks** (a pop-up confirms; a failure shows a banner with the reason), or
+   - `rpg install-hooks` (hooks then call `rpg.exe` instead of the app)
 
    This sets a global git `core.hooksPath` to rpg's shim folder and adds `SessionStart`/`SessionEnd` entries to `~/.claude/settings.json` (a backup is written next to it as `settings.json.rpg-backup`, and your other settings are kept). Every standard git hook except `reference-transaction` and `post-index-change` (see Known limitations) gets a pass-through shim, so a repo's own `.git/hooks/*` keep working.
 3. Commit something. A `+10 exp · commit` pop-up appears bottom-right; unlocks show a gold banner top-center.
@@ -143,5 +141,5 @@ Config is read at startup, so restart the app after editing it.
 - Repo-local `reference-transaction` and `post-index-change` hooks do not run while rpg is installed (no shim for those two names, to keep git fast) ([#7](../../issues/7)).
 - A push is counted when `pre-push` runs, before the push is known to have succeeded.
 - macOS is not supported yet ([#4](../../issues/4)).
-- The Tauri bundle does not contain `rpg.exe`, so the tray's "Install hooks" only works when `rpg.exe` sits beside `rpg-app.exe` (e.g. run from `target/release/`). Use `rpg install-hooks` from the CLI otherwise.
+- The installed hooks point at the exact `rpg-app.exe` (or `rpg.exe`) path they were installed from. If you move or reinstall the app somewhere else, run **Install hooks** again.
 - Do not disturb and Mute are not remembered across restarts. No autostart at login yet ([#10](../../issues/10)).

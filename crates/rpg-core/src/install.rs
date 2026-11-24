@@ -294,11 +294,15 @@ pub fn install_git_hooks(paths: &Paths, rpg_bin: &Path, git: &GitEnv) -> Result<
 }
 
 /// Put the global config file's own `core.hooksPath` back as it was before install (or unset
-/// it). Leaves everything alone if the effective value no longer points at our dir.
-pub fn uninstall_git_hooks(paths: &Paths, git: &GitEnv) -> Result<()> {
+/// it). Returns `false` when there was nothing to remove (`core.hooksPath` unset). Errors,
+/// leaving everything alone, if it is set but no longer points at our dir.
+pub fn uninstall_git_hooks(paths: &Paths, git: &GitEnv) -> Result<bool> {
     let dir = paths.git_hooks();
     std::fs::create_dir_all(&paths.data).with_context(|| format!("creating {}", paths.data.display()))?;
     let effective = effective_hooks_path(git, &paths.data)?;
+    if effective.is_none() {
+        return Ok(false);
+    }
     if !effective.as_deref().is_some_and(|c| same_dir(&git.expand_path(c).unwrap_or_default(), &dir)) {
         bail!(
             "core.hooksPath is {}, not rpg's; leaving it unchanged",
@@ -316,7 +320,7 @@ pub fn uninstall_git_hooks(paths: &Paths, git: &GitEnv) -> Result<()> {
     for hook in HOOK_NAMES.iter().chain(&RETIRED_HOOK_NAMES) {
         let _ = std::fs::remove_file(dir.join(hook));
     }
-    Ok(())
+    Ok(true)
 }
 
 /// The shim for `hook`. `prev` is the previous global hooks dir ("" when none); `home` is the
@@ -378,16 +382,17 @@ pub fn install_claude_hooks(settings_path: &Path, rpg_bin: &Path, home: Option<&
     write_settings(settings_path, &root)
 }
 
-/// Remove only the hook commands containing `emit claude-session-`.
-pub fn uninstall_claude_hooks(settings_path: &Path) -> Result<()> {
+/// Remove only the hook commands containing `emit claude-session-`. Returns whether there were any.
+pub fn uninstall_claude_hooks(settings_path: &Path) -> Result<bool> {
     if !settings_path.exists() {
-        return Ok(());
+        return Ok(false);
     }
     let mut root = read_settings(settings_path)?;
-    if remove_rpg_entries(&mut root)? {
+    let removed = remove_rpg_entries(&mut root)?;
+    if removed {
         write_settings(settings_path, &root)?;
     }
-    Ok(())
+    Ok(removed)
 }
 
 fn read_settings(path: &Path) -> Result<Map<String, Value>> {

@@ -42,6 +42,7 @@ struct BannerPayload {
 struct ToastPayload {
     amount: u64,
     label: String,
+    notice: bool,
 }
 
 #[derive(Deserialize)]
@@ -149,6 +150,14 @@ impl OverlaySink {
     }
 }
 
+impl OverlaySink {
+    /// Show the result of a user action (see `Presenter::notice`).
+    pub fn notice(&self, ok: bool, title: &str, detail: &str) {
+        self.0.flow().presenter.notice(ok, title, detail);
+        pump(&self.0);
+    }
+}
+
 impl OutcomeSink for OverlaySink {
     fn present(&self, batch: Vec<(Event, Outcome)>, away: bool) {
         self.0.flow().presenter.push(&batch, away);
@@ -249,7 +258,7 @@ fn pump(inner: &Arc<Inner>) {
 fn show_toasts(inner: &Arc<Inner>, f: &mut Flow, toasts: Vec<Toast>) {
     let Some(win) = inner.window(TOAST) else { return };
     let _ = win.show();
-    let payload: Vec<ToastPayload> = toasts.into_iter().map(|t| ToastPayload { amount: t.amount, label: t.label }).collect();
+    let payload: Vec<ToastPayload> = toasts.into_iter().map(|t| ToastPayload { amount: t.amount, label: t.label, notice: t.notice }).collect();
     if let Err(e) = inner.app.emit_to(TOAST, "toast", payload) {
         log(&inner.state.paths, &format!("emitting toast failed: {e}"));
     }
@@ -313,6 +322,7 @@ fn payload(id: u64, b: &Banner) -> BannerPayload {
             BannerKind::Achievement => "achievement",
             BannerKind::LevelUp => "level_up",
             BannerKind::AwaySummary => "summary",
+            BannerKind::Notice => "notice",
         },
         title: b.title.clone(),
         name: b.name.clone(),
