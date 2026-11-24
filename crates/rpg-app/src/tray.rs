@@ -1,6 +1,7 @@
 //! Tray icon and menu.
 use crate::overlay::OverlaySink;
 use crate::runtime::{log, AppState};
+use crate::update::{self, Updates};
 use rpg_core::install;
 use rpg_core::paths::Paths;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -28,6 +29,9 @@ const QUIT: &str = "quit";
 pub fn build(app: &AppHandle, state: &AppState, toggles: Arc<Toggles>) -> tauri::Result<()> {
     let mute = CheckMenuItem::with_id(app, MUTE, "Mute sounds", true, false, None::<&str>)?;
     let dnd = CheckMenuItem::with_id(app, DND, "Do not disturb", true, false, None::<&str>)?;
+    let update_item = MenuItem::with_id(app, update::MENU_ID, update::CHECK_LABEL, true, None::<&str>)?;
+    let updates = Updates::new(state.clone(), update_item.clone());
+    app.manage(updates.clone());
     let menu = Menu::with_items(
         app,
         &[
@@ -40,6 +44,7 @@ pub fn build(app: &AppHandle, state: &AppState, toggles: Arc<Toggles>) -> tauri:
             &MenuItem::with_id(app, INSTALL, "Install hooks", true, None::<&str>)?,
             &MenuItem::with_id(app, UNINSTALL, "Uninstall hooks", true, None::<&str>)?,
             &PredefinedMenuItem::separator(app)?,
+            &update_item,
             &MenuItem::with_id(app, QUIT, "Quit", true, None::<&str>)?,
         ],
     )?;
@@ -73,11 +78,15 @@ pub fn build(app: &AppHandle, state: &AppState, toggles: Arc<Toggles>) -> tauri:
             }
             INSTALL => run_installer(app.clone(), paths.clone(), true),
             UNINSTALL => run_installer(app.clone(), paths.clone(), false),
+            update::MENU_ID => updates.on_click(app),
             QUIT => app.exit(0),
             _ => {}
         }
     })
     .build(app)?;
+    if let Some(updates) = app.try_state::<std::sync::Arc<Updates>>() {
+        updates.spawn_background(app);
+    }
     Ok(())
 }
 

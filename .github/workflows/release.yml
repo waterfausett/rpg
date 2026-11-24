@@ -1,0 +1,73 @@
+# Push a `v*` tag matching [workspace.package] version in Cargo.toml to publish a release.
+# The app's updater reads latest.json from the newest published release.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Tag must match the Cargo.toml version
+        run: |
+          id=$(cargo pkgid -p rpg-app)
+          version=${id##*@}
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match Cargo.toml version $version"
+            exit 1
+          fi
+
+      - name: Install tauri-cli
+        run: command -v cargo-tauri || cargo install tauri-cli --version "^2" --locked
+
+      - name: Test
+        run: cargo test --workspace
+
+      # tauri.release.conf.json switches on signed updater bundles (*.sig). It's only used
+      # here, so a local `cargo tauri build` works without the signing key.
+      - name: Build signed installers
+        working-directory: crates/rpg-app
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+        run: cargo tauri build --config tauri.release.conf.json
+
+      - name: Write latest.json
+        run: |
+          v=${GITHUB_REF_NAME#v}
+          base="https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME"
+          nsis="target/release/bundle/nsis/rpg_${v}_x64-setup.exe"
+          msi="target/release/bundle/msi/rpg_${v}_x64_en-US.msi"
+          jq -n \
+            --arg version "$v" \
+            --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg notes "https://github.com/$GITHUB_REPOSITORY/releases/tag/$GITHUB_REF_NAME" \
+            --arg nsis_url "$base/$(basename "$nsis")" --rawfile nsis_sig "$nsis.sig" \
+            --arg msi_url "$base/$(basename "$msi")" --rawfile msi_sig "$msi.sig" \
+            '{version: $version, pub_date: $date, notes: $notes, platforms: {
+                "windows-x86_64":      {url: $nsis_url, signature: $nsis_sig},
+                "windows-x86_64-nsis": {url: $nsis_url, signature: $nsis_sig},
+                "windows-x86_64-msi":  {url: $msi_url,  signature: $msi_sig}}}' > latest.json
+          cat latest.json
+          echo "ASSETS=$nsis $nsis.sig $msi $msi.sig latest.json" >> "$GITHUB_ENV"
+
+      # Draft first and publish once every file is up, so `releases/latest` never lacks
+      # latest.json.
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --draft --title "rpg $GITHUB_REF_NAME" --generate-notes $ASSETS
+          gh release edit "$GITHUB_REF_NAME" --draft=false

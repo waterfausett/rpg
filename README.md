@@ -18,7 +18,7 @@ Output: `target/release/rpg-app.exe` plus installers in `target/release/bundle/{
 
 ## Install and first run
 
-1. Install with the `.msi` or `-setup.exe` (or run `rpg-app.exe` from anywhere) and launch it. A tray icon appears. The first run creates the data and config dirs, seeds starter achievements and runs a read-only GitHub backfill.
+1. Download `rpg_<version>_x64-setup.exe` from the [latest release](../../releases/latest) (or build it yourself), install and launch it. A tray icon appears. The first run creates the data and config dirs, seeds starter achievements and runs a read-only GitHub backfill.
 2. Install the hooks, either:
    - tray icon, **Install hooks** (a pop-up confirms; a failure shows a banner with the reason), or
    - `rpg install-hooks` (hooks then call `rpg.exe` instead of the app)
@@ -26,7 +26,22 @@ Output: `target/release/rpg-app.exe` plus installers in `target/release/bundle/{
    This sets a global git `core.hooksPath` to rpg's shim folder and adds `SessionStart`/`SessionEnd` entries to `~/.claude/settings.json` (a backup is written next to it as `settings.json.rpg-backup`, and your other settings are kept). Every standard git hook except `reference-transaction` and `post-index-change` (see Known limitations) gets a pass-through shim, so a repo's own `.git/hooks/*` keep working.
 3. Commit something. A `+10 exp · commit` pop-up appears bottom-right; unlocks show a gold banner top-center.
 
-Tray menu: Open character sheet, Mute sounds, Do not disturb, Open rules folder, Install hooks, Uninstall hooks, Quit. Only one app instance runs at a time. Hooks never fail a git command; errors go to `rpg.log`.
+Tray menu: Open character sheet, Mute sounds, Do not disturb, Open rules folder, Install hooks, Uninstall hooks, Check for updates, Quit. Only one app instance runs at a time. Hooks never fail a git command; errors go to `rpg.log`.
+
+## Updates
+
+The app checks the latest GitHub release a minute after startup and then every `updates.check_hours` (default 6; `0` turns background checks off). When there's a newer version, a pop-up says so and the tray item becomes **Install update vX.Y.Z**. Nothing installs until you click it. The installer then runs with a progress bar and restarts the app. Your data, config and hooks are kept, because the installer always uses the same folder (`%LOCALAPPDATA%\rpg`). **Check for updates** checks right away. Updates are signed, and the app refuses any download whose signature doesn't match the key built into it.
+
+Debug builds never check in the background.
+
+### Releasing
+
+1. Bump `version` under `[workspace.package]` in the root `Cargo.toml` and merge that to `main`.
+2. Tag the merge commit and push the tag: `git tag v0.2.0 && git push origin v0.2.0`.
+
+The `Release` workflow checks that the tag matches the version, runs the tests, builds the signed installers and publishes a release with generated notes and `latest.json`. Installed apps pick it up on their next check.
+
+The updater signing key is the `TAURI_SIGNING_PRIVATE_KEY` repo secret (no password). The maintainer keeps a copy at `~/.tauri/rpg-updater.key`, and the matching public key is in `tauri.conf.json`. If the key is lost, installed apps can't verify new releases, and everyone has to reinstall by hand once.
 
 ## Uninstall
 
@@ -150,6 +165,9 @@ port = 47474        # character sheet at http://127.0.0.1:47474
 [paths]             # which repos count; see "Including and excluding paths"
 include = []        # empty = everywhere
 exclude = []
+
+[updates]
+check_hours = 6     # background update checks; 0 = only from the tray
 ```
 
 Config is read at startup, so restart the app after editing it.
@@ -173,7 +191,8 @@ include = ['C:/work', 'octo/*']                # optional: only these count
 ## Privacy
 
 - Everything is stored locally. The character sheet listens on `127.0.0.1` only and rejects requests with any other `Host` header.
-- The only thing that leaves your machine is the optional flavor call (`claude -p --model haiku`), and only for rules with `flavor = { type = "llm" }`. It sends your rule's prompt plus: event type, repo name (never the local path), branch, local time, the detector's findings (e.g. file path, file age, line counts) and unlock counts. Never code or diffs. It runs in an empty directory with no tools, MCP servers or settings. Set `llm.enabled = false` to turn it off.
+- Update checks download `latest.json` (and, when you install, the installer) from this repo's GitHub releases. They send nothing about you beyond the request itself. Set `updates.check_hours = 0` to stop background checks.
+- The only data that leaves your machine is the optional flavor call (`claude -p --model haiku`), and only for rules with `flavor = { type = "llm" }`. It sends your rule's prompt plus: event type, repo name (never the local path), branch, local time, the detector's findings (e.g. file path, file age, line counts) and unlock counts. Never code or diffs. It runs in an empty directory with no tools, MCP servers or settings. Set `llm.enabled = false` to turn it off.
 - GitHub data comes from your own logged-in `gh` CLI (read-only queries). Backfilled history seeds records only: it grants no XP or achievements.
 
 ## Known limitations

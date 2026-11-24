@@ -1,6 +1,6 @@
 [package]
 name = "rpg-app"
-version = "0.1.0"
+version.workspace = true
 edition = "2021"
 
 [[bin]]
@@ -21,8 +21,9 @@ serde_json = "1"
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-opener = "2"
 tauri-plugin-single-instance = "2"
+tauri-plugin-updater = "2"
 rpg-core = { path = "../rpg-core" }
-tokio = { version = "1", features = ["net", "rt", "macros"] }
+tokio = { version = "1", features = ["net", "rt", "macros", "time"] }
 axum = "0.8"
 rust-embed = { version = "8", features = ["mime-guess"] }
 
