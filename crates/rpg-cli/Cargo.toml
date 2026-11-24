@@ -1,0 +1,17 @@
+[package]
+name = "rpg-cli"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "rpg"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+rpg-core = { path = "../rpg-core" }
+
+[dev-dependencies]
+assert_cmd = "2"
+tempfile = "3"
