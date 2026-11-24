@@ -22,8 +22,7 @@ jobs:
 
       - name: Tag must match the Cargo.toml version
         run: |
-          id=$(cargo pkgid -p rpg-app)
-          version=${id##*@}
+          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "rpg-app") | .version')
           if [ "v$version" != "$GITHUB_REF_NAME" ]; then
             echo "::error::tag $GITHUB_REF_NAME does not match Cargo.toml version $version"
             exit 1
