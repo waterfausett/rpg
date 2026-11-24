@@ -167,6 +167,16 @@ impl Store {
         Ok(n as u32)
     }
 
+    /// Count of non-backfill events of `kind` (backfilled history is not "yours").
+    pub fn count_live_events(&self, kind: EventKind) -> Result<u32> {
+        let n: i64 = self.conn().query_row(
+            "SELECT COUNT(*) FROM events WHERE kind=?1 AND backfill=0",
+            params![kind.as_str()],
+            |r| r.get(0),
+        )?;
+        Ok(n as u32)
+    }
+
     /// Whether another event of `kind` (optionally in `repo`) exists besides `exclude_id`.
     pub fn has_prior_event(&self, kind: EventKind, repo: Option<&str>, exclude_id: &str) -> Result<bool> {
         let n: i64 = self.conn().query_row(
@@ -295,6 +305,20 @@ mod tests {
 
     fn ev(id: &str, kind: EventKind, ts: DateTime<Utc>) -> Event {
         Event { id: id.into(), kind, ts, source: Source::Git, repo: Some("r".into()), backfill: false, data: serde_json::json!({}) }
+    }
+
+    #[test]
+    fn count_live_events_skips_backfill_and_other_kinds() {
+        let s = Store::open_in_memory().unwrap();
+        let now = Utc::now();
+        s.insert_event(&ev("a", EventKind::PrMerged, now)).unwrap();
+        s.insert_event(&ev("b", EventKind::PrMerged, now)).unwrap();
+        let mut old = ev("c", EventKind::PrMerged, now);
+        old.backfill = true;
+        s.insert_event(&old).unwrap();
+        s.insert_event(&ev("d", EventKind::Commit, now)).unwrap();
+        assert_eq!(s.count_live_events(EventKind::PrMerged).unwrap(), 2);
+        assert_eq!(s.count_live_events(EventKind::ReviewSubmitted).unwrap(), 0);
     }
 
     #[test]

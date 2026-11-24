@@ -5,6 +5,7 @@ mod overlay;
 mod platform;
 mod presenter;
 mod runtime;
+mod site;
 mod sound;
 mod tray;
 
@@ -78,6 +79,15 @@ fn main() {
                     Arc::new(LogSink(state.paths.clone()))
                 }
             };
+            // A busy port only costs us the site, never the app.
+            let site = site::SiteState { store: state.store.clone(), rules: state.rules.clone(), cfg: state.cfg.clone() };
+            let port = state.cfg.read().unwrap_or_else(|p| p.into_inner()).site.port;
+            let site_paths = state.paths.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = site::serve(site, port).await {
+                    log(&site_paths, &format!("character sheet unavailable on 127.0.0.1:{port}: {e}"));
+                }
+            });
             tray::setup(app, &state, toggles)?;
             runtime::spawn(state, sink);
             Ok(())

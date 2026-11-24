@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>rpg: Character Sheet</title>
+  <link rel="stylesheet" href="/site.css">
+</head>
+<body>
+  <header class="bar">
+    <div class="who">Crawler: <b>you</b></div>
+    <div class="lvl">Level <span id="level">1</span></div>
+    <div class="xpbar" role="progressbar" aria-label="Experience">
+      <div class="xpfill" id="xpfill"></div>
+    </div>
+    <div class="xptext"><span id="xptext">0 / 100 exp</span></div>
+  </header>
+
+  <nav class="tabs" role="tablist">
+    <button role="tab" data-tab="character" class="active">Character</button>
+    <button role="tab" data-tab="achievements">Achievements <span id="achcount"></span></button>
+    <button role="tab" data-tab="events">Event log</button>
+  </nav>
+
+  <main>
+    <section id="tab-character" class="panel">
+      <h2>Totals</h2>
+      <div class="totals" id="totals"></div>
+      <h2>Recent</h2>
+      <ul class="list" id="recent"></ul>
+    </section>
+
+    <section id="tab-achievements" class="panel" hidden>
+      <div class="grid" id="achievements"></div>
+    </section>
+
+    <section id="tab-events" class="panel" hidden>
+      <label class="filter">Kind
+        <select id="kind">
+          <option value="">all</option>
+          <option value="commit">commit</option>
+          <option value="push">push</option>
+          <option value="pr_opened">pr_opened</option>
+          <option value="pr_merged">pr_merged</option>
+          <option value="review_submitted">review_submitted</option>
+          <option value="claude_session_start">claude_session_start</option>
+          <option value="claude_session_end">claude_session_end</option>
+        </select>
+      </label>
+      <ul class="list" id="eventlog"></ul>
+    </section>
+  </main>
+
+  <script src="/site.js"></script>
+</body>
+</html>

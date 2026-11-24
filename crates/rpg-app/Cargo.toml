@@ -22,9 +22,14 @@ tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-opener = "2"
 tauri-plugin-single-instance = "2"
 rpg-core = { path = "../rpg-core" }
+tokio = { version = "1", features = ["net"] }
+axum = "0.8"
+rust-embed = { version = "8", features = ["mime-guess"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
 
 [dev-dependencies]
+http-body-util = "0.1"
 tempfile = "3"
+tower = { version = "0.5", features = ["util"] }
