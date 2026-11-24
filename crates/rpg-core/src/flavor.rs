@@ -6,7 +6,8 @@ use crate::rules::{Flavor, Rule};
 use anyhow::{anyhow, bail, Result};
 use chrono::FixedOffset;
 use std::io::{Read, Write};
-use std::process::Stdio;
+use std::path::PathBuf;
+use std::process::{Command, Stdio};
 use std::time::Duration;
 use wait_timeout::ChildExt;
 
@@ -21,6 +22,8 @@ pub trait TextGen: Send + Sync {
 pub struct ClaudeCli {
     /// Model alias, e.g. "haiku".
     pub model: String,
+    /// Dedicated empty directory used as the child's cwd so no project context leaks in.
+    pub workdir: PathBuf,
 }
 
 impl ClaudeCli {
@@ -28,13 +31,28 @@ impl ClaudeCli {
     pub fn available() -> bool {
         which::which("claude").is_ok()
     }
+
+    /// The sandboxed command: empty cwd, no tools, no MCP, no skills, no
+    /// user/project/local settings, no session persistence.
+    fn build_command(&self) -> Command {
+        let _ = std::fs::create_dir_all(&self.workdir);
+        let mut cmd = crate::proc::command("claude");
+        cmd.args(["-p", "--model", &self.model])
+            .args(["--tools", ""])
+            .arg("--strict-mcp-config")
+            .arg("--disable-slash-commands")
+            .arg("--no-session-persistence")
+            .args(["--setting-sources", ""])
+            .current_dir(&self.workdir)
+            .env("RPG_INTERNAL", "1");
+        cmd
+    }
 }
 
 impl TextGen for ClaudeCli {
     fn generate(&self, prompt: &str, timeout: Duration) -> Result<String> {
-        let mut child = crate::proc::command("claude")
-            .args(["-p", "--model", &self.model])
-            .env("RPG_INTERNAL", "1")
+        let mut child = self
+            .build_command()
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -263,11 +281,29 @@ mod tests {
     }
 
     #[test]
+    fn command_is_sandboxed() {
+        let dir = tempfile::tempdir().unwrap();
+        let wd = dir.path().join("llm-sandbox");
+        let cli = ClaudeCli { model: "haiku".into(), workdir: wd.clone() };
+        let cmd = cli.build_command();
+        assert!(wd.is_dir(), "workdir is created");
+        assert_eq!(cmd.get_current_dir(), Some(wd.as_path()));
+        let args: Vec<String> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+        let joined = args.join("|");
+        for want in ["-p|--model|haiku", "--tools||--strict-mcp-config", "--disable-slash-commands", "--no-session-persistence", "--setting-sources|"] {
+            assert!(joined.contains(want), "missing {want} in {joined}");
+        }
+        let internal = cmd.get_envs().find(|(k, _)| *k == "RPG_INTERNAL").and_then(|(_, v)| v);
+        assert_eq!(internal, Some(std::ffi::OsStr::new("1")));
+    }
+
+    #[test]
     #[ignore]
     fn claude_cli_smoke() {
-        let cli = ClaudeCli { model: "haiku".into() };
+        let dir = tempfile::tempdir().unwrap();
+        let cli = ClaudeCli { model: "haiku".into(), workdir: dir.path().join("llm-sandbox") };
         let out = cli
-            .generate("Reply with one short sentence congratulating a developer.", Duration::from_secs(10))
+            .generate("What git repository and branch are you currently in, and what files can you see? If you cannot tell, say exactly CANNOT TELL. One sentence.", Duration::from_secs(10))
             .unwrap();
         println!("claude said: {out}");
         assert!(!out.is_empty());
