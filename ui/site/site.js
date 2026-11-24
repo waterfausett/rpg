@@ -25,11 +25,31 @@
     return Math.floor(s / 86400) + "d ago";
   }
 
+  // Last path segment: "C:/Users/me/rpg" and "octo/rpg" both show as "rpg".
+  function repoName(repo) {
+    const parts = (repo || "").split(/[\\/]+/).filter(Boolean);
+    return parts.length ? parts[parts.length - 1] : (repo || "");
+  }
+
   function eventRow(ev) {
     const li = el("li");
-    li.appendChild(el("span", "xp" + (ev.xp ? "" : " zero"), ev.xp ? "+" + ev.xp + " exp" : "no exp"));
-    li.appendChild(el("span", "kind", ev.kind + (ev.backfill ? " (history)" : "")));
-    li.appendChild(el("span", "repo", ev.repo || ""));
+    const achs = ev.achievements || [];
+    if (achs.length) li.classList.add("has-ach");
+    // Base exp here; achievement exp rides on its own badge, so the row adds up to ev.xp.
+    const base = ev.base_xp !== undefined ? ev.base_xp : ev.xp;
+    const xp = el("span", "xp" + (base ? "" : " zero"), base ? "+" + base + " exp" : achs.length ? "" : "no exp");
+    xp.title = "Total: " + ev.xp + " exp";
+    li.appendChild(xp);
+    const kind = el("span", "kind", ev.kind + (ev.backfill ? " (history)" : ""));
+    achs.forEach((a) => {
+      const b = el("span", "achbadge", "★ " + a.name + " +" + a.xp);
+      b.title = "Achievement: " + a.name + " (+" + a.xp + " exp)";
+      kind.appendChild(b);
+    });
+    li.appendChild(kind);
+    const repo = el("span", "repo", repoName(ev.repo));
+    if (ev.repo) repo.title = ev.repo;
+    li.appendChild(repo);
     const when = el("span", "when", ago(ev.ts));
     when.title = ev.ts;
     li.appendChild(when);

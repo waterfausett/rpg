@@ -71,11 +71,17 @@ pub async fn serve(mut state: SiteState, port: u16) -> std::io::Result<()> {
     axum::serve(bind(port).await?, router(state)).await
 }
 
+/// `xp` is the event's total; `base_xp` plus each of `achievements` adds up to it.
 fn event_json(r: &EventRow) -> Value {
     let e = &r.event;
+    let base = rpg_core::engine::base_label(e.kind);
+    let (base_gains, ach_gains): (Vec<_>, Vec<_>) = r.gains.iter().partition(|(reason, _)| Some(reason.as_str()) == base);
+    let achievements: Vec<Value> = ach_gains.iter().map(|(name, xp)| json!({ "name": name, "xp": xp })).collect();
     json!({
         "id": e.id, "kind": e.kind.as_str(), "ts": e.ts, "repo": e.repo,
         "backfill": e.backfill, "xp": r.xp,
+        "base_xp": base_gains.iter().map(|(_, xp)| xp).sum::<u64>(),
+        "achievements": achievements,
     })
 }
 
@@ -244,6 +250,18 @@ detector = { type = "first", scope = "ever" }
         assert_eq!(v["recent"].as_array().unwrap().len(), 1);
         assert_eq!(v["recent"][0]["xp"], 100);
         assert_eq!(v["recent"][0]["kind"], "pr_merged");
+        assert_eq!(v["recent"][0]["base_xp"], 100);
+        assert_eq!(v["recent"][0]["achievements"], json!([]));
+    }
+
+    #[tokio::test]
+    async fn event_xp_split_into_base_and_achievements() {
+        let st = state_with(Rules { list: vec![parse_rule(RULE).unwrap()] });
+        process(&st, &ev("m1", EventKind::PrMerged));
+        let v = get_json(&st, "/api/events").await;
+        assert_eq!(v[0]["xp"], 350, "100 base + 250 bronze");
+        assert_eq!(v[0]["base_xp"], 100);
+        assert_eq!(v[0]["achievements"], json!([{ "name": "Merge Maestro", "xp": 250 }]));
     }
 
     #[tokio::test]
