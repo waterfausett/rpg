@@ -223,8 +223,10 @@ fn resolve_include(git: &GitEnv, origin: &str, value: &str) -> Result<PathBuf> {
 }
 
 /// Write shims for every hook into `<data>/git-hooks/` and point the global `core.hooksPath`
-/// at it. On first install the previously effective value (chain target) and the global file's
-/// own value (restored by uninstall) are saved under `<data>/`.
+/// at it. This always changes the real global git config, even with `RPG_HOME` set; when it is,
+/// the shims pass `--home <RPG_HOME>` so their events go to that home. On first install the
+/// previously effective value (chain target) and the global file's own value (restored by
+/// uninstall) are saved under `<data>/`.
 ///
 /// Refuses, changing nothing, when an `[includeIf]` could set `core.hooksPath`. If our global
 /// value turns out to be shadowed (e.g. by an `[include]` placed after it), the global config
@@ -234,6 +236,7 @@ pub fn install_git_hooks(paths: &Paths, rpg_bin: &Path, git: &GitEnv) -> Result<
     std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
     let cwd = &paths.data;
     let ours = slash(&dir);
+    let home = paths.home.as_deref().map(slash).unwrap_or_default();
 
     if let Some(what) = conditional_hooks_path(git, cwd)? {
         bail!(
@@ -266,7 +269,7 @@ pub fn install_git_hooks(paths: &Paths, rpg_bin: &Path, git: &GitEnv) -> Result<
 
     for hook in HOOK_NAMES {
         let p = dir.join(hook);
-        std::fs::write(&p, render_shim(hook, rpg_bin, &prev)).with_context(|| format!("writing {}", p.display()))?;
+        std::fs::write(&p, render_shim(hook, rpg_bin, &prev, &home)).with_context(|| format!("writing {}", p.display()))?;
         proc::make_executable(&p)?;
     }
     for hook in RETIRED_HOOK_NAMES {
@@ -316,13 +319,15 @@ pub fn uninstall_git_hooks(paths: &Paths, git: &GitEnv) -> Result<()> {
     Ok(())
 }
 
-/// The shim for `hook`. `prev` is the previous global hooks dir ("" when none).
-pub fn render_shim(hook: &str, rpg_bin: &Path, prev: &str) -> String {
+/// The shim for `hook`. `prev` is the previous global hooks dir ("" when none); `home` is the
+/// `RPG_HOME` to report into ("" for the default dirs).
+pub fn render_shim(hook: &str, rpg_bin: &Path, prev: &str, home: &str) -> String {
     SHIM_TEMPLATE
         .replace("\r\n", "\n")
         .replace("__RPG_BIN__", &sh_quote(&slash(rpg_bin)))
         .replace("__HOOK__", &sh_quote(hook))
         .replace("__PREV__", &sh_quote(prev))
+        .replace("__HOME__", &sh_quote(home))
 }
 
 /// Claude Code's user settings file, `~/.claude/settings.json`.
@@ -333,7 +338,21 @@ pub fn claude_settings_path() -> Result<PathBuf> {
 /// Merge rpg's SessionStart/SessionEnd entries into Claude Code's `settings.json`, after
 /// backing it up to `settings.json.rpg-backup`. Idempotent; all other content is preserved.
 /// The backup is written only once, so it always holds the file as it was before rpg touched it.
-pub fn install_claude_hooks(settings_path: &Path, rpg_bin: &Path) -> Result<()> {
+///
+/// `home` (the `RPG_HOME` in effect) is passed as `--home "<home>"`, double-quoted so the command
+/// works in both cmd.exe and bash; a path with a character either shell would expand inside
+/// double quotes is refused.
+pub fn install_claude_hooks(settings_path: &Path, rpg_bin: &Path, home: Option<&Path>) -> Result<()> {
+    let home_arg = match home {
+        Some(h) => {
+            let h = slash(h);
+            if let Some(c) = h.chars().find(|c| matches!(c, '"' | '$' | '`' | '%')) {
+                bail!("RPG_HOME '{h}' contains '{c}', which a hook command cannot quote safely");
+            }
+            format!(" --home \"{h}\"")
+        }
+        None => String::new(),
+    };
     let mut root = read_settings(settings_path)?;
     let backup = sibling(settings_path, ".rpg-backup");
     if settings_path.exists() && !backup.exists() {
@@ -353,7 +372,7 @@ pub fn install_claude_hooks(settings_path: &Path, rpg_bin: &Path) -> Result<()> 
             .as_array_mut()
             .ok_or_else(|| anyhow!("`hooks.{event}` in {} is not an array", settings_path.display()))?;
         list.push(serde_json::json!({
-            "hooks": [{ "type": "command", "command": format!("\"{bin}\" emit {arg}") }]
+            "hooks": [{ "type": "command", "command": format!("\"{bin}\" emit {arg}{home_arg}") }]
         }));
     }
     write_settings(settings_path, &root)

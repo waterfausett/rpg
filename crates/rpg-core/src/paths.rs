@@ -9,6 +9,9 @@ const DEFAULT_CONFIG: &str = include_str!("../assets/config.default.toml");
 pub struct Paths {
     pub data: PathBuf,
     pub config: PathBuf,
+    /// The `RPG_HOME` override in effect, if any. Baked into installed hooks so they report
+    /// to this home rather than to whatever `RPG_HOME` the committing shell happens to have.
+    pub home: Option<PathBuf>,
 }
 
 impl Paths {
@@ -18,13 +21,18 @@ impl Paths {
     }
 
     /// `home` overrides the platform dirs: data under `<home>/data`, config under `<home>/config`.
+    /// An empty `home` (e.g. `RPG_HOME=`) counts as unset. A relative `home` is made absolute
+    /// (hooks bake it in and run from other directories).
     pub fn from_home(home: Option<PathBuf>) -> Result<Paths> {
-        match home {
-            Some(h) => Ok(Paths { data: h.join("data"), config: h.join("config") }),
+        match home.filter(|h| !h.as_os_str().is_empty()) {
+            Some(h) => {
+                let h = std::path::absolute(&h).with_context(|| format!("resolving {}", h.display()))?;
+                Ok(Paths { data: h.join("data"), config: h.join("config"), home: Some(h) })
+            }
             None => {
                 let d = directories::ProjectDirs::from("", "", "rpg")
                     .ok_or_else(|| anyhow!("cannot determine home directory"))?;
-                Ok(Paths { data: d.data_dir().to_path_buf(), config: d.config_dir().to_path_buf() })
+                Ok(Paths { data: d.data_dir().to_path_buf(), config: d.config_dir().to_path_buf(), home: None })
             }
         }
     }
@@ -80,6 +88,18 @@ mod tests {
         let p = Paths::from_home(Some(tmp.path().to_path_buf())).unwrap();
         assert_eq!(p.db(), tmp.path().join("data").join("rpg.db"));
         assert_eq!(p.rules(), tmp.path().join("config").join("rules"));
+    }
+
+    #[test]
+    fn empty_rpg_home_means_default_dirs() {
+        let empty = Paths::from_home(Some(PathBuf::new())).unwrap();
+        let default = Paths::from_home(None).unwrap();
+        assert_eq!(empty.data, default.data);
+        assert_eq!(empty.config, default.config);
+        assert_eq!(empty.home, None);
+        let set = Paths::from_home(Some(PathBuf::from("x"))).unwrap();
+        assert!(set.data.is_absolute(), "relative RPG_HOME is made absolute");
+        assert_eq!(set.home, Some(std::path::absolute("x").unwrap()));
     }
 
     #[test]

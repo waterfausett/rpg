@@ -270,11 +270,22 @@ fn process_loop(state: &AppState, sink: &dyn OutcomeSink, rx: &Receiver<Msg>) {
 }
 
 /// One GitHub poll: fetch, parse, and write events into the inbox (the single
-/// path into the engine). Backfill runs once, until `github_backfill_done` is set.
+/// path into the engine). Backfill runs once, until `github_backfill_done` is set; it holds
+/// the RFC 3339 time backfill completed, and live events from before then count as backfill.
 fn poll_github(state: &AppState, tx: &Sender<Msg>) -> Result<usize> {
-    let backfill = state.store.meta_get(BACKFILL_KEY)?.is_none();
+    let done = state.store.meta_get(BACKFILL_KEY)?;
+    let backfill = done.is_none();
     let json = github::fetch(if backfill { BACKFILL_PRS } else { LIVE_PRS })?;
-    let events = github::parse(&json, backfill)?;
+    let mut events = github::parse(&json, backfill)?;
+    if let Some(raw) = done {
+        let cutoff = github::parse_backfill_done(&raw).unwrap_or_else(|| {
+            // Not a timestamp (older build): treat everything up to now as history from here on.
+            let now = chrono::Utc::now();
+            let _ = tx.send(Msg::SetMeta(BACKFILL_KEY, now.to_rfc3339()));
+            now
+        });
+        github::mark_pre_backfill(&mut events, cutoff);
+    }
     for ev in &events {
         inbox::write_event(&state.paths.inbox(), ev)?;
     }

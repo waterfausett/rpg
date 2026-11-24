@@ -1,7 +1,7 @@
 //! Optional LLM flavor text for achievement announcements, with static fallback.
 use crate::config::LlmConfig;
 use crate::engine::Unlock;
-use crate::event::Event;
+use crate::event::{Event, Source};
 use crate::rules::{Flavor, Rule};
 use anyhow::{anyhow, bail, Result};
 use chrono::FixedOffset;
@@ -100,17 +100,45 @@ impl TextGen for ClaudeCli {
     }
 }
 
-/// Privacy-limited context for the prompt: event type, repo, branch, local
-/// time, detector findings and unlock history. No other event data.
+/// The repo's name only: the last path segment of a local repo path. GitHub repos are
+/// already `owner/name` and are kept as they are.
+fn repo_name(source: Source, repo: &str) -> String {
+    if source == Source::Github {
+        return repo.to_string();
+    }
+    let trimmed = repo.trim_end_matches(['/', '\\']);
+    trimmed.rsplit(['/', '\\']).next().unwrap_or(trimmed).to_string()
+}
+
+/// Replace every string `"repo"` value, at any depth, with its repo name.
+fn strip_repo_paths(v: &mut serde_json::Value, source: Source) {
+    match v {
+        serde_json::Value::Object(m) => {
+            for (k, val) in m.iter_mut() {
+                match val {
+                    serde_json::Value::String(s) if k == "repo" => *s = repo_name(source, s),
+                    _ => strip_repo_paths(val, source),
+                }
+            }
+        }
+        serde_json::Value::Array(a) => a.iter_mut().for_each(|x| strip_repo_paths(x, source)),
+        _ => {}
+    }
+}
+
+/// Privacy-limited context for the prompt: event type, repo name (never a local path),
+/// branch, local time, detector findings and unlock history. No other event data.
 pub fn build_context(_rule: &Rule, unlock: &Unlock, ev: &Event, tz: FixedOffset) -> serde_json::Value {
+    let mut findings = unlock.findings.clone();
+    strip_repo_paths(&mut findings, ev.source);
     serde_json::json!({
         "event": {
             "kind": ev.kind.as_str(),
-            "repo": ev.repo,
+            "repo": ev.repo.as_deref().map(|r| repo_name(ev.source, r)),
             "branch": ev.data.get("branch").and_then(|b| b.as_str()),
             "local_time": ev.ts.with_timezone(&tz).format("%Y-%m-%d %H:%M (%a)").to_string(),
         },
-        "findings": unlock.findings,
+        "findings": findings,
         "unlock_count": unlock.unlock_count,
         "last_unlocked_at": unlock.last_unlocked_at,
     })
@@ -270,6 +298,33 @@ mod tests {
         assert_eq!(ctx["event"]["branch"], "main");
         assert_eq!(ctx["event"]["repo"], "myrepo");
         assert_eq!(ctx["event"]["kind"], "commit");
+    }
+
+    #[test]
+    fn context_sends_repo_name_not_local_path() {
+        for (source, full) in [(Source::Git, "C:/Users/x/work/proj"), (Source::Claude, r"C:\Users\x\work\proj\"), (Source::Git, "/home/x/proj/")] {
+            let mut ev = event();
+            ev.source = source;
+            ev.repo = Some(full.into());
+            let mut u = unlock();
+            u.findings = serde_json::json!({ "repo": full, "nested": { "repo": full }, "path": "src/a.rs" });
+            let ctx = build_context(&rule(llm()), &u, &ev, tz());
+            assert_eq!(ctx["event"]["repo"], "proj", "{full}");
+            assert_eq!(ctx["findings"]["repo"], "proj", "{full}");
+            assert_eq!(ctx["findings"]["nested"]["repo"], "proj", "{full}");
+            assert_eq!(ctx["findings"]["path"], "src/a.rs", "other findings are untouched");
+            let s = ctx.to_string();
+            assert!(!s.contains("Users") && !s.contains("home/x") && !s.contains("work/proj"), "{s}");
+        }
+        // GitHub repos are already `owner/name`: keep them.
+        let mut ev = event();
+        ev.source = Source::Github;
+        ev.repo = Some("octo/proj".into());
+        let mut u = unlock();
+        u.findings = serde_json::json!({ "repo": "octo/proj" });
+        let ctx = build_context(&rule(llm()), &u, &ev, tz());
+        assert_eq!(ctx["event"]["repo"], "octo/proj");
+        assert_eq!(ctx["findings"]["repo"], "octo/proj");
     }
 
     #[test]

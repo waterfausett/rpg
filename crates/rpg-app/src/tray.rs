@@ -101,7 +101,7 @@ fn run_installer(paths: Paths, install_hooks: bool) {
                     ("install git hooks", install::install_git_hooks(&paths, &bin, &git)),
                     (
                         "install claude hooks",
-                        install::claude_settings_path().and_then(|s| install::install_claude_hooks(&s, &bin)),
+                        install::claude_settings_path().and_then(|s| install::install_claude_hooks(&s, &bin, paths.home.as_deref())),
                     ),
                 ],
                 Err(e) => {

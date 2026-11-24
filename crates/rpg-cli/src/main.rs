@@ -14,6 +14,10 @@ struct Cli {
 enum Cmd {
     /// Drop an event into the inbox (always exits 0)
     Emit {
+        /// Use this rpg home (as `RPG_HOME` would) instead of the environment's. Installed
+        /// hooks pass it so their events go to the home they were installed from.
+        #[arg(long, global = true)]
+        home: Option<PathBuf>,
         #[command(subcommand)]
         what: Emit,
     },
@@ -105,7 +109,7 @@ fn install_git(git: &install::GitEnv) -> anyhow::Result<String> {
 
 fn install_claude() -> anyhow::Result<String> {
     let settings = install::claude_settings_path()?;
-    install::install_claude_hooks(&settings, &current_exe()?)?;
+    install::install_claude_hooks(&settings, &current_exe()?, Paths::resolve()?.home.as_deref())?;
     Ok(format!("added SessionStart/SessionEnd hooks to {} (backup: settings.json.rpg-backup)", settings.display()))
 }
 
@@ -133,10 +137,6 @@ fn uninstall_hooks() {
 }
 
 fn main() {
-    // Nested `claude -p` calls made by the app must be invisible.
-    if std::env::var_os("RPG_INTERNAL").is_some_and(|v| v == "1") {
-        return;
-    }
     // Hooks must never fail the caller, so even parse errors exit 0.
     let cli = match Cli::try_parse() {
         Ok(c) => c,
@@ -146,8 +146,13 @@ fn main() {
         }
     };
     let _ = std::panic::catch_unwind(|| match cli.cmd {
-        Cmd::Emit { what } => {
-            if let Ok(paths) = Paths::resolve() {
+        Cmd::Emit { home, what } => {
+            // Nested `claude -p` calls made by the app must be invisible.
+            if std::env::var_os("RPG_INTERNAL").is_some_and(|v| v == "1") {
+                return;
+            }
+            let paths = match home { Some(h) => Paths::from_home(Some(h)), None => Paths::resolve() };
+            if let Ok(paths) = paths {
                 if let Err(e) = run_emit(&paths, what) {
                     log_line(&paths, &format!("{e:#}"));
                 }

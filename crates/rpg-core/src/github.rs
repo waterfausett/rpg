@@ -74,6 +74,21 @@ pub fn parse(json: &Value, backfill: bool) -> Result<Vec<Event>> {
     Ok(events)
 }
 
+/// When the one-time backfill completed, from its stored meta value. `None` when the value is
+/// not an RFC 3339 timestamp (e.g. written by an older build); the caller replaces it.
+pub fn parse_backfill_done(raw: &str) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(raw.trim()).ok().map(|t| t.with_timezone(&Utc))
+}
+
+/// Backfill only sees the most recently updated PRs, so a live poll can bring in older
+/// history it missed (an old PR updated later). Anything that happened before the backfill
+/// completed is history: mark it backfill so it seeds records only and grants nothing.
+pub fn mark_pre_backfill(events: &mut [Event], done: DateTime<Utc>) {
+    for e in events.iter_mut().filter(|e| e.ts < done) {
+        e.backfill = true;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -106,6 +121,37 @@ mod tests {
         assert_eq!(evs[2].repo.as_deref(), Some("other/thing"));
         assert_eq!(evs[2].data["url"], "https://github.com/other/thing/pull/7");
         assert!(!parse(&v, false).unwrap()[0].backfill);
+    }
+
+    #[test]
+    fn live_events_older_than_backfill_are_marked_backfill() {
+        let v: Value = serde_json::from_str(FIXTURE).unwrap();
+        let mut evs = parse(&v, false).unwrap();
+        let done = parse_backfill_done("2026-11-21T12:00:00+00:00").unwrap();
+        mark_pre_backfill(&mut evs, done);
+        let flags: Vec<(&str, bool)> = evs.iter().map(|e| (e.id.as_str(), e.backfill)).collect();
+        assert_eq!(
+            flags,
+            vec![
+                ("gh:pr_opened:PR_aaa", true),
+                ("gh:pr_merged:PR_aaa", true),
+                ("gh:review:PRR_ccc", false),
+                ("gh:pr_opened:PR_bbb", false),
+            ]
+        );
+        // Already-backfill events stay backfill.
+        let mut all = parse(&v, true).unwrap();
+        mark_pre_backfill(&mut all, done);
+        assert!(all.iter().all(|e| e.backfill));
+    }
+
+    #[test]
+    fn backfill_done_parses_only_timestamps() {
+        let t = parse_backfill_done("2026-11-21T12:00:00.123456+00:00").unwrap();
+        assert_eq!(t.to_rfc3339(), "2026-11-21T12:00:00.123456+00:00");
+        assert_eq!(parse_backfill_done(" 2026-11-21T12:00:00Z\n").map(|t| t.timestamp()), Some(t.timestamp()));
+        assert_eq!(parse_backfill_done("1"), None);
+        assert_eq!(parse_backfill_done(""), None);
     }
 
     #[test]

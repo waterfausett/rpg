@@ -46,3 +46,50 @@ fn emit_exits_zero_on_error() {
     let log = std::fs::read_to_string(home.path().join("data").join("rpg.log")).unwrap();
     assert!(!log.trim().is_empty());
 }
+
+#[test]
+fn emit_home_flag_overrides_rpg_home_env() {
+    let env_home = tempfile::tempdir().unwrap();
+    let flag_home = tempfile::tempdir().unwrap();
+    rpg(env_home.path())
+        .args(["emit", "claude-session-start", "--home"])
+        .arg(flag_home.path())
+        .write_stdin(r#"{"session_id":"s","cwd":"/x"}"#)
+        .assert()
+        .success();
+    assert_eq!(inbox_files(flag_home.path()), 1);
+    assert_eq!(inbox_files(env_home.path()), 0);
+}
+
+#[test]
+fn rpg_internal_only_silences_emit() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let gitconfig = tmp.path().join("gitconfig");
+    std::fs::write(&gitconfig, "").unwrap();
+    let out = rpg(&tmp.path().join("rpghome"))
+        .env("RPG_INTERNAL", "1")
+        .env("GIT_CONFIG_GLOBAL", &gitconfig)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("HOME", &home)
+        .env("USERPROFILE", &home)
+        .arg("install-hooks")
+        .assert()
+        .success();
+    let said = String::from_utf8_lossy(&out.get_output().stdout).to_string();
+    assert!(said.contains("git hooks:"), "install-hooks must not be silenced: {said:?}");
+    assert!(std::fs::read_to_string(&gitconfig).unwrap().contains("hooksPath"));
+    let out = rpg(&tmp.path().join("rpghome"))
+        .env("RPG_INTERNAL", "1")
+        .env("GIT_CONFIG_GLOBAL", &gitconfig)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("HOME", &home)
+        .env("USERPROFILE", &home)
+        .arg("uninstall-hooks")
+        .assert()
+        .success();
+    let said = String::from_utf8_lossy(&out.get_output().stdout).to_string();
+    assert!(said.contains("git hooks:"), "uninstall-hooks must not be silenced: {said:?}");
+    assert!(!std::fs::read_to_string(&gitconfig).unwrap().contains("hooksPath"));
+}

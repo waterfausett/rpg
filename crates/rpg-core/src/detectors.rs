@@ -191,6 +191,19 @@ mod tests {
     }
 
     #[test]
+    fn surgical_strike_needs_at_least_one_line() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/rules");
+        let (rules, _) = crate::rules::load_dir(&dir);
+        let rule = rules.list.iter().find(|r| r.id == "surgical_strike").unwrap();
+        let store = Store::open_in_memory().unwrap();
+        let commit = |a: u64, r: u64| mk(EventKind::Commit, "2026-03-01T01:00:00Z", "r", json!({ "lines_added": a, "lines_removed": r }));
+        assert_eq!(eval(&rule.detector, &store, &commit(0, 0), &[], &[]), None, "binary-only/rename commit");
+        assert!(eval(&rule.detector, &store, &commit(1, 0), &[], &[]).is_some());
+        assert!(eval(&rule.detector, &store, &commit(1, 1), &[], &[]).is_some());
+        assert_eq!(eval(&rule.detector, &store, &commit(2, 1), &[], &[]), None);
+    }
+
+    #[test]
     fn first_repo_scope() {
         let store = Store::open_in_memory().unwrap();
         let a1 = mk(EventKind::Commit, "2026-03-01T01:00:00Z", "A", json!({}));

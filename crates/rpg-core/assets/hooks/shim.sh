@@ -5,6 +5,9 @@
 RPG_BIN=__RPG_BIN__
 HOOK=__HOOK__
 PREV=__PREV__
+# The RPG_HOME in effect at install time ("" = default dirs). Passed as `--home`, so events go
+# to the home these shims belong to, whatever RPG_HOME the committing shell has.
+RPG_HOME_DIR=__HOME__
 
 # 0. Locate this repo's git dirs using shell builtins only (no extra processes): git runs hooks
 #    from the work-tree root, or from $GIT_DIR in a bare repo. `gitdir` is per-worktree
@@ -42,14 +45,14 @@ if [ -f "$RPG_BIN" ]; then
         top=$(git rev-parse --show-toplevel 2>/dev/null </dev/null)
         head=$(git rev-parse HEAD 2>/dev/null </dev/null)
         if [ -n "$top" ] && [ -n "$head" ]; then
-          "$RPG_BIN" emit commit --repo "$top" --hash "$head" </dev/null >/dev/null 2>&1 &
+          "$RPG_BIN" emit commit --repo "$top" --hash "$head" ${RPG_HOME_DIR:+--home "$RPG_HOME_DIR"} </dev/null >/dev/null 2>&1 &
         fi
       fi
       ;;
     pre-push)
       top=$(git rev-parse --show-toplevel 2>/dev/null </dev/null)
       if [ -n "$top" ]; then
-        "$RPG_BIN" emit push --repo "$top" --remote "$1" </dev/null >/dev/null 2>&1 &
+        "$RPG_BIN" emit push --repo "$top" --remote "$1" ${RPG_HOME_DIR:+--home "$RPG_HOME_DIR"} </dev/null >/dev/null 2>&1 &
       fi
       ;;
   esac

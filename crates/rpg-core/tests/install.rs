@@ -261,8 +261,8 @@ fn claude_settings_merge_preserves_and_is_idempotent() {
     std::fs::write(&settings, &orig_text).unwrap();
     let bin = tmp.path().join("bin").join("rpg.exe");
 
-    install::install_claude_hooks(&settings, &bin).unwrap();
-    install::install_claude_hooks(&settings, &bin).unwrap();
+    install::install_claude_hooks(&settings, &bin, None).unwrap();
+    install::install_claude_hooks(&settings, &bin, None).unwrap();
     let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
     assert_eq!(v["model"], "opus");
     assert_eq!(v["hooks"]["Stop"], stop);
@@ -295,9 +295,25 @@ fn claude_settings_merge_preserves_and_is_idempotent() {
 fn claude_install_creates_missing_settings() {
     let tmp = tempfile::tempdir().unwrap();
     let settings = tmp.path().join(".claude").join("settings.json");
-    install::install_claude_hooks(&settings, Path::new("/x/rpg")).unwrap();
+    install::install_claude_hooks(&settings, Path::new("/x/rpg"), None).unwrap();
     let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
     assert_eq!(v["hooks"]["SessionEnd"][0]["hooks"][0]["command"], "\"/x/rpg\" emit claude-session-end");
+}
+
+#[test]
+fn claude_install_bakes_rpg_home_into_command() {
+    let tmp = tempfile::tempdir().unwrap();
+    let settings = tmp.path().join("settings.json");
+    install::install_claude_hooks(&settings, Path::new("/x/rpg"), Some(Path::new(r"C:\scratch\rpg home"))).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
+    assert_eq!(
+        v["hooks"]["SessionStart"][0]["hooks"][0]["command"],
+        "\"/x/rpg\" emit claude-session-start --home \"C:/scratch/rpg home\""
+    );
+    // Characters that cmd.exe or bash would expand inside double quotes are refused.
+    for bad in ["a\"b", "a$b", "a`b", "a%b"] {
+        assert!(install::install_claude_hooks(&settings, Path::new("/x/rpg"), Some(Path::new(bad))).is_err(), "{bad}");
+    }
 }
 
 #[test]
@@ -305,7 +321,7 @@ fn claude_install_refuses_to_clobber_invalid_json() {
     let tmp = tempfile::tempdir().unwrap();
     let settings = tmp.path().join("settings.json");
     std::fs::write(&settings, "{ not json").unwrap();
-    assert!(install::install_claude_hooks(&settings, Path::new("/x/rpg")).is_err());
+    assert!(install::install_claude_hooks(&settings, Path::new("/x/rpg"), None).is_err());
     assert_eq!(std::fs::read_to_string(&settings).unwrap(), "{ not json");
 }
 
