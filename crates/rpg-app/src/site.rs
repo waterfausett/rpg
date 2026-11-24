@@ -235,10 +235,10 @@ detector = { type = "first", scope = "ever" }
         let st = state_with(Rules::default());
         process(&st, &ev("m1", EventKind::PrMerged));
         let v = get_json(&st, "/api/character").await;
-        assert_eq!(v["level"], 2);
+        assert_eq!(v["level"], 1, "100 exp is still level 1 (level 2 at 1000)");
         assert_eq!(v["total_xp"], 100);
-        assert_eq!(v["into_level"], 0);
-        assert!(v["level_span"].as_u64().unwrap() > 0);
+        assert_eq!(v["into_level"], 100);
+        assert_eq!(v["level_span"], 1000);
         assert_eq!(v["totals"]["prs_merged"], 1);
         assert_eq!(v["totals"]["commits"], 0);
         assert_eq!(v["recent"].as_array().unwrap().len(), 1);

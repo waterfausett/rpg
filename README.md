@@ -108,7 +108,7 @@ review = 40
 claude_session = 15
 
 [levels]            # cumulative XP to reach level n = round(base * (n-1)^exponent)
-base = 100.0
+base = 1000.0
 exponent = 1.5
 
 [github]
