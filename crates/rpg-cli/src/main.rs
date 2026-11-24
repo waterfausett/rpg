@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use rpg_core::{emit, event::EventKind, inbox, paths::Paths};
+use rpg_core::{emit, event::EventKind, inbox, install, paths::Paths};
 use std::io::{Read, Write};
 use std::path::PathBuf;
 
@@ -71,6 +71,67 @@ fn run_emit(paths: &Paths, what: Emit) -> anyhow::Result<()> {
     inbox::write_event(&paths.inbox(), &ev)
 }
 
+/// Print the outcome of one installer step; errors are reported, never fatal.
+fn report(step: &str, r: anyhow::Result<String>) {
+    match r {
+        Ok(msg) => println!("{step}: {msg}"),
+        Err(e) => println!("{step}: FAILED: {e:#}"),
+    }
+}
+
+fn hooks_path_desc(git: &install::GitEnv) -> String {
+    match install::global_hooks_path(git) {
+        Ok(Some(p)) => format!("global core.hooksPath = {p}"),
+        Ok(None) => "global core.hooksPath unset".into(),
+        Err(e) => format!("global core.hooksPath unknown ({e:#})"),
+    }
+}
+
+fn current_exe() -> anyhow::Result<PathBuf> {
+    Ok(std::env::current_exe()?)
+}
+
+fn install_git(git: &install::GitEnv) -> anyhow::Result<String> {
+    let paths = Paths::resolve()?;
+    let before = hooks_path_desc(git);
+    install::install_git_hooks(&paths, &current_exe()?, git)?;
+    Ok(format!(
+        "wrote {} shims to {}; was: {before}; now: {}",
+        install::HOOK_NAMES.len(),
+        paths.git_hooks().display(),
+        hooks_path_desc(git)
+    ))
+}
+
+fn install_claude() -> anyhow::Result<String> {
+    let settings = install::claude_settings_path()?;
+    install::install_claude_hooks(&settings, &current_exe()?)?;
+    Ok(format!("added SessionStart/SessionEnd hooks to {} (backup: settings.json.rpg-backup)", settings.display()))
+}
+
+fn uninstall_git(git: &install::GitEnv) -> anyhow::Result<String> {
+    install::uninstall_git_hooks(&Paths::resolve()?, git)?;
+    Ok(format!("restored; now: {}", hooks_path_desc(git)))
+}
+
+fn uninstall_claude() -> anyhow::Result<String> {
+    let settings = install::claude_settings_path()?;
+    install::uninstall_claude_hooks(&settings)?;
+    Ok(format!("removed rpg entries from {}", settings.display()))
+}
+
+fn install_hooks() {
+    let git = install::GitEnv::inherit();
+    report("git hooks", install_git(&git));
+    report("claude hooks", install_claude());
+}
+
+fn uninstall_hooks() {
+    let git = install::GitEnv::inherit();
+    report("git hooks", uninstall_git(&git));
+    report("claude hooks", uninstall_claude());
+}
+
 fn main() {
     // Nested `claude -p` calls made by the app must be invisible.
     if std::env::var_os("RPG_INTERNAL").is_some_and(|v| v == "1") {
@@ -92,6 +153,7 @@ fn main() {
                 }
             }
         }
-        Cmd::InstallHooks | Cmd::UninstallHooks => println!("not yet implemented"),
+        Cmd::InstallHooks => install_hooks(),
+        Cmd::UninstallHooks => uninstall_hooks(),
     });
 }

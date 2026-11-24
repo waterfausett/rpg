@@ -7,7 +7,7 @@ edition = "2021"
 anyhow = "1"
 rusqlite = { version = "0.31", features = ["bundled"] }
 chrono = { version = "0.4", features = ["serde"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["preserve_order"] }
 ulid = "1"
 directories = "5"
 include_dir = "0.7"

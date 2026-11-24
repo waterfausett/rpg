@@ -2,6 +2,7 @@ pub mod config;
 pub mod emit;
 pub mod event;
 pub mod inbox;
+pub mod install;
 pub mod paths;
 pub mod proc;
 pub mod rules;
