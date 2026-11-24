@@ -1,1 +1,9 @@
 id = "hat_trick"
+name = "Hat Trick"
+tier = "silver"
+trigger = ["pr_opened"]
+detector = { type = "count_in_window", count = 3, window = "day" }
+repeatable = true
+hint = "Good things come in threes. So does review fatigue."
+fallback = "Three pull requests opened in a single day. Your reviewers have been notified, and several have begun updating their resumes."
+flavor = { type = "llm", prompt = "Rewrite this achievement announcement for this specific unlock, in the same voice: \"{fallback}\". Use the concrete details. Context: {context}" }

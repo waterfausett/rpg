@@ -4,5 +4,6 @@ pub mod event;
 pub mod inbox;
 pub mod paths;
 pub mod proc;
+pub mod rules;
 pub mod store;
 pub mod xp;
