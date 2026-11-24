@@ -11,3 +11,4 @@ pub mod detectors;
 pub mod enrich;
 pub mod records;
 pub mod engine;
+pub mod flavor;
