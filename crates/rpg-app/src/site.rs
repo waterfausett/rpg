@@ -1,5 +1,7 @@
 //! Localhost "character sheet": a JSON API plus the embedded vanilla page in `ui/site/`.
-use axum::extract::{Query, State};
+use axum::extract::{Query, Request, State};
+use axum::http::HeaderValue;
+use axum::middleware::{self, Next};
 use axum::http::{header, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
@@ -19,6 +21,8 @@ pub struct SiteState {
     pub store: Arc<Store>,
     pub rules: Arc<RwLock<Rules>>,
     pub cfg: Arc<RwLock<Config>>,
+    /// The port the site listens on; the only port accepted in `Host`.
+    pub port: u16,
 }
 
 #[derive(rust_embed::RustEmbed)]
@@ -44,22 +48,34 @@ pub fn router(state: SiteState) -> Router {
         .route("/api/achievements", get(achievements))
         .route("/api/events", get(events))
         .fallback(static_asset)
+        .layer(middleware::from_fn_with_state(state.clone(), guard))
         .with_state(state)
+}
+
+/// Rejects requests whose `Host` is not our own loopback address (DNS-rebinding defense),
+/// and marks every response `nosniff`.
+async fn guard(State(st): State<SiteState>, req: Request, next: Next) -> Response {
+    let host = req.headers().get(header::HOST).and_then(|h| h.to_str().ok()).unwrap_or("");
+    let ok = host == format!("127.0.0.1:{}", st.port) || host == format!("localhost:{}", st.port);
+    let mut res = if ok { next.run(req).await } else { StatusCode::FORBIDDEN.into_response() };
+    res.headers_mut().insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+    res
 }
 
 pub async fn bind(port: u16) -> std::io::Result<tokio::net::TcpListener> {
     tokio::net::TcpListener::bind(SocketAddr::from((BIND_ADDR, port))).await
 }
 
-pub async fn serve(state: SiteState, port: u16) -> std::io::Result<()> {
+pub async fn serve(mut state: SiteState, port: u16) -> std::io::Result<()> {
+    state.port = port;
     axum::serve(bind(port).await?, router(state)).await
 }
 
 fn event_json(r: &EventRow) -> Value {
     let e = &r.event;
     json!({
-        "id": e.id, "kind": e.kind.as_str(), "ts": e.ts, "source": e.source, "repo": e.repo,
-        "backfill": e.backfill, "data": e.data, "xp": r.xp,
+        "id": e.id, "kind": e.kind.as_str(), "ts": e.ts, "repo": e.repo,
+        "backfill": e.backfill, "xp": r.xp,
     })
 }
 
@@ -147,10 +163,13 @@ async fn events(State(st): State<SiteState>, Query(q): Query<EventsQuery>) -> Re
 async fn static_asset(uri: Uri) -> Response {
     let path = uri.path().trim_start_matches('/');
     let path = if path.is_empty() { "index.html" } else { path };
-    match Assets::get(path) {
-        Some(f) => ([(header::CONTENT_TYPE, f.metadata.mimetype().to_string())], f.data.into_owned()).into_response(),
-        None => StatusCode::NOT_FOUND.into_response(),
+    let Some(f) = Assets::get(path) else { return StatusCode::NOT_FOUND.into_response() };
+    let mime = f.metadata.mimetype().to_string();
+    let mut res = ([(header::CONTENT_TYPE, mime.clone())], f.data.into_owned()).into_response();
+    if mime.starts_with("text/html") {
+        res.headers_mut().insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("default-src 'self'"));
     }
+    res
 }
 
 #[cfg(test)]
@@ -165,16 +184,19 @@ mod tests {
     use rpg_core::rules::parse_rule;
     use tower::ServiceExt;
 
+    const TEST_HOST: &str = "127.0.0.1:47474";
+
     fn state_with(rules: Rules) -> SiteState {
         SiteState {
             store: Arc::new(Store::open_in_memory().unwrap()),
             rules: Arc::new(RwLock::new(rules)),
             cfg: Arc::new(RwLock::new(Config::default())),
+            port: 47474,
         }
     }
 
     async fn get_json(state: &SiteState, uri: &str) -> Value {
-        let res = router(state.clone()).oneshot(Request::get(uri).body(Body::empty()).unwrap()).await.unwrap();
+        let res = router(state.clone()).oneshot(Request::get(uri).header(header::HOST, TEST_HOST).body(Body::empty()).unwrap()).await.unwrap();
         assert_eq!(res.status(), StatusCode::OK, "{uri}");
         let bytes = res.into_body().collect().await.unwrap().to_bytes();
         serde_json::from_slice(&bytes).unwrap()
@@ -301,7 +323,7 @@ detector = { type = "first", scope = "ever" }
     #[tokio::test]
     async fn events_rejects_unknown_kind() {
         let st = state_with(Rules::default());
-        let res = router(st).oneshot(Request::get("/api/events?kind=bogus").body(Body::empty()).unwrap()).await.unwrap();
+        let res = router(st).oneshot(Request::get("/api/events?kind=bogus").header(header::HOST, TEST_HOST).body(Body::empty()).unwrap()).await.unwrap();
         assert_eq!(res.status(), StatusCode::BAD_REQUEST);
     }
 
@@ -309,12 +331,12 @@ detector = { type = "first", scope = "ever" }
     async fn serves_embedded_page_and_assets() {
         let st = state_with(Rules::default());
         for (uri, ct) in [("/", "text/html"), ("/site.css", "text/css"), ("/site.js", "javascript")] {
-            let res = router(st.clone()).oneshot(Request::get(uri).body(Body::empty()).unwrap()).await.unwrap();
+            let res = router(st.clone()).oneshot(Request::get(uri).header(header::HOST, TEST_HOST).body(Body::empty()).unwrap()).await.unwrap();
             assert_eq!(res.status(), StatusCode::OK, "{uri}");
             let got = res.headers()[header::CONTENT_TYPE].to_str().unwrap().to_string();
             assert!(got.contains(ct), "{uri}: {got}");
         }
-        let res = router(st).oneshot(Request::get("/nope.txt").body(Body::empty()).unwrap()).await.unwrap();
+        let res = router(st).oneshot(Request::get("/nope.txt").header(header::HOST, TEST_HOST).body(Body::empty()).unwrap()).await.unwrap();
         assert_eq!(res.status(), StatusCode::NOT_FOUND);
     }
 
@@ -322,5 +344,49 @@ detector = { type = "first", scope = "ever" }
     async fn binds_localhost_only() {
         let l = bind(0).await.unwrap();
         assert_eq!(l.local_addr().unwrap().ip(), std::net::IpAddr::V4(Ipv4Addr::LOCALHOST));
+    }
+
+    async fn status_with_host(st: &SiteState, host: Option<&str>) -> (StatusCode, axum::http::HeaderMap) {
+        let mut b = Request::get("/api/character");
+        if let Some(h) = host {
+            b = b.header(header::HOST, h);
+        }
+        let res = router(st.clone()).oneshot(b.body(Body::empty()).unwrap()).await.unwrap();
+        (res.status(), res.headers().clone())
+    }
+
+    #[tokio::test]
+    async fn host_header_is_validated() {
+        let st = state_with(Rules::default());
+        for ok in ["127.0.0.1:47474", "localhost:47474"] {
+            assert_eq!(status_with_host(&st, Some(ok)).await.0, StatusCode::OK, "{ok}");
+        }
+        for bad in ["evil.example:47474", "127.0.0.1:1", "127.0.0.1", "localhost.evil.example:47474"] {
+            assert_eq!(status_with_host(&st, Some(bad)).await.0, StatusCode::FORBIDDEN, "{bad}");
+        }
+        assert_eq!(status_with_host(&st, None).await.0, StatusCode::FORBIDDEN, "missing Host");
+    }
+
+    #[tokio::test]
+    async fn security_headers_set() {
+        let st = state_with(Rules::default());
+        let (_, h) = status_with_host(&st, Some(TEST_HOST)).await;
+        assert_eq!(h[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+        let (_, h) = status_with_host(&st, Some("evil.example:47474")).await;
+        assert_eq!(h[header::X_CONTENT_TYPE_OPTIONS], "nosniff", "also on 403");
+        let res = router(st).oneshot(Request::get("/").header(header::HOST, TEST_HOST).body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(res.headers()[header::CONTENT_SECURITY_POLICY], "default-src 'self'");
+    }
+
+    #[tokio::test]
+    async fn event_json_omits_raw_data() {
+        let st = state_with(Rules::default());
+        let mut e = ev("x", EventKind::Commit);
+        e.data = json!({ "secret": "diff text" });
+        st.store.insert_event(&e).unwrap();
+        let v = get_json(&st, "/api/events").await;
+        assert!(v[0].get("data").is_none());
+        assert!(v[0].get("source").is_none());
+        assert_eq!(v[0]["id"], "x");
     }
 }
