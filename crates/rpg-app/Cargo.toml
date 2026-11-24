@@ -1,0 +1,24 @@
+[package]
+name = "rpg-app"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "rpg-app"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+anyhow = "1"
+chrono = "0.4"
+notify = "8"
+serde_json = "1"
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-opener = "2"
+tauri-plugin-single-instance = "2"
+rpg-core = { path = "../rpg-core" }
+
+[dev-dependencies]
+tempfile = "3"

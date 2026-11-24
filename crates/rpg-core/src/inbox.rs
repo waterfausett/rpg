@@ -23,8 +23,9 @@ pub fn write_event(inbox: &Path, ev: &Event) -> Result<()> {
     Ok(())
 }
 
-/// Parse all `*.json` files in the inbox, sorted by filename. Unparseable files move to `bad/`.
-/// The caller deletes each returned file after processing it.
+/// Parse all `*.json` files in the inbox, sorted by filename. Unparseable files move to `bad/`;
+/// if that move fails the file is left in place and skipped, so one bad file never blocks the
+/// rest. The caller deletes each returned file after processing it.
 pub fn drain(inbox: &Path) -> Result<Vec<(PathBuf, Event)>> {
     if !inbox.exists() {
         return Ok(vec![]);
@@ -43,11 +44,18 @@ pub fn drain(inbox: &Path) -> Result<Vec<(PathBuf, Event)>> {
         match parsed {
             Ok(ev) => out.push((p, ev)),
             Err(_) => {
-                let bad = inbox.join("bad");
-                std::fs::create_dir_all(&bad)?;
-                std::fs::rename(&p, bad.join(p.file_name().unwrap()))?;
+                let _ = quarantine(inbox, &p);
             }
         }
     }
     Ok(out)
+}
+
+/// Move an inbox file into `<inbox>/bad/`.
+pub fn quarantine(inbox: &Path, file: &Path) -> Result<()> {
+    let bad = inbox.join("bad");
+    std::fs::create_dir_all(&bad).with_context(|| format!("creating {}", bad.display()))?;
+    let name = file.file_name().with_context(|| format!("no file name: {}", file.display()))?;
+    std::fs::rename(file, bad.join(name)).with_context(|| format!("moving {} to bad/", file.display()))?;
+    Ok(())
 }

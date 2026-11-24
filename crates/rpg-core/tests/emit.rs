@@ -67,6 +67,21 @@ fn drain_quarantines_garbage() {
 }
 
 #[test]
+fn drain_continues_when_quarantine_fails() {
+    let d = tempfile::tempdir().unwrap();
+    // A plain file named `bad` makes the quarantine dir impossible to create.
+    std::fs::write(d.path().join("bad"), "not a dir").unwrap();
+    std::fs::write(d.path().join("00-junk.json"), "{").unwrap();
+    let good = ev(1);
+    inbox::write_event(d.path(), &good).unwrap();
+    let got = inbox::drain(d.path()).expect("one bad file must not abort the drain");
+    assert_eq!(got.len(), 1);
+    assert_eq!(got[0].1, good);
+    // The unquarantinable file is left in place for a later attempt.
+    assert!(d.path().join("00-junk.json").exists());
+}
+
+#[test]
 fn commit_event_records_new_path_for_renames_and_unquoted_unicode() {
     let d = temp_repo();
     let p = d.path();
