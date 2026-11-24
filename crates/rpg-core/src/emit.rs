@@ -17,6 +17,20 @@ fn git(repo: &Path, args: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim_end().to_string())
 }
 
+/// Resolve a numstat rename entry to the new path: `a => b` or `dir/{a => b}/f`.
+fn new_path(p: &str) -> String {
+    if let (Some(open), Some(close)) = (p.find('{'), p.find('}')) {
+        if let Some((_, new)) = p[open + 1..close].split_once(" => ") {
+            let joined = format!("{}{}{}", &p[..open], new, &p[close + 1..]);
+            return joined.replace("//", "/");
+        }
+    }
+    match p.split_once(" => ") {
+        Some((_, new)) => new.to_string(),
+        None => p.to_string(),
+    }
+}
+
 fn toplevel(repo: &Path) -> Result<String> {
     git(repo, &["rev-parse", "--show-toplevel"])
 }
@@ -25,7 +39,7 @@ fn toplevel(repo: &Path) -> Result<String> {
 pub fn commit_event(repo: &Path, hash: &str) -> Result<Event> {
     let top = toplevel(repo)?;
     let branch = git(repo, &["rev-parse", "--abbrev-ref", "HEAD"])?;
-    let stat = git(repo, &["show", "--numstat", "--format=", hash])?;
+    let stat = git(repo, &["-c", "core.quotepath=false", "show", "--numstat", "--format=", hash])?;
     let (mut added, mut removed) = (0u64, 0u64);
     let mut files = Vec::new();
     for line in stat.lines().filter(|l| !l.trim().is_empty()) {
@@ -38,7 +52,7 @@ pub fn commit_event(repo: &Path, hash: &str) -> Result<Event> {
         let r = r.parse::<u64>().unwrap_or(0);
         added += a;
         removed += r;
-        files.push(json!({ "path": path, "added": a, "removed": r }));
+        files.push(json!({ "path": new_path(path), "added": a, "removed": r }));
     }
     Ok(Event::new(
         EventKind::Commit,

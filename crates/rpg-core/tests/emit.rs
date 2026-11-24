@@ -65,3 +65,25 @@ fn drain_quarantines_garbage() {
     assert!(d.path().join("bad").join("junk.json").exists());
     assert!(!d.path().join("junk.json").exists());
 }
+
+#[test]
+fn commit_event_records_new_path_for_renames_and_unquoted_unicode() {
+    let d = temp_repo();
+    let p = d.path();
+    std::fs::create_dir_all(p.join("dir/old")).unwrap();
+    let body: String = (0..30).map(|i| format!("line {i}\n")).collect();
+    std::fs::write(p.join("dir/old/f.txt"), &body).unwrap();
+    std::fs::write(p.join("plain.txt"), &body).unwrap();
+    git(p, &["add", "."]);
+    git(p, &["commit", "-q", "-m", "files"]);
+    std::fs::create_dir_all(p.join("dir/new")).unwrap();
+    git(p, &["mv", "dir/old/f.txt", "dir/new/f.txt"]);
+    git(p, &["mv", "plain.txt", "r\u{e9}nomm\u{e9}.txt"]);
+    git(p, &["commit", "-q", "-m", "renames"]);
+    let e = commit_event(p, "HEAD").unwrap();
+    let paths: Vec<String> =
+        e.data["files"].as_array().unwrap().iter().map(|f| f["path"].as_str().unwrap().to_string()).collect();
+    assert!(paths.contains(&"dir/new/f.txt".to_string()), "{paths:?}");
+    assert!(paths.contains(&"r\u{e9}nomm\u{e9}.txt".to_string()), "{paths:?}");
+    assert!(paths.iter().all(|p| !p.contains("=>") && !p.contains('"')), "{paths:?}");
+}

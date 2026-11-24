@@ -7,3 +7,6 @@ pub mod proc;
 pub mod rules;
 pub mod store;
 pub mod xp;
+pub mod detectors;
+pub mod enrich;
+pub mod records;
