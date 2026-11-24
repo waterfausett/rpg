@@ -6,14 +6,44 @@ RPG_BIN=__RPG_BIN__
 HOOK=__HOOK__
 PREV=__PREV__
 
+# 0. Locate this repo's git dirs using shell builtins only (no extra processes): git runs hooks
+#    from the work-tree root, or from $GIT_DIR in a bare repo. `gitdir` is per-worktree
+#    (rebase state lives there); `common` holds the shared hooks/ dir.
+gitdir=${GIT_DIR:-}
+if [ -z "$gitdir" ]; then
+  if [ -d .git ]; then
+    gitdir=.git
+  elif [ -f .git ]; then
+    read -r line < .git
+    gitdir=${line#gitdir: }
+  else
+    gitdir=$(git rev-parse --git-dir 2>/dev/null </dev/null)
+  fi
+fi
+common=${GIT_COMMON_DIR:-}
+if [ -z "$common" ] && [ -n "$gitdir" ]; then
+  if [ -f "$gitdir/commondir" ]; then
+    read -r c < "$gitdir/commondir"
+    case "$c" in
+      /* | [A-Za-z]:*) common=$c ;;
+      *) common="$gitdir/$c" ;;
+    esac
+  else
+    common=$gitdir
+  fi
+fi
+
 # 1. Tell rpg, in the background, detached from git's stdin/stdout/stderr.
 if [ -f "$RPG_BIN" ]; then
   case "$HOOK" in
     post-commit)
-      top=$(git rev-parse --show-toplevel 2>/dev/null </dev/null)
-      head=$(git rev-parse HEAD 2>/dev/null </dev/null)
-      if [ -n "$top" ] && [ -n "$head" ]; then
-        "$RPG_BIN" emit commit --repo "$top" --hash "$head" </dev/null >/dev/null 2>&1 &
+      # Commits replayed by a rebase are not new work.
+      if [ ! -d "$gitdir/rebase-merge" ] && [ ! -d "$gitdir/rebase-apply" ]; then
+        top=$(git rev-parse --show-toplevel 2>/dev/null </dev/null)
+        head=$(git rev-parse HEAD 2>/dev/null </dev/null)
+        if [ -n "$top" ] && [ -n "$head" ]; then
+          "$RPG_BIN" emit commit --repo "$top" --hash "$head" </dev/null >/dev/null 2>&1 &
+        fi
       fi
       ;;
     pre-push)
@@ -28,9 +58,10 @@ fi
 # 2. Chain to the hook that would have run without us. exec keeps stdin, args and exit code.
 if [ -n "$PREV" ]; then
   next="$PREV/$HOOK"
-else
-  common=$(git rev-parse --git-common-dir 2>/dev/null </dev/null) || exit 0
+elif [ -n "$common" ]; then
   next="$common/hooks/$HOOK"
+else
+  exit 0
 fi
 if [ -f "$next" ] && [ -x "$next" ]; then
   exec "$next" "$@"

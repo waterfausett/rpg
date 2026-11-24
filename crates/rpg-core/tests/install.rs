@@ -9,6 +9,8 @@ use std::time::{Duration, Instant};
 struct Sandbox {
     tmp: tempfile::TempDir,
     paths: Paths,
+    /// `GIT_CONFIG_SYSTEM` file; `None` means `GIT_CONFIG_NOSYSTEM=1`.
+    system: Option<PathBuf>,
 }
 
 impl Sandbox {
@@ -23,7 +25,26 @@ impl Sandbox {
         )
         .unwrap();
         let paths = Paths::from_home(Some(tmp.path().join("rpghome"))).unwrap();
-        Sandbox { tmp, paths }
+        Sandbox { tmp, paths, system: None }
+    }
+
+    /// Like `new`, but with a (temp) system config file instead of `GIT_CONFIG_NOSYSTEM`.
+    fn with_system(system_config: &str) -> Sandbox {
+        let mut sb = Sandbox::new();
+        let sys = sb.root().join("systemconfig");
+        std::fs::write(&sys, system_config).unwrap();
+        sb.system = Some(sys);
+        sb
+    }
+
+    fn gitconfig(&self) -> PathBuf {
+        self.root().join("gitconfig")
+    }
+
+    fn append_gitconfig(&self, text: &str) {
+        let mut s = std::fs::read_to_string(self.gitconfig()).unwrap();
+        s.push_str(text);
+        std::fs::write(self.gitconfig(), s).unwrap();
     }
 
     fn root(&self) -> &Path {
@@ -32,9 +53,13 @@ impl Sandbox {
 
     fn vars(&self) -> Vec<(&'static str, PathBuf)> {
         let home = self.root().join("home");
+        let system = match &self.system {
+            Some(f) => ("GIT_CONFIG_SYSTEM", f.clone()),
+            None => ("GIT_CONFIG_NOSYSTEM", PathBuf::from("1")),
+        };
         vec![
-            ("GIT_CONFIG_GLOBAL", self.root().join("gitconfig")),
-            ("GIT_CONFIG_NOSYSTEM", PathBuf::from("1")),
+            ("GIT_CONFIG_GLOBAL", self.gitconfig()),
+            system,
             ("HOME", home.clone()),
             ("USERPROFILE", home),
             ("RPG_HOME", self.root().join("rpghome")),
@@ -62,6 +87,12 @@ impl Sandbox {
 
     fn global_hooks_path(&self) -> Option<String> {
         let o = self.git(self.root(), &["config", "--global", "--get", "core.hooksPath"]);
+        o.status.success().then(|| String::from_utf8_lossy(&o.stdout).trim().to_string())
+    }
+
+    /// What git actually uses outside any repo (system + global, following includes).
+    fn effective_hooks_path(&self) -> Option<String> {
+        let o = self.git(self.root(), &["config", "--includes", "--get", "core.hooksPath"]);
         o.status.success().then(|| String::from_utf8_lossy(&o.stdout).trim().to_string())
     }
 
@@ -213,7 +244,11 @@ fn shims_cover_every_hook_with_lf_endings() {
         assert!(!s.contains('\r'), "{name} has CR");
         assert!(!s.contains("__"), "{name} has an unsubstituted placeholder");
     }
-    assert_eq!(install::HOOK_NAMES.len(), 27);
+    assert_eq!(install::HOOK_NAMES.len(), 25);
+    for skipped in ["reference-transaction", "post-index-change"] {
+        assert!(!install::HOOK_NAMES.contains(&skipped), "{skipped} must not be shimmed (too hot)");
+        assert!(!sb.paths.git_hooks().join(skipped).exists());
+    }
 }
 
 #[test]
@@ -222,7 +257,8 @@ fn claude_settings_merge_preserves_and_is_idempotent() {
     let settings = tmp.path().join("settings.json");
     let stop = serde_json::json!([{ "hooks": [{ "type": "command", "command": "echo stop" }] }]);
     let orig = serde_json::json!({ "model": "opus", "hooks": { "Stop": stop } });
-    std::fs::write(&settings, serde_json::to_string_pretty(&orig).unwrap()).unwrap();
+    let orig_text = serde_json::to_string_pretty(&orig).unwrap();
+    std::fs::write(&settings, &orig_text).unwrap();
     let bin = tmp.path().join("bin").join("rpg.exe");
 
     install::install_claude_hooks(&settings, &bin).unwrap();
@@ -244,10 +280,8 @@ fn claude_settings_merge_preserves_and_is_idempotent() {
     assert_eq!(start, vec![format!("\"{}\" emit claude-session-start", slash(&bin))]);
     assert_eq!(rpg_cmds("SessionEnd").len(), 1);
     assert_eq!(v["hooks"]["SessionStart"][0]["hooks"][0]["type"], "command");
-    let backup: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(tmp.path().join("settings.json.rpg-backup")).unwrap())
-            .unwrap();
-    assert_eq!(backup["model"], "opus");
+    let backup = std::fs::read_to_string(tmp.path().join("settings.json.rpg-backup")).unwrap();
+    assert_eq!(backup, orig_text, "backup must be the pre-install file, even after a second install");
 
     install::uninstall_claude_hooks(&settings).unwrap();
     let raw = std::fs::read_to_string(&settings).unwrap();
@@ -273,4 +307,123 @@ fn claude_install_refuses_to_clobber_invalid_json() {
     std::fs::write(&settings, "{ not json").unwrap();
     assert!(install::install_claude_hooks(&settings, Path::new("/x/rpg")).is_err());
     assert_eq!(std::fs::read_to_string(&settings).unwrap(), "{ not json");
+}
+
+#[test]
+fn hookspath_from_global_include_is_chained_and_restored() {
+    let sb = Sandbox::new();
+    let corp = sb.root().join("corp hooks");
+    write_hook(&corp.join("pre-commit"), "exit 1");
+    std::fs::write(sb.root().join("inc.cfg"), format!("[core]\n\thooksPath = {}\n", slash(&corp))).unwrap();
+    // The include sits first (as org-managed includes usually do), so our value, added to the
+    // existing [core] section below it, takes precedence.
+    let rest = std::fs::read_to_string(sb.gitconfig()).unwrap();
+    std::fs::write(sb.gitconfig(), format!("[include]\n\tpath = inc.cfg\n{rest}")).unwrap();
+    assert_eq!(sb.global_hooks_path(), None, "precondition: only visible through the include");
+    assert_eq!(sb.effective_hooks_path(), Some(slash(&corp)));
+
+    sb.install(&sb.root().join("nope"));
+    assert_ne!(sb.effective_hooks_path(), Some(slash(&corp)));
+    let repo = sb.repo("r");
+    let o = sb.git(&repo, &["commit", "-q", "-m", "x"]);
+    assert!(!o.status.success(), "included corp pre-commit must still block the commit");
+
+    install::uninstall_git_hooks(&sb.paths, &sb.genv()).unwrap();
+    assert_eq!(sb.global_hooks_path(), None);
+    assert_eq!(sb.effective_hooks_path(), Some(slash(&corp)));
+}
+
+#[test]
+fn hookspath_from_system_config_is_chained() {
+    let corp = tempfile::tempdir().unwrap();
+    write_hook(&corp.path().join("pre-commit"), "exit 1");
+    let sb = Sandbox::with_system(&format!("[core]\n\thooksPath = {}\n", slash(corp.path())));
+    sb.install(&sb.root().join("nope"));
+    let repo = sb.repo("r");
+    let o = sb.git(&repo, &["commit", "-q", "-m", "x"]);
+    assert!(!o.status.success(), "system pre-commit must still block the commit");
+    install::uninstall_git_hooks(&sb.paths, &sb.genv()).unwrap();
+    assert_eq!(sb.global_hooks_path(), None, "system value must not be copied into global");
+    assert_eq!(sb.effective_hooks_path(), Some(slash(corp.path())));
+}
+
+#[test]
+fn conditional_include_setting_hookspath_makes_install_refuse() {
+    let sb = Sandbox::new();
+    std::fs::write(sb.root().join("work.cfg"), "[core]\n\thooksPath = C:/corp/hooks\n").unwrap();
+    sb.append_gitconfig("[includeIf \"gitdir:~/work/\"]\n\tpath = work.cfg\n");
+    let before = std::fs::read(sb.gitconfig()).unwrap();
+    let err = install::install_git_hooks(&sb.paths, &sb.root().join("nope"), &sb.genv()).unwrap_err();
+    assert!(format!("{err:#}").contains("includeIf"), "{err:#}");
+    assert_eq!(std::fs::read(sb.gitconfig()).unwrap(), before, "global config must be untouched");
+}
+
+#[test]
+fn conditional_include_without_hookspath_is_fine() {
+    let sb = Sandbox::new();
+    std::fs::write(sb.root().join("work.cfg"), "[user]\n\temail = w@example.com\n").unwrap();
+    sb.append_gitconfig("[includeIf \"gitdir:~/work/\"]\n\tpath = work.cfg\n");
+    sb.install(&sb.root().join("nope"));
+    assert!(sb.global_hooks_path().is_some());
+}
+
+#[test]
+fn install_rolls_back_when_a_later_include_shadows_ours() {
+    let sb = Sandbox::new();
+    std::fs::write(sb.root().join("inc.cfg"), "[core]\n\thooksPath = C:/corp/hooks\n").unwrap();
+    sb.append_gitconfig("[include]\n\tpath = inc.cfg\n"); // after [core]: our value can't win
+    let err = install::install_git_hooks(&sb.paths, &sb.root().join("nope"), &sb.genv()).unwrap_err();
+    assert!(format!("{err:#}").contains("shadow"), "{err:#}");
+    assert_eq!(sb.global_hooks_path(), None);
+    assert_eq!(sb.effective_hooks_path().as_deref(), Some("C:/corp/hooks"));
+}
+
+#[test]
+fn linked_worktree_chains_to_main_repo_hook() {
+    let sb = Sandbox::new();
+    let repo = sb.repo("r");
+    sb.git_ok(&repo, &["commit", "-q", "-m", "x"]);
+    let wt = sb.root().join("wt");
+    sb.git_ok(&repo, &["worktree", "add", "-q", &slash(&wt)]);
+    write_hook(&repo.join(".git/hooks/pre-commit"), "exit 1");
+    sb.install(&sb.root().join("nope"));
+    std::fs::write(wt.join("b.txt"), "b\n").unwrap();
+    sb.git_ok(&wt, &["add", "."]);
+    let o = sb.git(&wt, &["commit", "-q", "-m", "y"]);
+    assert!(!o.status.success(), "main repo pre-commit must run for a linked worktree commit");
+}
+
+#[test]
+fn rebase_emits_no_commit_events() {
+    let sb = Sandbox::new();
+    let repo = sb.repo("r");
+    sb.git_ok(&repo, &["commit", "-q", "-m", "base"]);
+    sb.git_ok(&repo, &["checkout", "-q", "-b", "side"]);
+    for f in ["s1", "s2"] {
+        std::fs::write(repo.join(f), "s\n").unwrap();
+        sb.git_ok(&repo, &["add", "."]);
+        sb.git_ok(&repo, &["commit", "-q", "-m", f]);
+    }
+    sb.git_ok(&repo, &["checkout", "-q", "main"]);
+    std::fs::write(repo.join("m1"), "m\n").unwrap();
+    sb.git_ok(&repo, &["add", "."]);
+    sb.git_ok(&repo, &["commit", "-q", "-m", "m1"]);
+    sb.git_ok(&repo, &["checkout", "-q", "side"]);
+
+    let calls = sb.root().join("fake-calls.txt");
+    let fake = sb.root().join("fake-rpg");
+    write_hook(&fake, &format!("echo \"$1 $2\" >> '{}'", slash(&calls)));
+    sb.install(&fake);
+    sb.git_ok(&repo, &["rebase", "-q", "main"]);
+    assert_eq!(sb.git_ok(&repo, &["rev-list", "--count", "main..side"]), "2");
+    std::thread::sleep(Duration::from_millis(500));
+
+    std::fs::write(repo.join("after"), "a\n").unwrap();
+    sb.git_ok(&repo, &["add", "."]);
+    sb.git_ok(&repo, &["commit", "-q", "-m", "after"]);
+    poll_file(&calls);
+    std::thread::sleep(Duration::from_millis(300));
+    let got = std::fs::read_to_string(&calls).unwrap();
+    let commits = got.lines().filter(|l| *l == "emit commit").count();
+    assert_eq!(commits, 1, "calls: {got:?}");
 }
