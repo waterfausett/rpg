@@ -25,14 +25,14 @@ The tray's "Install hooks" looks for `rpg.exe` **next to `rpg-app.exe`** (the ho
    - tray icon, **Install hooks**, or
    - `rpg install-hooks`
 
-   This sets a global git `core.hooksPath` to rpg's shim folder and adds `SessionStart`/`SessionEnd` entries to `~/.claude/settings.json` (a backup is written next to it as `settings.json.rpg-backup`, and your other settings are kept). Every git hook name gets a pass-through shim, so a repo's own `.git/hooks/*` keep working.
+   This sets a global git `core.hooksPath` to rpg's shim folder and adds `SessionStart`/`SessionEnd` entries to `~/.claude/settings.json` (a backup is written next to it as `settings.json.rpg-backup`, and your other settings are kept). Every standard git hook except `reference-transaction` and `post-index-change` (see Known limitations) gets a pass-through shim, so a repo's own `.git/hooks/*` keep working.
 3. Commit something. A `+10 exp · commit` pop-up appears bottom-right; unlocks show a gold banner top-center.
 
 Tray menu: Open character sheet, Mute sounds, Do not disturb, Open rules folder, Install hooks, Uninstall hooks, Quit. Only one app instance runs at a time. Hooks never fail a git command; errors go to `rpg.log`.
 
 ## Uninstall
 
-`rpg uninstall-hooks` (or tray **Uninstall hooks**) restores your previous `core.hooksPath` (or unsets it) and removes only rpg's entries from `settings.json`. Then delete the app. Your data stays until you delete the data dir.
+`rpg uninstall-hooks` (or tray **Uninstall hooks**) restores your previous `core.hooksPath` (or unsets it) and removes only rpg's entries from `settings.json`. Then delete the app. Your data stays until you delete the data dir. Always run `uninstall-hooks` **before** deleting the data dir: the global `core.hooksPath` points into it, and if that folder is gone git silently runs no hooks at all, in any repo.
 
 ## Where things live
 
@@ -41,7 +41,9 @@ Tray menu: Open character sheet, Mute sounds, Do not disturb, Open rules folder,
 | Data: `rpg.db`, `inbox/`, `git-hooks/`, `rpg.log` | `%APPDATA%\rpg\data` | `~/Library/Application Support/rpg` |
 | Config: `config.toml`, `rules/`, `sounds/` | `%APPDATA%\rpg\config` | `~/Library/Application Support/rpg` |
 
-(Resolved with `directories::ProjectDirs::from("", "", "rpg")`.) Set `RPG_HOME=<dir>` to put both under `<dir>/data` and `<dir>/config` instead. That is handy for trying things out without touching your real character.
+(Resolved with `directories::ProjectDirs::from("", "", "rpg")`.) Set `RPG_HOME=<dir>` to put both under `<dir>/data` and `<dir>/config` instead (an empty `RPG_HOME` counts as unset).
+
+`RPG_HOME` does **not** isolate the hooks. `install-hooks` always changes your real global git config (`core.hooksPath`, pointed at `<dir>/data/git-hooks`) and your real `~/.claude/settings.json`; the installed hooks pass `--home <dir>` so their events land in `<dir>`. Only one set of hooks is active at a time, and you must run `rpg uninstall-hooks` with the same `RPG_HOME` **before** deleting `<dir>`, or git silently runs no hooks for any repo.
 
 Set `RPG_INTERNAL=1` to make `rpg emit` a no-op (the app does this for its own `claude` calls).
 
@@ -132,7 +134,7 @@ Config is read at startup, so restart the app after editing it.
 ## Privacy
 
 - Everything is stored locally. The character sheet listens on `127.0.0.1` only and rejects requests with any other `Host` header.
-- The only thing that leaves your machine is the optional flavor call (`claude -p --model haiku`), and only for rules with `flavor = { type = "llm" }`. It sends your rule's prompt plus: event type, repo path, branch, local time, the detector's findings (e.g. file path, file age, line counts) and unlock counts. Never code or diffs. It runs in an empty directory with no tools, MCP servers or settings. Set `llm.enabled = false` to turn it off.
+- The only thing that leaves your machine is the optional flavor call (`claude -p --model haiku`), and only for rules with `flavor = { type = "llm" }`. It sends your rule's prompt plus: event type, repo name (never the local path), branch, local time, the detector's findings (e.g. file path, file age, line counts) and unlock counts. Never code or diffs. It runs in an empty directory with no tools, MCP servers or settings. Set `llm.enabled = false` to turn it off.
 - GitHub data comes from your own logged-in `gh` CLI (read-only queries). Backfilled history seeds records only: it grants no XP or achievements.
 
 ## Known limitations

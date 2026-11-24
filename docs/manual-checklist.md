@@ -1,6 +1,6 @@
 # Manual checklist (needs a real, unlocked desktop)
 
-The automated and scripted checks cannot see these. Do them once on your machine. Tip: try a scratch `RPG_HOME` first if you do not want a real character yet.
+The automated and scripted checks cannot see these. Do them once on your machine. Note: `install-hooks` always changes your real global git config and `~/.claude/settings.json`, even with `RPG_HOME` set. If you use a scratch `RPG_HOME`, run `rpg uninstall-hooks` (with the same `RPG_HOME`) before deleting it, or git silently stops running hooks in every repo.
 
 ## Overlay
 - [ ] Focus stays in the terminal: type in a terminal, commit, and keep typing while the pop-up and banner appear. No keystroke is lost and the terminal title bar stays active.
