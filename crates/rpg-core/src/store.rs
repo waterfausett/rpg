@@ -120,6 +120,34 @@ impl Store {
         self.conn.lock().unwrap_or_else(|p| p.into_inner())
     }
 
+    /// Begin an immediate transaction on the shared connection. Every Store
+    /// method uses the same connection, so statements issued until
+    /// `commit_tx`/`rollback_tx` are part of this transaction. This assumes
+    /// single-threaded processing: concurrent callers would interleave into it.
+    pub fn begin_tx(&self) -> Result<()> {
+        self.conn().execute_batch("BEGIN IMMEDIATE")?;
+        Ok(())
+    }
+
+    /// Commit the transaction opened by `begin_tx` (same single-thread assumption).
+    pub fn commit_tx(&self) -> Result<()> {
+        self.conn().execute_batch("COMMIT")?;
+        Ok(())
+    }
+
+    /// Roll back the transaction opened by `begin_tx` (same single-thread assumption).
+    pub fn rollback_tx(&self) -> Result<()> {
+        self.conn().execute_batch("ROLLBACK")?;
+        Ok(())
+    }
+
+    /// Run raw SQL; lets tests inject failures.
+    #[cfg(test)]
+    pub(crate) fn exec_raw(&self, sql: &str) -> Result<()> {
+        self.conn().execute_batch(sql)?;
+        Ok(())
+    }
+
     /// Returns false if an event with this id already exists.
     pub fn insert_event(&self, e: &Event) -> Result<bool> {
         let n = self.conn().execute(
