@@ -1,0 +1,3 @@
+id = "testing"
+name = "Test Craft"
+globs = ["**/test/**", "**/tests/**", "**/__tests__/**", "*_test.*", "*.test.*", "*.spec.*", "test_*.py"]

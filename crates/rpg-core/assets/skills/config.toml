@@ -1,0 +1,3 @@
+id = "config"
+name = "Config Tinkering"
+globs = ["*.toml", "*.json", "*.jsonc", "*.ini", "*.cfg", "*.conf", ".env*", "*.props", "*.targets"]

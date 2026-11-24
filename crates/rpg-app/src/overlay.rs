@@ -43,6 +43,7 @@ struct ToastPayload {
     amount: u64,
     label: String,
     notice: bool,
+    skill: bool,
 }
 
 #[derive(Deserialize)]
@@ -258,7 +259,7 @@ fn pump(inner: &Arc<Inner>) {
 fn show_toasts(inner: &Arc<Inner>, f: &mut Flow, toasts: Vec<Toast>) {
     let Some(win) = inner.window(TOAST) else { return };
     let _ = win.show();
-    let payload: Vec<ToastPayload> = toasts.into_iter().map(|t| ToastPayload { amount: t.amount, label: t.label, notice: t.notice }).collect();
+    let payload: Vec<ToastPayload> = toasts.into_iter().map(|t| ToastPayload { amount: t.amount, label: t.label, notice: t.notice, skill: t.skill }).collect();
     if let Err(e) = inner.app.emit_to(TOAST, "toast", payload) {
         log(&inner.state.paths, &format!("emitting toast failed: {e}"));
     }
@@ -421,7 +422,7 @@ flavor = {flavor}
         let st = AppState {
             paths,
             store: Arc::new(Store::open_in_memory().unwrap()),
-            rules: Arc::new(RwLock::new(Rules { list: vec![rule] })),
+            rules: Arc::new(RwLock::new(Rules { list: vec![rule], ..Default::default() })),
             cfg: Arc::new(RwLock::new(Config::default())),
             gen,
         };

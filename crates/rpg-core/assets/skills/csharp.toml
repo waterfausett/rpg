@@ -1,0 +1,3 @@
+id = "csharp"
+name = "C#"
+globs = ["*.cs", "*.csproj", "*.sln", "*.razor"]

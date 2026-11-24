@@ -100,6 +100,7 @@ async fn character(State(st): State<SiteState>) -> Result<Json<Value>, ApiError>
     let (level, into_level, level_span) = xp::progress(total, &cfg.levels);
     let count = |k| st.store.count_live_events(k).map_err(internal);
     let recent: Vec<Value> = st.store.list_events(None, RECENT).map_err(internal)?.iter().map(event_json).collect();
+    let skills = skills_json(&st, &cfg)?;
     Ok(Json(json!({
         "level": level, "total_xp": total, "into_level": into_level, "level_span": level_span,
         "totals": {
@@ -110,7 +111,27 @@ async fn character(State(st): State<SiteState>) -> Result<Json<Value>, ApiError>
             "sessions": count(EventKind::ClaudeSessionEnd)?,
         },
         "recent": recent,
+        "skills": skills,
     })))
+}
+
+/// Skills with any XP, biggest first. A skill's current name wins over the stored one;
+/// skills whose file was removed keep showing under their last name.
+fn skills_json(st: &SiteState, cfg: &Config) -> Result<Vec<Value>, ApiError> {
+    let rules = st.rules.read().unwrap_or_else(|p| p.into_inner());
+    let curve = cfg.skill_levels.curve();
+    let rows = st.store.skill_totals().map_err(internal)?;
+    Ok(rows
+        .into_iter()
+        .map(|t| {
+            let name = rules.skills.iter().find(|s| s.id == t.skill_id).map_or(t.name, |s| s.name.clone());
+            let (level, into_level, level_span) = xp::progress(t.xp, &curve);
+            json!({
+                "id": t.skill_id, "name": name, "xp": t.xp, "level": level,
+                "into_level": into_level, "level_span": level_span, "last_at": t.last_at,
+            })
+        })
+        .collect())
 }
 
 async fn achievements(State(st): State<SiteState>) -> Result<Json<Value>, ApiError> {
@@ -237,6 +258,36 @@ detector = { type = "first", scope = "ever" }
 "#;
 
     #[tokio::test]
+    async fn character_lists_skills_biggest_first() {
+        let rules = Rules {
+            skills: vec![
+            rpg_core::skills::parse_skill("id = \"rust\"
+name = \"Rust\"
+globs = [\"*.rs\"]
+xp = 150
+").unwrap(),
+            rpg_core::skills::parse_skill("id = \"docs\"
+name = \"Scribe\"
+globs = [\"*.md\"]
+").unwrap(),
+            ],
+            ..Default::default()
+        };
+        let st = state_with(rules);
+        let mut c = ev("c1", EventKind::Commit);
+        c.data = json!({ "files": [{ "path": "src/main.rs" }, { "path": "README.md" }] });
+        process(&st, &c);
+        st.store.add_skill_xp("old", "gone", "Old Skill", 5, Utc::now()).unwrap();
+        let v = get_json(&st, "/api/character").await;
+        let s = v["skills"].as_array().unwrap();
+        let names: Vec<&str> = s.iter().map(|x| x["name"].as_str().unwrap()).collect();
+        assert_eq!(names, vec!["Rust", "Scribe", "Old Skill"]);
+        assert_eq!((s[0]["xp"].as_u64(), s[0]["level"].as_u64()), (Some(150), Some(2)));
+        assert_eq!((s[0]["into_level"].as_u64(), s[0]["level_span"].as_u64()), (Some(50), Some(183)));
+        assert_eq!(v["total_xp"], 10, "skills do not add to character exp");
+    }
+
+    #[tokio::test]
     async fn character_endpoint_shape() {
         let st = state_with(Rules::default());
         process(&st, &ev("m1", EventKind::PrMerged));
@@ -256,7 +307,7 @@ detector = { type = "first", scope = "ever" }
 
     #[tokio::test]
     async fn event_xp_split_into_base_and_achievements() {
-        let st = state_with(Rules { list: vec![parse_rule(RULE).unwrap()] });
+        let st = state_with(Rules { list: vec![parse_rule(RULE).unwrap()], ..Default::default() });
         process(&st, &ev("m1", EventKind::PrMerged));
         let v = get_json(&st, "/api/events").await;
         assert_eq!(v[0]["xp"], 350, "100 base + 250 bronze");
@@ -277,7 +328,7 @@ detector = { type = "first", scope = "ever" }
 
     #[tokio::test]
     async fn locked_achievements_masked() {
-        let st = state_with(Rules { list: vec![parse_rule(RULE).unwrap()] });
+        let st = state_with(Rules { list: vec![parse_rule(RULE).unwrap()], ..Default::default() });
         let v = get_json(&st, "/api/achievements").await;
         let a = &v.as_array().unwrap()[0];
         assert_eq!(a["id"], "first-merge");
@@ -290,7 +341,7 @@ detector = { type = "first", scope = "ever" }
 
     #[tokio::test]
     async fn unlocked_achievement_shows_name_and_flavor_or_fallback() {
-        let st = state_with(Rules { list: vec![parse_rule(RULE).unwrap()] });
+        let st = state_with(Rules { list: vec![parse_rule(RULE).unwrap()], ..Default::default() });
         process(&st, &ev("m1", EventKind::PrMerged));
         let v = get_json(&st, "/api/achievements").await;
         let a = &v[0];

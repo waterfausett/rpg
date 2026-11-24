@@ -10,6 +10,7 @@ use rpg_core::event::{Event, EventKind};
 use rpg_core::flavor::TextGen;
 use rpg_core::paths::Paths;
 use rpg_core::rules::{self, Rules};
+use rpg_core::skills;
 use rpg_core::store::Store;
 use rpg_core::{github, inbox};
 use std::io::Write;
@@ -57,12 +58,18 @@ fn read<T: Clone>(lock: &RwLock<T>) -> T {
     lock.read().unwrap_or_else(|p| p.into_inner()).clone()
 }
 
-/// Load rules from `<config>/rules`, logging every bad file.
+/// Load achievement rules from `<config>/rules` and skills from `<config>/rules/skills`,
+/// logging every bad file.
 pub fn load_rules(paths: &Paths) -> Rules {
-    let (rules, errors) = rules::load_dir(&paths.rules());
+    let (mut rules, errors) = rules::load_dir(&paths.rules());
     for e in &errors {
         log(paths, &format!("rule {} skipped: {}", e.file.display(), e.message));
     }
+    let (skills, errors) = skills::load_dir(&paths.skills());
+    for e in &errors {
+        log(paths, &format!("skill {} skipped: {}", e.file.display(), e.message));
+    }
+    rules.skills = skills;
     rules
 }
 
@@ -195,18 +202,22 @@ pub fn spawn(state: AppState, sink: Arc<dyn OutcomeSink>) {
     }
 
     let (rtx, rrx) = mpsc::channel::<()>();
+    let stx = rtx.clone();
     let rules_watcher = watch(&state.paths, &state.paths.rules(), move || {
         let _ = rtx.send(());
+    });
+    let skills_watcher = watch(&state.paths, &state.paths.skills(), move || {
+        let _ = stx.send(());
     });
     std::thread::Builder::new()
         .name("rpg-rules".into())
         .spawn(move || {
-            let _keep = rules_watcher;
+            let _keep = (rules_watcher, skills_watcher);
             while rrx.recv().is_ok() {
                 std::thread::sleep(DEBOUNCE);
                 while rrx.try_recv().is_ok() {}
                 let rules = load_rules(&state.paths);
-                log(&state.paths, &format!("rules reloaded: {} active", rules.list.len()));
+                log(&state.paths, &format!("rules reloaded: {} achievements, {} skills", rules.list.len(), rules.skills.len()));
                 *state.rules.write().unwrap_or_else(|p| p.into_inner()) = rules;
             }
         })

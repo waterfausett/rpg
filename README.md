@@ -94,6 +94,23 @@ Detectors (set `type` plus the params):
 
 The starter rules in `rules/` (copied from `crates/rpg-core/assets/rules/` on first run) are working examples.
 
+## Skills
+
+Skills show where your time goes: *Rust Lv 12*, *YAML Wrangling Lv 7*, *Code Review Lv 4*. Each event that earns character exp also gives skill exp to every skill it matches. Skill exp is kept apart from your character exp (nothing counts twice), and skills start from zero (history is not replayed). The character sheet lists them biggest first, and a level-up shows a small `▲ Rust Lv 12` pop-up.
+
+Skills are TOML files in `rules/skills/`, one per file, hot-reloaded like achievements. A starter set (languages, YAML, config, docs, tests, reviews, Claude sessions, merged PRs) is copied from `crates/rpg-core/assets/skills/` whenever that folder is empty, so deleting a single file sticks.
+
+```toml
+id = "typescript"              # unique; first file wins on duplicates
+name = "TypeScript"
+globs = ["*.ts", "*.tsx"]      # optional; at least one file in the commit must match
+repos = ["**/my-app"]          # optional; the repo (path or owner/name) must match
+events = ["commit"]            # optional, default ["commit"]; any event kind from `trigger` above
+xp = 10                        # optional; skill exp per matching event (default 10)
+```
+
+Globs are case-insensitive and `*` crosses folders, so `*.ts` matches `src/ui/app.ts`; `**/tests/**` matches any file under a `tests` folder. Only commits carry file lists, so `globs` require `events = ["commit"]`. A skill with no `globs` or `repos` counts every event of its kinds (e.g. `events = ["review_submitted"]`). Languages are matched by file extension. New data sources (e.g. chat or calendar, [#11](../../issues/11)) bring their own event kinds, so skills can name those too.
+
 ## config.toml reference
 
 Everything is optional; missing keys use these defaults.
@@ -109,6 +126,10 @@ claude_session = 15
 
 [levels]            # cumulative XP to reach level n = round(base * (n-1)^exponent)
 base = 1000.0
+exponent = 1.5
+
+[skill_levels]      # same formula as [levels], for skills
+base = 100.0
 exponent = 1.5
 
 [github]

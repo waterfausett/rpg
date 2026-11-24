@@ -29,6 +29,24 @@ pub struct Unlock {
     pub last_unlocked_at: Option<DateTime<Utc>>,
 }
 
+/// Skill XP an event earned. Separate from character XP.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SkillGain {
+    pub skill_id: String,
+    pub name: String,
+    pub amount: u64,
+    /// The skill's level after this gain.
+    pub level: u32,
+}
+
+/// A skill reaching a new level.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SkillLevelUp {
+    pub skill_id: String,
+    pub name: String,
+    pub level: u32,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Outcome {
     pub xp_gains: Vec<XpGain>,
@@ -36,6 +54,8 @@ pub struct Outcome {
     pub level_ups: Vec<u32>,
     pub total_xp: u64,
     pub level: u32,
+    pub skill_gains: Vec<SkillGain>,
+    pub skill_level_ups: Vec<SkillLevelUp>,
 }
 
 /// Process one event: record it, update records, award XP, evaluate rules.
@@ -123,11 +143,14 @@ fn process_inner(
         return Ok(out);
     }
 
+    // Skills only count events that count toward the character (not session starts or
+    // session ends with no start).
     if let Some((amount, label)) = base_xp(store, cfg, ev)? {
         if amount > 0 {
             store.add_xp(&ev.id, amount, label, ev.ts)?;
             out.xp_gains.push(XpGain { amount, label: label.to_string() });
         }
+        award_skills(store, rules, cfg, ev, &mut out)?;
     }
 
     for rule in rules.for_kind(ev.kind) {
@@ -171,6 +194,22 @@ fn process_inner(
     out.level = level_for(out.total_xp, &cfg.levels);
     out.level_ups = (level_for(before, &cfg.levels) + 1..=out.level).collect();
     Ok(out)
+}
+
+fn award_skills(store: &Store, rules: &Rules, cfg: &Config, ev: &Event, out: &mut Outcome) -> Result<()> {
+    let curve = cfg.skill_levels.curve();
+    for skill in rules.skills.iter().filter(|s| s.xp > 0 && s.matches(ev)) {
+        let before = store.skill_xp(&skill.id)?;
+        store.add_skill_xp(&ev.id, &skill.id, &skill.name, skill.xp, ev.ts)?;
+        let (from, to) = (level_for(before, &curve), level_for(before + skill.xp, &curve));
+        out.skill_gains.push(SkillGain { skill_id: skill.id.clone(), name: skill.name.clone(), amount: skill.xp, level: to });
+        out.skill_level_ups.extend((from + 1..=to).map(|level| SkillLevelUp {
+            skill_id: skill.id.clone(),
+            name: skill.name.clone(),
+            level,
+        }));
+    }
+    Ok(())
 }
 
 fn tier_str(t: Tier) -> &'static str {
@@ -238,6 +277,7 @@ mod tests {
         let store = Store::open_in_memory().unwrap();
         let rules = Rules {
             list: vec![rule("pb", EventKind::PrMerged, Detector::PersonalRecord { metric: Metric::PrsMergedPerDay }, 7)],
+            ..Default::default()
         };
         for i in 0..2 {
             let mut e = mk(EventKind::PrMerged, &format!("2026-01-01T10:0{i}:00Z"), serde_json::json!({}));
@@ -264,7 +304,7 @@ mod tests {
     #[test]
     fn non_repeatable_unlocks_once() {
         let store = Store::open_in_memory().unwrap();
-        let rules = Rules { list: vec![rule("any", EventKind::Commit, Detector::TimeOfDay { start_hour: 0, end_hour: 24 }, 5)] };
+        let rules = Rules { list: vec![rule("any", EventKind::Commit, Detector::TimeOfDay { start_hour: 0, end_hour: 24 }, 5)], ..Default::default() };
         let a = run(&store, &rules, &mk(EventKind::Commit, "2026-01-01T10:00:00Z", serde_json::json!({})));
         let b = run(&store, &rules, &mk(EventKind::Commit, "2026-01-01T11:00:00Z", serde_json::json!({})));
         assert_eq!(a.unlocks.len(), 1);
@@ -278,7 +318,7 @@ mod tests {
         let mut r = rule("rep", EventKind::Commit, Detector::TimeOfDay { start_hour: 0, end_hour: 24 }, 5);
         r.repeatable = true;
         r.cooldown_hours = Some(2);
-        let rules = Rules { list: vec![r] };
+        let rules = Rules { list: vec![r], ..Default::default() };
         let t0 = at("2026-01-01T10:00:00Z");
         let at_off = |m: i64| {
             let mut e = Event::new(EventKind::Commit, Source::Git, Some("r".into()), serde_json::json!({}));
@@ -335,10 +375,73 @@ mod tests {
         store.rollback_tx().unwrap();
     }
 
+    fn skills(texts: &[&str]) -> Rules {
+        Rules { skills: texts.iter().map(|t| crate::skills::parse_skill(t).unwrap()).collect(), ..Default::default() }
+    }
+
+    fn commit_with(ts: &str, paths: &[&str]) -> Event {
+        let files: Vec<_> = paths.iter().map(|p| serde_json::json!({ "path": p })).collect();
+        mk(EventKind::Commit, ts, serde_json::json!({ "files": files }))
+    }
+
+    #[test]
+    fn skills_earn_their_own_xp_and_level_up() {
+        let store = Store::open_in_memory().unwrap();
+        let rules = skills(&[
+            "id = \"rust\"
+name = \"Rust\"
+globs = [\"*.rs\"]
+xp = 60
+",
+            "id = \"docs\"
+name = \"Scribe\"
+globs = [\"*.md\"]
+",
+        ]);
+        let a = run(&store, &rules, &commit_with("2026-01-01T10:00:00Z", &["src/a.rs", "src/b.rs"]));
+        assert_eq!(a.skill_gains, vec![SkillGain { skill_id: "rust".into(), name: "Rust".into(), amount: 60, level: 1 }]);
+        assert!(a.skill_level_ups.is_empty());
+        assert_eq!(a.total_xp, 10, "skill xp does not add to character xp");
+
+        // Skill level 2 at 100 skill xp (default skill curve).
+        let b = run(&store, &rules, &commit_with("2026-01-01T11:00:00Z", &["x.rs", "README.md"]));
+        assert_eq!(b.skill_gains.len(), 2);
+        assert_eq!(b.skill_level_ups, vec![SkillLevelUp { skill_id: "rust".into(), name: "Rust".into(), level: 2 }]);
+        assert_eq!(store.skill_xp("rust").unwrap(), 120);
+        assert_eq!(store.skill_xp("docs").unwrap(), 10);
+    }
+
+    #[test]
+    fn skills_skip_backfill_duplicates_and_unmatched_session_ends() {
+        let store = Store::open_in_memory().unwrap();
+        let rules = skills(&[
+            "id = \"rust\"
+name = \"Rust\"
+globs = [\"*.rs\"]
+",
+            "id = \"claude\"
+name = \"Claude\"
+events = [\"claude_session_start\", \"claude_session_end\"]
+",
+        ]);
+        let mut old = commit_with("2026-01-01T10:00:00Z", &["a.rs"]);
+        old.backfill = true;
+        assert!(run(&store, &rules, &old).skill_gains.is_empty());
+        let e = commit_with("2026-01-01T11:00:00Z", &["a.rs"]);
+        assert_eq!(run(&store, &rules, &e).skill_gains.len(), 1);
+        assert!(run(&store, &rules, &e).skill_gains.is_empty(), "duplicate event");
+        let start = mk(EventKind::ClaudeSessionStart, "2026-01-01T12:00:00Z", serde_json::json!({"session_id": "s"}));
+        assert!(run(&store, &rules, &start).skill_gains.is_empty(), "session starts earn nothing");
+        let orphan = mk(EventKind::ClaudeSessionEnd, "2026-01-01T13:00:00Z", serde_json::json!({"session_id": "x"}));
+        assert!(run(&store, &rules, &orphan).skill_gains.is_empty());
+        let end = mk(EventKind::ClaudeSessionEnd, "2026-01-01T14:00:00Z", serde_json::json!({"session_id": "s"}));
+        assert_eq!(run(&store, &rules, &end).skill_gains.len(), 1);
+    }
+
     #[test]
     fn count_rule_uses_window_detector() {
         let store = Store::open_in_memory().unwrap();
-        let rules = Rules { list: vec![rule("c2", EventKind::Commit, Detector::CountInWindow { count: 2, window: Window::Day }, 0)] };
+        let rules = Rules { list: vec![rule("c2", EventKind::Commit, Detector::CountInWindow { count: 2, window: Window::Day }, 0)], ..Default::default() };
         let a = run(&store, &rules, &mk(EventKind::Commit, "2026-01-01T10:00:00Z", serde_json::json!({})));
         let b = run(&store, &rules, &mk(EventKind::Commit, "2026-01-01T11:00:00Z", serde_json::json!({})));
         assert!(a.unlocks.is_empty());

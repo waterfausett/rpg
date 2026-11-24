@@ -86,6 +86,32 @@
       totals.appendChild(s);
     });
     fill($("recent"), c.recent, "Nothing yet. Go commit something.");
+    renderSkills(c.skills || []);
+  }
+
+  function renderSkills(skills) {
+    const list = $("skills");
+    list.replaceChildren();
+    if (!skills.length) {
+      list.appendChild(el("li", "empty", "No skills yet. They grow from what you commit, review and ship."));
+      return;
+    }
+    skills.forEach((s) => {
+      const li = el("li");
+      li.appendChild(el("span", "sname", s.name));
+      li.appendChild(el("span", "slvl", "Lv " + s.level));
+      const bar = el("div", "sbar");
+      bar.setAttribute("role", "progressbar");
+      bar.setAttribute("aria-label", s.name);
+      const fillEl = el("div", "sfill");
+      fillEl.style.width = (s.level_span ? Math.min(100, (s.into_level / s.level_span) * 100) : 0) + "%";
+      bar.appendChild(fillEl);
+      li.appendChild(bar);
+      const xp = el("span", "sxp", s.xp.toLocaleString() + " exp");
+      xp.title = s.into_level + " / " + s.level_span + " to Lv " + (s.level + 1) + (s.last_at ? " · last " + ago(s.last_at) : "");
+      li.appendChild(xp);
+      list.appendChild(li);
+    });
   }
 
   async function loadAchievements() {

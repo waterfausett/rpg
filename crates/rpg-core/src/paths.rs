@@ -3,6 +3,7 @@ use include_dir::{include_dir, Dir};
 use std::path::PathBuf;
 
 static STARTER_RULES: Dir = include_dir!("$CARGO_MANIFEST_DIR/assets/rules");
+static STARTER_SKILLS: Dir = include_dir!("$CARGO_MANIFEST_DIR/assets/skills");
 const DEFAULT_CONFIG: &str = include_str!("../assets/config.default.toml");
 
 #[derive(Debug, Clone)]
@@ -55,11 +56,16 @@ impl Paths {
     pub fn rules(&self) -> PathBuf {
         self.config.join("rules")
     }
+    /// Skill files live in a subfolder of `rules/`, so "Open rules folder" reaches them.
+    pub fn skills(&self) -> PathBuf {
+        self.rules().join("skills")
+    }
     pub fn sounds(&self) -> PathBuf {
         self.config.join("sounds")
     }
 
-    /// Create dirs, write the default config if missing, seed starter rules if `rules/` is empty.
+    /// Create dirs, write the default config if missing, seed starter rules if `rules/` is
+    /// empty and starter skills if `rules/skills/` is empty (so existing installs get skills too).
     pub fn ensure(&self) -> Result<()> {
         for d in [self.data.clone(), self.inbox(), self.git_hooks(), self.config.clone(), self.rules(), self.sounds()] {
             std::fs::create_dir_all(&d).with_context(|| format!("creating {}", d.display()))?;
@@ -67,15 +73,24 @@ impl Paths {
         if !self.config_file().exists() {
             std::fs::write(self.config_file(), DEFAULT_CONFIG).context("writing default config")?;
         }
+        // Before creating `skills/`, which would make `rules/` non-empty.
         if std::fs::read_dir(self.rules())?.next().is_none() {
-            for f in STARTER_RULES.files() {
-                let name = f.path().file_name().ok_or_else(|| anyhow!("bad embedded rule path"))?;
-                std::fs::write(self.rules().join(name), f.contents())
-                    .with_context(|| format!("seeding rule {}", name.to_string_lossy()))?;
-            }
+            seed(&STARTER_RULES, &self.rules(), "rule")?;
+        }
+        std::fs::create_dir_all(self.skills()).with_context(|| format!("creating {}", self.skills().display()))?;
+        if std::fs::read_dir(self.skills())?.next().is_none() {
+            seed(&STARTER_SKILLS, &self.skills(), "skill")?;
         }
         Ok(())
     }
+}
+
+fn seed(from: &Dir, to: &std::path::Path, what: &str) -> Result<()> {
+    for f in from.files() {
+        let name = f.path().file_name().ok_or_else(|| anyhow!("bad embedded {what} path"))?;
+        std::fs::write(to.join(name), f.contents()).with_context(|| format!("seeding {what} {}", name.to_string_lossy()))?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -115,5 +130,23 @@ mod tests {
             })
             .count();
         assert_eq!(n, 10);
+        let skills = std::fs::read_dir(p.skills()).unwrap().count();
+        assert_eq!(skills, STARTER_SKILLS.files().count());
+        assert!(skills >= 10);
+    }
+
+    #[test]
+    fn ensure_adds_skills_to_an_existing_install_without_touching_rules() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = Paths::from_home(Some(tmp.path().to_path_buf())).unwrap();
+        std::fs::create_dir_all(p.rules()).unwrap();
+        std::fs::write(p.rules().join("mine.toml"), "x").unwrap();
+        p.ensure().unwrap();
+        assert_eq!(std::fs::read_dir(p.rules()).unwrap().count(), 2, "mine.toml plus skills/");
+        assert!(std::fs::read_dir(p.skills()).unwrap().count() >= 10);
+        // Deleting one starter skill sticks (only an empty folder is reseeded, as with rules).
+        std::fs::remove_file(p.skills().join("rust.toml")).unwrap();
+        p.ensure().unwrap();
+        assert!(!p.skills().join("rust.toml").exists());
     }
 }

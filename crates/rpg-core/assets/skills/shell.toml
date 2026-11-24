@@ -1,0 +1,3 @@
+id = "shell"
+name = "Shell Sorcery"
+globs = ["*.sh", "*.bash", "*.zsh", "*.ps1", "*.psm1", "*.bat", "*.cmd"]

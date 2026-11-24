@@ -1,0 +1,3 @@
+id = "typescript"
+name = "TypeScript"
+globs = ["*.ts", "*.tsx", "*.mts", "*.cts"]

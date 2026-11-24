@@ -1,0 +1,3 @@
+id = "web"
+name = "Markup & Styling"
+globs = ["*.html", "*.css", "*.scss", "*.sass", "*.less", "*.vue", "*.svelte"]

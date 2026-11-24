@@ -9,11 +9,12 @@ The automated and scripted checks cannot see these. Do them once on your machine
 - [ ] Clicking in the pop-up area passes through to the window underneath.
 - [ ] Real transparency: only the pill and banner are visible, with no white or black rectangle around them.
 - [ ] No taskbar button and no Alt+Tab entry for the overlay windows. No console window flashes on commit.
+- [ ] A commit that takes a skill to a new level shows a teal `▲ <Skill> Lv N` pop-up after the exp pop-up, with no banner or sound.
 - [ ] A banner plays a sound (drop a file in `sounds/` first); **Mute sounds** silences it.
 
 ## Tray
 - [ ] Tray icon is visible (check the overflow area) and left click opens the menu.
-- [ ] Open character sheet opens `http://127.0.0.1:47474` with your level, XP and achievements.
+- [ ] Open character sheet opens `http://127.0.0.1:47474` with your level, XP and achievements, and a Skills list (biggest first) once you have committed something.
 - [ ] Mute sounds toggles (check mark) and takes effect on the next banner.
 - [ ] Do not disturb: turn on, commit, and see no pop-up and no banner. Turn off and the queued banners appear (at most 3 plus a summary if many).
 - [ ] Open rules folder opens `rules/` in Explorer.
