@@ -33,19 +33,20 @@ mod tests {
     fn curve_values() {
         let c = LevelConfig::default();
         assert_eq!(threshold(1, &c), 0);
-        assert_eq!(threshold(2, &c), 100);
-        assert_eq!(threshold(3, &c), 283);
-        assert_eq!(threshold(5, &c), 800);
+        assert_eq!(threshold(2, &c), 1000);
+        assert_eq!(threshold(3, &c), 2828);
+        assert_eq!(threshold(5, &c), 8000);
+        assert_eq!(threshold(10, &c), 27000);
         assert_eq!(level_for(0, &c), 1);
-        assert_eq!(level_for(99, &c), 1);
-        assert_eq!(level_for(100, &c), 2);
-        assert_eq!(level_for(282, &c), 2);
-        assert_eq!(level_for(283, &c), 3);
+        assert_eq!(level_for(999, &c), 1);
+        assert_eq!(level_for(1000, &c), 2);
+        assert_eq!(level_for(2827, &c), 2);
+        assert_eq!(level_for(2828, &c), 3);
     }
 
     #[test]
     fn progress_values() {
         let c = LevelConfig::default();
-        assert_eq!(progress(150, &c), (2, 50, 183));
+        assert_eq!(progress(1500, &c), (2, 500, 1828));
     }
 }

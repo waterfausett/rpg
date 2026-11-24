@@ -7,7 +7,7 @@ review = 40
 claude_session = 15
 
 [levels]
-base = 100.0
+base = 1000.0
 exponent = 1.5
 
 [github]

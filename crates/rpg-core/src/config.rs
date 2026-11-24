@@ -40,7 +40,7 @@ pub struct LevelConfig {
 
 impl Default for LevelConfig {
     fn default() -> Self {
-        Self { base: 100.0, exponent: 1.5 }
+        Self { base: 1000.0, exponent: 1.5 }
     }
 }
 

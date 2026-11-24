@@ -286,8 +286,8 @@ mod tests {
             last = run(&store, &rules, &e);
             ups.extend(last.level_ups.clone());
         }
-        assert_eq!(ups, vec![2, 3, 4, 5]);
-        assert_eq!((last.total_xp, last.level), (1000, 5));
+        assert_eq!(ups, vec![2], "level 2 at exactly 1000 exp");
+        assert_eq!((last.total_xp, last.level), (1000, 2));
         assert_eq!(last.xp_gains[0], XpGain { amount: 100, label: "PR merged".into() });
     }
 

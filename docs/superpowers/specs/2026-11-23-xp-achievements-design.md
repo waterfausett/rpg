@@ -130,7 +130,7 @@ Exact thresholds and text are the builder's call; they're tunable data anyway.
 
 - Fixed XP per event type, set in config. Defaults (my call): commit 10, push 25, PR opened 50, PR merged 100, review 40, Claude session completed 15.
 - Achievement XP comes on top, by tier.
-- Level curve (my call): XP to reach level *n* = `round(100 * n^1.5)` cumulative. Tunable in config.
+- Level curve (my call): XP to reach level *n* = `round(base * (n-1)^1.5)` cumulative, base 1000 (level 2 at 1,000, level 5 at 8,000, level 10 at 27,000; raised from 100 after v0 so level-ups stay rare). Tunable in config.
 - Level-up is a moment: it uses a banner style variant and plays a level-up sound if one is supplied.
 
 ## Overlay (look approved in mockups)
