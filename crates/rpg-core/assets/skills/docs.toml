@@ -1,0 +1,3 @@
+id = "docs"
+name = "Scribe"
+globs = ["*.md", "*.mdx", "*.rst", "*.adoc", "*.txt"]

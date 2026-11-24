@@ -1,0 +1,3 @@
+id = "rust"
+name = "Rust"
+globs = ["*.rs"]

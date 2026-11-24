@@ -6,6 +6,7 @@ pub mod install;
 pub mod paths;
 pub mod proc;
 pub mod rules;
+pub mod skills;
 pub mod store;
 pub mod xp;
 pub mod detectors;

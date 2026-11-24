@@ -9,9 +9,9 @@
 
   function addToast(t) {
     const pill = document.createElement("div");
-    pill.className = "xp";
+    pill.className = t.skill ? "xp skill" : "xp";
     if (t.notice) {
-      pill.textContent = t.label || "";
+      pill.textContent = (t.skill ? "▲ " : "") + (t.label || "");
     } else {
       pill.textContent = "+" + t.amount + " exp";
       const label = document.createElement("small");

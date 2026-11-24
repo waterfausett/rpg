@@ -119,9 +119,11 @@ pub fn parse_rule(text: &str) -> Result<Rule, toml::de::Error> {
     })
 }
 
+/// Everything loaded from the rules folder: achievements, plus skills from `rules/skills/`.
 #[derive(Debug, Clone, Default)]
 pub struct Rules {
     pub list: Vec<Rule>,
+    pub skills: Vec<crate::skills::Skill>,
 }
 
 impl Rules {

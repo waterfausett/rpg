@@ -35,6 +35,16 @@ pub struct UnlockRow {
     pub ts: DateTime<Utc>,
 }
 
+/// One skill's lifetime XP (see `Store::skill_totals`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SkillTotal {
+    pub skill_id: String,
+    /// The name it was last credited under.
+    pub name: String,
+    pub xp: u64,
+    pub last_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone)]
 pub struct EventRow {
     pub event: Event,
@@ -112,6 +122,10 @@ impl Store {
                 tier TEXT NOT NULL, xp INTEGER NOT NULL, context TEXT NOT NULL,
                 flavor_text TEXT, ts TEXT NOT NULL);
              CREATE INDEX IF NOT EXISTS idx_unlocks_rule ON unlocks(rule_id);
+             CREATE TABLE IF NOT EXISTS skill_xp(
+                id INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT NOT NULL, skill_id TEXT NOT NULL,
+                name TEXT NOT NULL, amount INTEGER NOT NULL, ts TEXT NOT NULL);
+             CREATE INDEX IF NOT EXISTS idx_skill_xp_skill ON skill_xp(skill_id);
              CREATE TABLE IF NOT EXISTS records(metric TEXT PRIMARY KEY, value REAL NOT NULL, ts TEXT NOT NULL);
              CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);",
         )?;
@@ -236,6 +250,44 @@ impl Store {
     pub fn total_xp(&self) -> Result<u64> {
         let n: i64 = self.conn().query_row("SELECT COALESCE(SUM(amount),0) FROM xp_ledger", [], |r| r.get(0))?;
         Ok(n.max(0) as u64)
+    }
+
+    /// Credit `amount` skill XP to `skill_id` (`name` is kept so a removed skill still shows).
+    pub fn add_skill_xp(&self, event_id: &str, skill_id: &str, name: &str, amount: u64, ts: DateTime<Utc>) -> Result<()> {
+        self.conn().execute(
+            "INSERT INTO skill_xp(event_id, skill_id, name, amount, ts) VALUES(?1,?2,?3,?4,?5)",
+            params![event_id, skill_id, name, amount as i64, ts_str(ts)],
+        )?;
+        Ok(())
+    }
+
+    pub fn skill_xp(&self, skill_id: &str) -> Result<u64> {
+        let n: i64 = self.conn().query_row(
+            "SELECT COALESCE(SUM(amount),0) FROM skill_xp WHERE skill_id=?1",
+            params![skill_id],
+            |r| r.get(0),
+        )?;
+        Ok(n.max(0) as u64)
+    }
+
+    /// Every skill with XP, biggest first.
+    pub fn skill_totals(&self) -> Result<Vec<SkillTotal>> {
+        let conn = self.conn();
+        let mut st = conn.prepare(
+            "SELECT skill_id,
+                    (SELECT name FROM skill_xp n WHERE n.skill_id=s.skill_id ORDER BY n.id DESC LIMIT 1),
+                    SUM(amount), MAX(ts)
+             FROM skill_xp s GROUP BY skill_id ORDER BY SUM(amount) DESC, skill_id",
+        )?;
+        let rows = st.query_map([], |r| {
+            Ok(SkillTotal {
+                skill_id: r.get(0)?,
+                name: r.get(1)?,
+                xp: r.get::<_, i64>(2)?.max(0) as u64,
+                last_at: parse_ts(&r.get::<_, String>(3)?)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     pub fn record(&self, metric: &str) -> Result<Option<f64>> {
@@ -410,6 +462,22 @@ mod tests {
         s.insert_unlock(&nu("r1", t2)).unwrap();
         assert_eq!(s.unlock_count("r1").unwrap(), 2);
         assert_eq!(s.last_unlock_at("r1").unwrap().unwrap().timestamp_millis(), t2.timestamp_millis());
+    }
+
+    #[test]
+    fn skill_xp_totals() {
+        let s = Store::open_in_memory().unwrap();
+        let now = Utc::now();
+        assert_eq!(s.skill_xp("rust").unwrap(), 0);
+        assert!(s.skill_totals().unwrap().is_empty());
+        s.add_skill_xp("e1", "rust", "Rust", 10, now).unwrap();
+        s.add_skill_xp("e2", "rust", "Rustacean", 10, now).unwrap();
+        s.add_skill_xp("e2", "docs", "Scribe", 30, now).unwrap();
+        assert_eq!(s.skill_xp("rust").unwrap(), 20);
+        let t = s.skill_totals().unwrap();
+        let t: Vec<_> = t.iter().map(|s| (s.skill_id.as_str(), s.name.as_str(), s.xp)).collect();
+        assert_eq!(t, vec![("docs", "Scribe", 30), ("rust", "Rustacean", 20)]);
+        assert_eq!(s.total_xp().unwrap(), 0, "skill xp is separate from character xp");
     }
 
     #[test]

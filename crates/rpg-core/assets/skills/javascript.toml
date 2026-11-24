@@ -1,0 +1,3 @@
+id = "javascript"
+name = "JavaScript"
+globs = ["*.js", "*.jsx", "*.mjs", "*.cjs"]

@@ -8,6 +8,7 @@ use std::path::Path;
 pub struct Config {
     pub xp: XpConfig,
     pub levels: LevelConfig,
+    pub skill_levels: SkillLevelConfig,
     pub github: GithubConfig,
     pub llm: LlmConfig,
     pub sound: SoundConfig,
@@ -41,6 +42,26 @@ pub struct LevelConfig {
 impl Default for LevelConfig {
     fn default() -> Self {
         Self { base: 1000.0, exponent: 1.5 }
+    }
+}
+
+/// The level curve for skills: same shape as `levels`, but a lower base so skills level faster.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct SkillLevelConfig {
+    pub base: f64,
+    pub exponent: f64,
+}
+
+impl Default for SkillLevelConfig {
+    fn default() -> Self {
+        Self { base: 100.0, exponent: 1.5 }
+    }
+}
+
+impl SkillLevelConfig {
+    pub fn curve(&self) -> LevelConfig {
+        LevelConfig { base: self.base, exponent: self.exponent }
     }
 }
 
@@ -127,6 +148,7 @@ mod tests {
         assert_eq!(c.xp.pr_merged, 100);
         assert_eq!(c.levels.exponent, 1.5);
         assert_eq!(c.site.port, 47474);
+        assert_eq!(c.skill_levels.base, 100.0);
     }
 
     #[test]

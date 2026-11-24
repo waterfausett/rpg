@@ -10,6 +10,10 @@ claude_session = 15
 base = 1000.0
 exponent = 1.5
 
+[skill_levels]
+base = 100.0
+exponent = 1.5
+
 [github]
 enabled = true
 poll_minutes = 10

@@ -1,0 +1,3 @@
+id = "yaml"
+name = "YAML Wrangling"
+globs = ["*.yml", "*.yaml"]
