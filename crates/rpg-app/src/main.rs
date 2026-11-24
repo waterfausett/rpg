@@ -10,6 +10,8 @@ mod tray;
 
 use overlay::OverlaySink;
 use rpg_core::config::Config;
+use rpg_core::engine::Outcome;
+use rpg_core::event::Event;
 use rpg_core::flavor::{ClaudeCli, TextGen};
 use rpg_core::paths::Paths;
 use rpg_core::store::Store;
@@ -17,6 +19,17 @@ use runtime::{log, AppState, OutcomeSink};
 use std::sync::{Arc, RwLock};
 use tauri::Manager;
 use tray::Toggles;
+
+/// Fallback sink when the overlay windows can't be created: records batches in the log.
+struct LogSink(Paths);
+
+impl OutcomeSink for LogSink {
+    fn present(&self, batch: Vec<(Event, Outcome)>, away: bool) {
+        let xp: u64 = batch.iter().flat_map(|(_, o)| &o.xp_gains).map(|g| g.amount).sum();
+        let unlocks: Vec<&str> = batch.iter().flat_map(|(_, o)| &o.unlocks).map(|u| u.name.as_str()).collect();
+        log(&self.0, &format!("presented {} events (away={away}): +{xp} exp, unlocks {unlocks:?}", batch.len()));
+    }
+}
 
 fn init_state() -> anyhow::Result<AppState> {
     let paths = Paths::resolve()?;
@@ -53,10 +66,20 @@ fn main() {
                 e
             })?;
             let toggles = Arc::new(Toggles::default());
-            let overlay = Arc::new(OverlaySink::new(app.handle(), state.clone(), toggles.clone())?);
-            app.manage(overlay.clone());
+            // Without an overlay, XP still counts: fall back to logging batches.
+            let sink: Arc<dyn OutcomeSink> = match OverlaySink::new(app.handle(), state.clone(), toggles.clone()) {
+                Ok(overlay) => {
+                    let overlay = Arc::new(overlay);
+                    app.manage(overlay.clone());
+                    overlay
+                }
+                Err(e) => {
+                    log(&state.paths, &format!("overlay unavailable, logging outcomes only: {e:#}"));
+                    Arc::new(LogSink(state.paths.clone()))
+                }
+            };
             tray::setup(app, &state, toggles)?;
-            runtime::spawn(state, overlay as Arc<dyn OutcomeSink>);
+            runtime::spawn(state, sink);
             Ok(())
         })
         .build(tauri::generate_context!())

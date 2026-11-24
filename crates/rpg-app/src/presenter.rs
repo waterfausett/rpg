@@ -47,12 +47,16 @@ pub struct Banner {
     pub kind: BannerKind,
     pub title: String,
     pub name: String,
-    /// Empty for achievements until resolved from `flavor`.
+    /// Empty for achievements until resolved from `flavor` (see `text_ready`).
     pub text: String,
+    /// False until an achievement's flavor text has been resolved into `text`.
+    pub text_ready: bool,
     pub reward: String,
     pub tier: Option<Tier>,
     pub sound_key: SoundKey,
     pub flavor: Option<FlavorSource>,
+    /// Summary banners: how many achievements and how much of their exp they stand for.
+    pub more: Option<(usize, u64)>,
 }
 
 #[derive(Default)]
@@ -76,8 +80,8 @@ impl Presenter {
         let level_ups: Vec<u32> = batch.iter().flat_map(|(_, o)| o.level_ups.iter().copied()).collect();
         let gains = batch.iter().flat_map(|(_, o)| &o.xp_gains);
 
-        let collapse = away || unlocks.len() > STORM_CAP;
-        if !collapse {
+        let storm = away || unlocks.len() > STORM_CAP;
+        if !storm {
             if !self.dnd {
                 self.toasts.extend(gains.map(|g| Toast { amount: g.amount, label: g.label.clone() }));
             }
@@ -90,38 +94,47 @@ impl Presenter {
         if sum > 0 && !self.dnd {
             self.toasts.push(Toast { amount: sum, label: if away { AWAY_LABEL.into() } else { String::new() } });
         }
-        let mut sorted = unlocks;
-        // Stable: equal tier/xp/ts keep batch order.
-        sorted.sort_by(|(ea, a), (eb, b)| {
-            tier_rank(b.tier).cmp(&tier_rank(a.tier)).then(b.xp.cmp(&a.xp)).then(ea.ts.cmp(&eb.ts))
-        });
-        let rest = sorted.split_off(sorted.len().min(STORM_CAP));
-        self.banners.extend(sorted.iter().map(|(e, u)| achievement(e, u)));
-        if !rest.is_empty() {
-            let rest_xp: u64 = rest.iter().map(|(_, u)| u.xp).sum();
-            let n = rest.len();
-            self.banners.push_back(Banner {
-                kind: BannerKind::AwaySummary,
-                title: if away { AWAY_TITLE } else { STORM_TITLE }.into(),
-                name: if away { "Welcome back, Crawler" } else { "The loot keeps coming" }.into(),
-                text: format!("…and {n} more achievement{}, plus {rest_xp} exp.", if n == 1 { "" } else { "s" }),
-                reward: format!("+{rest_xp} exp"),
-                tier: None,
-                sound_key: SoundKey::Summary,
-                flavor: None,
-            });
-        }
+        let achs = unlocks.iter().map(|(e, u)| achievement(e, u)).collect();
+        self.banners.extend(collapse(achs, (0, 0), away));
         if let Some(&top) = level_ups.iter().max() {
             self.banners.push_back(level_up(top));
         }
     }
 
     /// DND on: pending and new toasts are dropped and banners wait. Off: banners flow again.
+    /// Turning DND off with more than `STORM_CAP` achievement banners queued
+    /// collapses the backlog into storm form (3 biggest, one summary, last level-up).
     pub fn set_dnd(&mut self, on: bool) {
+        let was = self.dnd;
         self.dnd = on;
         if on {
             self.toasts.clear();
+        } else if was {
+            self.collapse_backlog();
         }
+    }
+
+    fn collapse_backlog(&mut self) {
+        let achs = self.banners.iter().filter(|b| b.kind == BannerKind::Achievement).count();
+        if achs <= STORM_CAP {
+            return;
+        }
+        let mut achievements = vec![];
+        let mut carried = (0, 0);
+        let mut last_level_up = None;
+        for b in self.banners.drain(..) {
+            match b.kind {
+                BannerKind::Achievement => achievements.push(b),
+                BannerKind::AwaySummary => {
+                    let (n, xp) = b.more.unwrap_or_default();
+                    carried = (carried.0 + n, carried.1 + xp);
+                }
+                // Levels only go up, so the last one queued is the highest.
+                BannerKind::LevelUp => last_level_up = Some(b),
+            }
+        }
+        self.banners.extend(collapse(achievements, carried, false));
+        self.banners.extend(last_level_up);
     }
 
     /// Take all pending toasts.
@@ -143,6 +156,23 @@ impl Presenter {
     pub fn banner_done(&mut self) {
         self.showing = false;
     }
+
+    /// Put a banner taken with `next_banner` back at the head of the queue
+    /// (e.g. DND came on), keeping any text already resolved. It is no longer showing.
+    pub fn requeue_front(&mut self, b: Banner) {
+        self.banners.push_front(b);
+        self.showing = false;
+    }
+
+    /// Last check before a taken banner goes on screen: `Some` to show it, or
+    /// `None` when DND came on meanwhile (it is requeued at the front).
+    pub fn confirm_show(&mut self, b: Banner) -> Option<Banner> {
+        if self.dnd {
+            self.requeue_front(b);
+            return None;
+        }
+        Some(b)
+    }
 }
 
 fn tier_rank(t: Tier) -> u8 {
@@ -151,6 +181,39 @@ fn tier_rank(t: Tier) -> u8 {
         Tier::Silver => 1,
         Tier::Gold => 2,
     }
+}
+
+/// Storm form: the `STORM_CAP` biggest achievements (tier, then xp, then
+/// earliest event; stable), then one summary for the rest plus `carried`
+/// (achievements already summarized earlier), if there are any.
+fn collapse(mut achs: Vec<Banner>, carried: (usize, u64), away: bool) -> Vec<Banner> {
+    let key = |b: &Banner| {
+        let src = b.flavor.as_ref().expect("achievement banners carry their unlock");
+        (tier_rank(src.unlock.tier), src.unlock.xp, src.event.ts)
+    };
+    achs.sort_by(|a, b| {
+        let (ta, xa, sa) = key(a);
+        let (tb, xb, sb) = key(b);
+        tb.cmp(&ta).then(xb.cmp(&xa)).then(sa.cmp(&sb))
+    });
+    let rest = achs.split_off(achs.len().min(STORM_CAP));
+    let n = carried.0 + rest.len();
+    let xp = carried.1 + rest.iter().map(|b| key(b).1).sum::<u64>();
+    if n > 0 {
+        achs.push(Banner {
+            kind: BannerKind::AwaySummary,
+            title: if away { AWAY_TITLE } else { STORM_TITLE }.into(),
+            name: if away { "Welcome back, Crawler" } else { "The loot keeps coming" }.into(),
+            text: format!("…and {n} more achievement{}, plus {xp} exp.", if n == 1 { "" } else { "s" }),
+            text_ready: true,
+            reward: format!("+{xp} exp"),
+            tier: None,
+            sound_key: SoundKey::Summary,
+            flavor: None,
+            more: Some((n, xp)),
+        });
+    }
+    achs
 }
 
 fn achievement(ev: &Event, u: &Unlock) -> Banner {
@@ -163,6 +226,8 @@ fn achievement(ev: &Event, u: &Unlock) -> Banner {
         tier: Some(u.tier),
         sound_key: SoundKey::Achievement { rule_id: u.rule_id.clone(), tier: u.tier },
         flavor: Some(FlavorSource { unlock: u.clone(), event: ev.clone() }),
+        text_ready: false,
+        more: None,
     }
 }
 
@@ -176,6 +241,8 @@ fn level_up(level: u32) -> Banner {
         tier: None,
         sound_key: SoundKey::LevelUp,
         flavor: None,
+        text_ready: true,
+        more: None,
     }
 }
 
@@ -395,5 +462,81 @@ mod tests {
         p.push(&[(ev(0), Outcome::default()), (ev(1), Outcome::default())], true);
         assert!(p.next_toasts().is_empty());
         assert!(p.next_banner().is_none());
+    }
+
+    #[test]
+    fn requeue_front_shows_again_first_with_its_text() {
+        let mut p = Presenter::new();
+        p.push(&batch(vec![unlock(1, Tier::Bronze, 100), unlock(2, Tier::Bronze, 100)]), false);
+        let mut b = p.next_banner().unwrap();
+        b.text = "RESOLVED".into();
+        b.text_ready = true;
+        p.requeue_front(b);
+        let again = p.next_banner().expect("no longer 'showing', so the head is available");
+        assert_eq!((again.name.as_str(), again.text.as_str(), again.text_ready), ("Ach 1", "RESOLVED", true));
+        p.banner_done();
+        assert_eq!(p.next_banner().unwrap().name, "Ach 2");
+    }
+
+    #[test]
+    fn confirm_show_requeues_when_dnd_came_on() {
+        let mut p = Presenter::new();
+        p.push(&batch(vec![unlock(1, Tier::Bronze, 100)]), false);
+        let b = p.next_banner().unwrap();
+        p.set_dnd(true); // while the banner's text was resolving
+        assert!(p.confirm_show(b).is_none(), "not shown under DND");
+        assert!(p.next_banner().is_none());
+        p.set_dnd(false);
+        let b = p.next_banner().expect("released after DND");
+        assert_eq!(b.name, "Ach 1");
+        assert!(p.confirm_show(b).is_some(), "shown when DND is off");
+    }
+
+    #[test]
+    fn dnd_backlog_collapses_to_storm() {
+        let mut p = Presenter::new();
+        p.set_dnd(true);
+        let mut b1 = batch(vec![unlock(1, Tier::Bronze, 100), unlock(2, Tier::Silver, 500)]);
+        b1[1].1.level_ups = vec![2];
+        p.push(&b1, false);
+        let mut b2 = batch(vec![unlock(3, Tier::Gold, 1000), unlock(4, Tier::Bronze, 300), unlock(5, Tier::Bronze, 250)]);
+        b2[2].1.level_ups = vec![3];
+        p.push(&b2, false);
+        p.set_dnd(false);
+        let bs = drain(&mut p);
+        let got: Vec<&str> = bs.iter().map(|b| b.name.as_str()).collect();
+        assert_eq!(got.len(), 5, "{got:?}");
+        assert_eq!(&got[..3], &["Ach 3", "Ach 2", "Ach 4"]);
+        assert_eq!(bs[3].kind, BannerKind::AwaySummary);
+        assert_eq!(bs[3].title, STORM_TITLE);
+        assert_eq!(bs[3].text, "…and 2 more achievements, plus 350 exp.");
+        assert_eq!((bs[4].kind, got[4]), (BannerKind::LevelUp, "Level 3"));
+    }
+
+    #[test]
+    fn dnd_backlog_folds_existing_summaries() {
+        let mut p = Presenter::new();
+        p.set_dnd(true);
+        // An away batch already collapsed to 3 + "…and 1 more" (100 exp)...
+        let us = vec![unlock(1, Tier::Bronze, 100), unlock(2, Tier::Bronze, 200), unlock(3, Tier::Bronze, 300), unlock(4, Tier::Bronze, 400)];
+        p.push(&batch(us), true);
+        // ...plus one live unlock: 4 achievement banners queued.
+        p.push(&batch(vec![unlock(5, Tier::Gold, 1000)]), false);
+        p.set_dnd(false);
+        let bs = drain(&mut p);
+        let got: Vec<&str> = bs.iter().map(|b| b.name.as_str()).collect();
+        assert_eq!(&got[..3], &["Ach 5", "Ach 4", "Ach 3"]);
+        assert_eq!(bs.len(), 4);
+        assert_eq!(bs[3].text, "…and 2 more achievements, plus 300 exp.");
+    }
+
+    #[test]
+    fn dnd_backlog_of_three_not_collapsed() {
+        let mut p = Presenter::new();
+        p.set_dnd(true);
+        p.push(&batch(vec![unlock(1, Tier::Bronze, 100), unlock(2, Tier::Gold, 1000)]), false);
+        p.push(&batch(vec![unlock(3, Tier::Silver, 500)]), false);
+        p.set_dnd(false);
+        assert_eq!(names(&mut p), vec!["Ach 1", "Ach 2", "Ach 3"], "FIFO kept");
     }
 }

@@ -11,7 +11,7 @@ use rpg_core::paths::Paths;
 use rpg_core::rules::Tier;
 use serde::{Deserialize, Serialize};
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Listener, Manager, PhysicalPosition, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
@@ -54,14 +54,29 @@ struct ReadyPayload {
     window: String,
 }
 
+/// The banner taken from the presenter: resolving its text (`shown: None`) or on screen.
+struct Current {
+    id: u64,
+    shown: Option<Banner>,
+}
+
+/// Presenter plus window state. Every show/hide of an overlay window happens
+/// while holding this lock, so the decision and the visibility change are atomic.
 #[derive(Default)]
 struct Flow {
     presenter: Presenter,
     toast_ready: bool,
     banner_ready: bool,
-    /// Id of the banner currently being resolved or shown.
-    current: Option<u64>,
+    current: Option<Current>,
     next_id: u64,
+    /// Bumped on every toast batch; the hide timer only hides its own batch.
+    toast_gen: u64,
+}
+
+impl Flow {
+    fn current_id(&self) -> Option<u64> {
+        self.current.as_ref().map(|c| c.id)
+    }
 }
 
 struct Inner {
@@ -69,7 +84,6 @@ struct Inner {
     state: AppState,
     toggles: Arc<Toggles>,
     flow: Mutex<Flow>,
-    toast_gen: AtomicU64,
 }
 
 /// `OutcomeSink` that shows batches in the overlay windows.
@@ -83,7 +97,6 @@ impl OverlaySink {
             state,
             toggles,
             flow: Mutex::new(Flow { presenter: Presenter::new(), ..Flow::default() }),
-            toast_gen: AtomicU64::new(0),
         });
         let i = inner.clone();
         app.listen_any("overlay-ready", move |e| {
@@ -115,9 +128,21 @@ impl OverlaySink {
         Ok(OverlaySink(inner))
     }
 
-    /// Tray "Do not disturb": hold banners and drop toasts while on.
+    /// Tray "Do not disturb": hold banners and drop toasts while on. A banner
+    /// on screen is hidden and goes back to the head of the queue; one still
+    /// resolving its text is requeued by its worker (`Presenter::confirm_show`).
     pub fn set_dnd(&self, on: bool) {
-        self.0.flow().presenter.set_dnd(on);
+        {
+            let mut f = self.0.flow();
+            f.presenter.set_dnd(on);
+            if on && f.current.as_ref().is_some_and(|c| c.shown.is_some()) {
+                let shown = f.current.take().and_then(|c| c.shown).expect("checked above");
+                f.presenter.requeue_front(shown);
+                if let Some(w) = self.0.window(BANNER) {
+                    let _ = w.hide();
+                }
+            }
+        }
         if !on {
             pump(&self.0);
         }
@@ -191,47 +216,50 @@ fn place_windows(app: &AppHandle) {
 
 /// Show whatever the presenter has ready.
 fn pump(inner: &Arc<Inner>) {
-    let (toasts, banner) = {
-        let mut f = inner.flow();
-        let toasts = if f.toast_ready { f.presenter.next_toasts() } else { vec![] };
-        let banner = if f.banner_ready { f.presenter.next_banner() } else { None };
-        let banner = banner.map(|b| {
-            f.next_id += 1;
-            f.current = Some(f.next_id);
-            (f.next_id, b)
-        });
-        (toasts, banner)
-    };
-    if !toasts.is_empty() {
-        show_toasts(inner, toasts);
-    }
-    if let Some((id, b)) = banner {
-        let i = inner.clone();
-        let spawned = std::thread::Builder::new().name("rpg-banner".into()).spawn(move || {
-            if let Err(p) = catch_unwind(AssertUnwindSafe(|| show_banner(&i, id, b))) {
-                log(&i.state.paths, &format!("banner {id} panicked: {}", panic_message(&*p)));
-                finish_banner(&i, id);
-            }
-        });
-        if let Err(e) = spawned {
-            log(&inner.state.paths, &format!("banner thread failed: {e}"));
-            finish_banner(inner, id);
+    let mut f = inner.flow();
+    if f.toast_ready {
+        let toasts = f.presenter.next_toasts();
+        if !toasts.is_empty() {
+            show_toasts(inner, &mut f, toasts);
         }
+    }
+    if !f.banner_ready {
+        return;
+    }
+    let Some(b) = f.presenter.next_banner() else { return };
+    f.next_id += 1;
+    let id = f.next_id;
+    f.current = Some(Current { id, shown: None });
+    drop(f);
+
+    let i = inner.clone();
+    let spawned = std::thread::Builder::new().name("rpg-banner".into()).spawn(move || {
+        if let Err(p) = catch_unwind(AssertUnwindSafe(|| show_banner(&i, id, b))) {
+            log(&i.state.paths, &format!("banner {id} panicked: {}", panic_message(&*p)));
+            finish_banner(&i, id);
+        }
+    });
+    if let Err(e) = spawned {
+        log(&inner.state.paths, &format!("banner thread failed: {e}"));
+        finish_banner(inner, id);
     }
 }
 
-fn show_toasts(inner: &Arc<Inner>, toasts: Vec<Toast>) {
+/// Called with the flow lock held.
+fn show_toasts(inner: &Arc<Inner>, f: &mut Flow, toasts: Vec<Toast>) {
     let Some(win) = inner.window(TOAST) else { return };
     let _ = win.show();
     let payload: Vec<ToastPayload> = toasts.into_iter().map(|t| ToastPayload { amount: t.amount, label: t.label }).collect();
     if let Err(e) = inner.app.emit_to(TOAST, "toast", payload) {
         log(&inner.state.paths, &format!("emitting toast failed: {e}"));
     }
-    let gen = inner.toast_gen.fetch_add(1, Ordering::SeqCst) + 1;
+    f.toast_gen += 1;
+    let gen = f.toast_gen;
     let i = inner.clone();
     let _ = std::thread::Builder::new().name("rpg-toast".into()).spawn(move || {
         std::thread::sleep(TOAST_HIDE_AFTER);
-        if i.toast_gen.load(Ordering::SeqCst) == gen {
+        let f = i.flow();
+        if f.toast_gen == gen {
             if let Some(w) = i.window(TOAST) {
                 let _ = w.hide();
             }
@@ -239,55 +267,73 @@ fn show_toasts(inner: &Arc<Inner>, toasts: Vec<Toast>) {
     });
 }
 
-/// Runs on its own thread: resolve the text (may wait on the LLM), play the
-/// sound, show the window. A watchdog ends the banner if the page never does.
-fn show_banner(inner: &Arc<Inner>, id: u64, b: Banner) {
-    let text = match &b.flavor {
-        Some(src) => resolve_flavor(&inner.state, &src.unlock, &src.event),
-        None => b.text.clone(),
-    };
-    let payload = BannerPayload {
+/// Runs on its own thread: resolve the text (may wait on the LLM), then, if
+/// DND did not come on meanwhile, play the sound and show the window. A
+/// watchdog ends the banner if the page never reports `banner-done`.
+fn show_banner(inner: &Arc<Inner>, id: u64, mut b: Banner) {
+    if !b.text_ready {
+        if let Some(src) = &b.flavor {
+            b.text = resolve_flavor(&inner.state, &src.unlock, &src.event);
+        }
+        b.text_ready = true;
+    }
+    let sound_cfg = inner.state.cfg.read().unwrap_or_else(|p| p.into_inner()).sound.clone();
+    {
+        let mut f = inner.flow();
+        if f.current_id() != Some(id) {
+            return;
+        }
+        let Some(b) = f.presenter.confirm_show(b) else {
+            // DND came on while resolving: requeued (with its text) for later.
+            f.current = None;
+            return;
+        };
+        let Some(win) = inner.window(BANNER) else {
+            drop(f);
+            finish_banner(inner, id);
+            return;
+        };
+        let muted = inner.toggles.muted.load(Ordering::Relaxed);
+        let paths = inner.state.paths.clone();
+        sound::play(&b.sound_key, &sound_cfg, &paths.sounds(), muted, move |msg| log(&paths, &msg));
+        let _ = win.show();
+        if let Err(e) = inner.app.emit_to(BANNER, "banner", payload(id, &b)) {
+            log(&inner.state.paths, &format!("emitting banner failed: {e}"));
+        }
+        f.current = Some(Current { id, shown: Some(b) });
+    }
+    std::thread::sleep(BANNER_WATCHDOG);
+    finish_banner(inner, id);
+}
+
+fn payload(id: u64, b: &Banner) -> BannerPayload {
+    BannerPayload {
         id,
         kind: match b.kind {
             BannerKind::Achievement => "achievement",
             BannerKind::LevelUp => "level_up",
             BannerKind::AwaySummary => "summary",
         },
-        title: b.title,
-        name: b.name,
-        text,
-        reward: b.reward,
+        title: b.title.clone(),
+        name: b.name.clone(),
+        text: b.text.clone(),
+        reward: b.reward.clone(),
         tier: b.tier.map(tier_name),
-    };
-    let sound_cfg = inner.state.cfg.read().unwrap_or_else(|p| p.into_inner()).sound.clone();
-    let muted = inner.toggles.muted.load(Ordering::Relaxed);
-    let paths = inner.state.paths.clone();
-    sound::play(&b.sound_key, &sound_cfg, &paths.sounds(), muted, move |msg| log(&paths, &msg));
-
-    let Some(win) = inner.window(BANNER) else {
-        finish_banner(inner, id);
-        return;
-    };
-    let _ = win.show();
-    if let Err(e) = inner.app.emit_to(BANNER, "banner", payload) {
-        log(&inner.state.paths, &format!("emitting banner failed: {e}"));
     }
-    std::thread::sleep(BANNER_WATCHDOG);
-    finish_banner(inner, id);
 }
 
-/// End banner `id` (no-op if it already ended) and show what's next.
+/// End banner `id` (no-op if it already ended or was requeued) and show what's next.
 fn finish_banner(inner: &Arc<Inner>, id: u64) {
     {
         let mut f = inner.flow();
-        if f.current != Some(id) {
+        if f.current_id() != Some(id) {
             return;
         }
         f.current = None;
         f.presenter.banner_done();
-    }
-    if let Some(w) = inner.window(BANNER) {
-        let _ = w.hide();
+        if let Some(w) = inner.window(BANNER) {
+            let _ = w.hide();
+        }
     }
     pump(inner);
 }
