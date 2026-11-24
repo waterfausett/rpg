@@ -28,3 +28,9 @@ volume = 0.8
 
 [site]
 port = 47474
+
+# Which repos count. A plain folder covers everything under it; globs work too.
+# Example: exclude = ['C:\Users\me\AppData\Local\Temp']
+[paths]
+include = []
+exclude = []

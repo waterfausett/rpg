@@ -146,9 +146,29 @@ volume = 0.8
 
 [site]
 port = 47474        # character sheet at http://127.0.0.1:47474
+
+[paths]             # which repos count; see "Including and excluding paths"
+include = []        # empty = everywhere
+exclude = []
 ```
 
 Config is read at startup, so restart the app after editing it.
+
+### Including and excluding paths
+
+Events from an excluded folder count for nothing: no exp, skills, records or achievements, and they are not stored (so they stay off the character sheet too).
+
+```toml
+[paths]
+exclude = ['C:\Users\me\AppData\Local\Temp']   # scratch repos, tool sandboxes
+include = ['C:/work', 'octo/*']                # optional: only these count
+```
+
+- Patterns are matched against the event's repo: the local folder for commits, pushes and Claude sessions, `owner/name` for GitHub events.
+- A plain folder (no `*`, `?`, `[` or `{`) covers itself and everything under it. Anything else is a glob, as in skills: case-insensitive, `*` crosses folders.
+- `\` or `/`, drive-letter case and a trailing slash don't matter. Use single quotes in TOML so backslashes stay literal.
+- `exclude` wins over `include`. A non-empty `include` drops everything that doesn't match it. Events with no repo always count.
+- Only new events are filtered; past ones keep their exp. A bad pattern makes the whole config invalid (the app logs it to `rpg.log` and uses defaults).
 
 ## Privacy
 

@@ -135,6 +135,11 @@ fn process_inner(
     out.total_xp = before;
     out.level = level_for(before, &cfg.levels);
 
+    // Excluded repos (`[paths]` in config) are dropped entirely: not stored, so they feed no
+    // XP, records, skills or achievements, and don't show on the character sheet.
+    if !cfg.paths.allows(ev.repo.as_deref()) {
+        return Ok(out);
+    }
     if !store.insert_event(ev)? {
         return Ok(out);
     }
@@ -258,6 +263,26 @@ mod tests {
 
     fn run(store: &Store, rules: &Rules, ev: &Event) -> Outcome {
         process(store, rules, &Config::default(), ev, &[], tz()).unwrap()
+    }
+
+    #[test]
+    fn excluded_repo_counts_for_nothing() {
+        let store = Store::open_in_memory().unwrap();
+        let rules = Rules {
+            list: vec![rule("fb", EventKind::Commit, Detector::First { scope: crate::rules::FirstScope::Ever }, 5)],
+            ..Default::default()
+        };
+        let cfg: Config = toml::from_str("[paths]\nexclude = ['C:/Temp']\n").unwrap();
+        let mut e = mk(EventKind::Commit, "2026-01-01T10:00:00Z", serde_json::json!({}));
+        e.repo = Some("C:/Temp/scratch".into());
+        let o = process(&store, &rules, &cfg, &e, &[], tz()).unwrap();
+        assert!(o.xp_gains.is_empty() && o.unlocks.is_empty());
+        assert_eq!(store.total_xp().unwrap(), 0);
+        // Not stored either, so it can still count if the filter is later removed.
+        e.repo = Some("C:/work/app".into());
+        let o = process(&store, &rules, &cfg, &e, &[], tz()).unwrap();
+        assert_eq!(o.unlocks.len(), 1);
+        assert_eq!(store.total_xp().unwrap(), 15);
     }
 
     #[test]
