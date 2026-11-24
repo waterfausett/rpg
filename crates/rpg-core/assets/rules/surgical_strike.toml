@@ -1,0 +1,9 @@
+id = "surgical_strike"
+name = "Surgical Strike"
+tier = "silver"
+trigger = ["commit"]
+detector = { type = "diff_size", min_lines = 1, max_lines = 2 }
+repeatable = true
+cooldown_hours = 24
+hint = "Sometimes the smallest change is the whole point."
+fallback = "A commit that changed almost nothing. Somewhere, a semicolon has been quietly and permanently dealt with."

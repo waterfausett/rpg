@@ -1,0 +1,8 @@
+id = "new_territory"
+name = "New Territory"
+tier = "bronze"
+trigger = ["commit"]
+detector = { type = "first", scope = "repo" }
+repeatable = true
+hint = "A repository you have never committed to has never met you."
+fallback = "Your first commit in a repository that did not know you existed. It still does not trust you, but it has stopped asking questions."

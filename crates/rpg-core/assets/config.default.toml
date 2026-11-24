@@ -1,0 +1,26 @@
+[xp]
+commit = 10
+push = 25
+pr_opened = 50
+pr_merged = 100
+review = 40
+claude_session = 15
+
+[levels]
+base = 100.0
+exponent = 1.5
+
+[github]
+enabled = true
+poll_minutes = 10
+
+[llm]
+enabled = true
+timeout_secs = 10
+model = "haiku"
+
+[sound]
+volume = 0.8
+
+[site]
+port = 47474

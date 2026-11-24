@@ -1,0 +1,10 @@
+id = "night_shift"
+name = "Night Shift"
+tier = "bronze"
+trigger = ["commit"]
+detector = { type = "time_of_day", start_hour = 0, end_hour = 4 }
+repeatable = true
+cooldown_hours = 168
+hint = "The code does not care what time it is. Neither, apparently, do you."
+fallback = "A commit between midnight and four in the morning. The sun has filed a missing-person report on your behalf."
+flavor = { type = "llm", prompt = "Rewrite this achievement announcement for this specific unlock, in the same voice: \"{fallback}\". Use the concrete details. Context: {context}" }

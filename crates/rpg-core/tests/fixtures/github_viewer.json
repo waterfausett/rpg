@@ -1,0 +1,5 @@
+{"data":{"viewer":{"login":"octo","pullRequests":{"nodes":[
+{"id":"PR_aaa","number":12,"title":"Add widget","url":"https://github.com/octo/widgets/pull/12","createdAt":"2026-11-20T10:00:00Z","mergedAt":"2026-11-21T09:30:00Z","additions":120,"deletions":15,"repository":{"nameWithOwner":"octo/widgets"}},
+{"id":"PR_bbb","number":13,"title":"WIP gadget","url":"https://github.com/octo/gadgets/pull/13","createdAt":"2026-11-22T08:00:00Z","mergedAt":null,"additions":5,"deletions":1,"repository":{"nameWithOwner":"octo/gadgets"}}]},
+"contributionsCollection":{"pullRequestReviewContributions":{"nodes":[
+{"occurredAt":"2026-11-21T15:00:00Z","pullRequestReview":{"id":"PRR_ccc"},"pullRequest":{"url":"https://github.com/other/thing/pull/7","repository":{"nameWithOwner":"other/thing"}}}]}}}}}

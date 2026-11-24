@@ -1,0 +1,10 @@
+id = "demolitions_expert"
+name = "Demolitions Expert"
+tier = "silver"
+trigger = ["pr_merged"]
+detector = { type = "diff_size", min_lines = 100, min_delete_ratio = 0.8 }
+repeatable = true
+cooldown_hours = 72
+hint = "Deleting code is the most productive thing you can do. Allegedly."
+fallback = "A merged pull request that deleted far more than it added. The codebase is lighter, and the ghosts of the removed functions have been asked to leave."
+flavor = { type = "llm", prompt = "Rewrite this achievement announcement for this specific unlock, in the same voice: \"{fallback}\". Use the concrete details. Context: {context}" }

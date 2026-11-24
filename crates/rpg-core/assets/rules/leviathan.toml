@@ -1,0 +1,9 @@
+id = "leviathan"
+name = "The Leviathan"
+tier = "gold"
+trigger = ["pr_opened"]
+detector = { type = "diff_size", min_lines = 1000 }
+repeatable = true
+hint = "Size matters. Reviewers disagree about the direction."
+fallback = "A pull request exceeding one thousand changed lines. Reviewing it has been classified as a form of endurance sport."
+flavor = { type = "llm", prompt = "Rewrite this achievement announcement for this specific unlock, in the same voice: \"{fallback}\". Use the concrete details. Context: {context}" }

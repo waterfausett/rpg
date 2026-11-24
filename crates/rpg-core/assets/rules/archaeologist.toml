@@ -1,0 +1,11 @@
+id = "archaeologist"
+name = "Archaeologist"
+tier = "bronze"
+xp = 500
+trigger = ["commit"]
+detector = { type = "file_age", min_years = 5 }
+repeatable = true
+cooldown_hours = 168
+hint = "Some files have not seen daylight in a very long time."
+fallback = "You modified a file nobody has touched in over five years. You are now legally responsible for it."
+flavor = { type = "llm", prompt = "Rewrite this achievement announcement for this specific unlock, in the same voice: \"{fallback}\". Use the concrete details. Context: {context}" }

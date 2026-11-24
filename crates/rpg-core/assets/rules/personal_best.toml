@@ -1,0 +1,9 @@
+id = "personal_best"
+name = "Personal Best"
+tier = "gold"
+trigger = ["pr_merged"]
+detector = { type = "personal_record", metric = "prs_merged_per_day" }
+repeatable = true
+hint = "Beat the version of you from last time."
+fallback = "A new record for pull requests merged in one day. The previous record holder, you, has been informed and is not taking it well."
+flavor = { type = "llm", prompt = "Rewrite this achievement announcement for this specific unlock, in the same voice: \"{fallback}\". Use the concrete details. Context: {context}" }
