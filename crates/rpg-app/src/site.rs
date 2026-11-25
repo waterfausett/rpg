@@ -77,12 +77,21 @@ pub async fn serve(mut state: SiteState, port: u16) -> std::io::Result<()> {
 fn event_json(r: &EventRow) -> Value {
     let e = &r.event;
     let base = rpg_core::engine::base_label(e.kind);
-    let (base_gains, ach_gains): (Vec<_>, Vec<_>) = r.gains.iter().partition(|(reason, _)| Some(reason.as_str()) == base);
-    let achievements: Vec<Value> = ach_gains.iter().map(|(name, xp)| json!({ "name": name, "xp": xp })).collect();
+    let (base_gains, ach_gains): (Vec<_>, Vec<_>) = r.gains.iter().partition(|g| Some(g.reason.as_str()) == base);
+    let achievements: Vec<Value> = ach_gains
+        .iter()
+        .map(|g| {
+            let mut a = json!({ "name": g.reason, "xp": g.amount });
+            if let Some(t) = &g.tier {
+                a["tier"] = json!(t);
+            }
+            a
+        })
+        .collect();
     json!({
         "id": e.id, "kind": e.kind.as_str(), "ts": e.ts, "repo": e.repo,
         "backfill": e.backfill, "xp": r.xp,
-        "base_xp": base_gains.iter().map(|(_, xp)| xp).sum::<u64>(),
+        "base_xp": base_gains.iter().map(|g| g.amount).sum::<u64>(),
         "achievements": achievements,
     })
 }
@@ -365,7 +374,7 @@ globs = [\"*.md\"]
         let v = get_json(&st, "/api/events").await;
         assert_eq!(v[0]["xp"], 350, "100 base + 250 bronze");
         assert_eq!(v[0]["base_xp"], 100);
-        assert_eq!(v[0]["achievements"], json!([{ "name": "Merge Maestro", "xp": 250 }]));
+        assert_eq!(v[0]["achievements"], json!([{ "name": "Merge Maestro", "xp": 250, "tier": "bronze" }]));
     }
 
     #[tokio::test]
@@ -674,6 +683,33 @@ fallback = "A skill, levelled."
         let pat = format!("--{name}:");
         let rest = &css[css.find(&pat)? + pat.len()..];
         Some(rest[..rest.find(';')?].trim())
+    }
+
+    #[test]
+    fn sheet_has_crest_header_and_no_inline_styles() {
+        let html = include_str!("../../../ui/site/index.html");
+        for needle in ["class=\"crest\"", "id=\"xptotal\"", "class=\"pill\""] {
+            assert!(html.contains(needle), "index.html lacks {needle}");
+        }
+        assert!(!html.contains("style="), "inline style attributes are blocked by the CSP");
+    }
+
+    #[test]
+    fn event_log_uses_chips_for_every_kind() {
+        let html = include_str!("../../../ui/site/index.html");
+        assert!(!html.contains("<select"), "the kind dropdown should be chips now");
+        for kind in ["", "commit", "push", "pr_opened", "pr_merged", "review_submitted", "claude_session_start", "claude_session_end"] {
+            assert!(html.contains(&format!("data-kind=\"{kind}\"")), "no chip for {kind:?}");
+        }
+    }
+
+    #[test]
+    fn event_rows_fit_large_exp() {
+        // "+12,345 exp" must be formatted and must widen the exp column for every row, not spill.
+        let js = include_str!("../../../ui/site/site.js");
+        assert!(js.contains("\"+\" + num(base) + \" exp\""), "base exp is not formatted");
+        assert!(js.contains("\" +\" + num(a.xp)"), "achievement exp is not formatted");
+        assert!(SITE_CSS.contains("grid-template-columns: subgrid"), "event rows don't share column widths");
     }
 
     #[test]

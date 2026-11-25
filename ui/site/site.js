@@ -25,25 +25,43 @@
     return Math.floor(s / 86400) + "d ago";
   }
 
+  const num = (n) => (typeof n === "number" ? n.toLocaleString() : String(n));
+
   // Last path segment: "C:/Users/me/rpg" and "octo/rpg" both show as "rpg".
   function repoName(repo) {
     const parts = (repo || "").split(/[\\/]+/).filter(Boolean);
     return parts.length ? parts[parts.length - 1] : (repo || "");
   }
 
+  // Rank order, lowest first. Tier strings come from the server; only these ever reach CSS.
+  const TIERS = ["bronze", "silver", "gold", "platinum", "legendary", "celestial"];
+  const tierVar = (t) => (TIERS.includes(t) ? "var(--" + t + ")" : "var(--gold)");
+
+  // The highest known tier among an event's achievements; gold when none is known, null for none.
+  function rowTier(achs) {
+    if (!achs.length) return null;
+    const ranks = achs.map((a) => TIERS.indexOf(a.tier)).filter((i) => i >= 0);
+    return ranks.length ? TIERS[Math.max(...ranks)] : "gold";
+  }
+
   function eventRow(ev) {
     const li = el("li");
     const achs = ev.achievements || [];
-    if (achs.length) li.classList.add("has-ach");
+    const top = rowTier(achs);
+    if (top) {
+      li.classList.add("has-ach");
+      li.style.setProperty("--tier", tierVar(top));
+    }
     // Base exp here; achievement exp rides on its own badge, so the row adds up to ev.xp.
     const base = ev.base_xp !== undefined ? ev.base_xp : ev.xp;
-    const xp = el("span", "xp" + (base ? "" : " zero"), base ? "+" + base + " exp" : achs.length ? "" : "no exp");
-    xp.title = "Total: " + ev.xp + " exp";
+    const xp = el("span", "xp" + (base ? "" : " zero"), base ? "+" + num(base) + " exp" : achs.length ? "" : "no exp");
+    xp.title = "Total: " + num(ev.xp) + " exp";
     li.appendChild(xp);
     const kind = el("span", "kind", ev.kind + (ev.backfill ? " (history)" : ""));
     achs.forEach((a) => {
-      const b = el("span", "achbadge", "★ " + a.name + " +" + a.xp);
-      b.title = "Achievement: " + a.name + " (+" + a.xp + " exp)";
+      const b = el("span", "achbadge", "★ " + a.name + " +" + num(a.xp));
+      b.style.setProperty("--tier", tierVar(a.tier));
+      b.title = "Achievement: " + a.name + " (+" + num(a.xp) + " exp)";
       kind.appendChild(b);
     });
     li.appendChild(kind);
@@ -73,10 +91,12 @@
   async function loadCharacter() {
     const c = await api("/api/character");
     $("level").textContent = c.level;
+    $("crest").classList.toggle("wide", String(c.level).length >= 3);
     const pct = c.level_span ? Math.min(100, (c.into_level / c.level_span) * 100) : 0;
     $("xpfill").style.width = pct + "%";
     $("xptext").textContent = c.into_level.toLocaleString() + " / " + c.level_span.toLocaleString() +
-      " exp (" + c.total_xp.toLocaleString() + " total)";
+      " exp to level " + (c.level + 1);
+    $("xptotal").textContent = c.total_xp.toLocaleString() + " total";
     const totals = $("totals");
     totals.replaceChildren();
     TOTAL_LABELS.forEach(([k, label]) => {
@@ -115,7 +135,6 @@
   }
 
   const cap = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : "");
-  const num = (n) => (typeof n === "number" ? n.toLocaleString() : String(n));
 
   // A ladder's bar runs toward its next locked step: "Silver · 412 / 1,000".
   function ladderProgress(a) {
@@ -148,7 +167,7 @@
     const list = data.achievements || [];
     const hidden = data.hidden_remaining || 0;
     const got = list.filter((a) => a.unlocked).length;
-    $("achcount").textContent = "(" + got + "/" + (list.length + hidden) + ")";
+    $("achcount").textContent = got + "/" + (list.length + hidden);
     const grid = $("achievements");
     grid.replaceChildren();
     if (!list.length && !hidden) grid.appendChild(el("p", "empty", "No achievement rules loaded."));
@@ -170,9 +189,13 @@
     left.textContent = hidden === 1 ? "1 hidden achievement remains" : hidden + " hidden achievements remain";
   }
 
+  let currentKind = "";
+
   async function loadEvents() {
-    const kind = $("kind").value;
+    const kind = currentKind;
     const rows = await api("/api/events?limit=200" + (kind ? "&kind=" + encodeURIComponent(kind) : ""));
+    // A refresh started before the last chip click can land after it; drop its stale rows.
+    if (kind !== currentKind) return;
     fill($("eventlog"), rows, "No events.");
   }
 
@@ -194,7 +217,14 @@
   }
 
   document.querySelectorAll(".tabs button").forEach((b) => b.addEventListener("click", () => show(b.dataset.tab)));
-  $("kind").addEventListener("change", loadEvents);
+  document.querySelectorAll("#kinds .chip").forEach((c) => c.addEventListener("click", () => {
+    currentKind = c.dataset.kind;
+    document.querySelectorAll("#kinds .chip").forEach((o) => {
+      o.classList.toggle("on", o === c);
+      o.setAttribute("aria-pressed", String(o === c));
+    });
+    loadEvents().catch((e) => console.error(e));
+  }));
   loadAchievements().catch(() => {});
   refresh();
   setInterval(refresh, 5000);

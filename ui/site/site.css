@@ -1,4 +1,4 @@
-/* Gold Banner palette: #140e00 / #4a3500 / #ffc83d / #fff3cf */
+/* Refined Gold. Gold Banner palette: #140e00 / #4a3500 / #ffc83d / #fff3cf */
 :root {
   --bg: #140e00;
   --panel: #1d1500;
@@ -6,6 +6,8 @@
   --gold: #ffc83d;
   --text: #fff3cf;
   --dim: rgba(255, 243, 207, 0.62);
+  --line: rgba(255, 200, 61, 0.14);
+  --well: #0b0700;
   /* Tier palette. Keep in sync with ui/overlay/overlay.css (a test in site.rs checks). */
   --bronze: #cd7f32;
   --silver: #c0c8d0;
@@ -16,59 +18,113 @@
 * { box-sizing: border-box; }
 body {
   margin: 0; min-height: 100vh; color: var(--text);
-  background: radial-gradient(circle at 50% 0%, var(--glow), var(--bg) 70%) fixed, var(--bg);
+  background: radial-gradient(ellipse 90% 420px at 50% 0%, #3a2a00, var(--bg) 70%) no-repeat, var(--bg);
   font: 15px/1.5 system-ui, sans-serif;
 }
-.bar {
-  display: grid; grid-template-columns: auto auto 1fr auto; gap: 16px; align-items: center;
-  padding: 16px 24px; border-bottom: 2px solid var(--gold); font-family: Georgia, serif;
+.bar, .tabs, main { max-width: 980px; }
+
+/* ---- Header: level crest beside name and XP ---- */
+.bar { display: flex; gap: 20px; align-items: center; padding: 22px 24px 18px; }
+.crest {
+  flex: none; width: 76px; height: 76px; border-radius: 50%; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; text-align: center;
+  background: radial-gradient(circle at 50% 35%, #5a4200, var(--panel));
+  border: 2px solid var(--gold);
+  box-shadow: 0 0 0 4px var(--bg), 0 0 0 5px rgba(255, 200, 61, .35), 0 0 24px rgba(255, 200, 61, .35);
 }
-.lvl { color: var(--gold); font-size: 22px; font-weight: 700; text-shadow: 0 0 12px var(--gold); }
-.xpbar { height: 14px; border: 1px solid var(--gold); border-radius: 8px; background: #0b0700; overflow: hidden; }
-.xpfill { height: 100%; width: 0; background: linear-gradient(90deg, #b8860b, var(--gold)); transition: width .4s; }
-.xptext { font: 13px system-ui, sans-serif; color: var(--gold); white-space: nowrap; }
-.tabs { display: flex; gap: 4px; padding: 12px 24px 0; border-bottom: 1px solid var(--glow); }
+.crest b { font: 700 30px/1 Georgia, serif; color: var(--gold); text-shadow: 0 0 12px rgba(255, 200, 61, .6); }
+.crest.wide b { font-size: 22px; }
+.crest small { margin-top: 3px; font-size: 9px; letter-spacing: .25em; text-transform: uppercase; color: var(--dim); }
+.who { flex: 1; min-width: 0; }
+.who .cls { font-size: 11px; letter-spacing: .22em; text-transform: uppercase; color: var(--dim); }
+.who .nm { font: 700 22px/1.2 Georgia, serif; letter-spacing: .02em; }
+.xpbar { margin-top: 10px; height: 12px; border-radius: 7px; background: var(--well); overflow: hidden;
+         box-shadow: inset 0 1px 3px #000, 0 0 0 1px var(--line); }
+.xpfill { height: 100%; width: 0; border-radius: 7px; transition: width .4s;
+          background: linear-gradient(90deg, #8a6200, var(--gold) 85%, #fff0b0); box-shadow: 0 0 10px rgba(255, 200, 61, .6); }
+.xpline { display: flex; justify-content: space-between; gap: 12px; margin-top: 5px; font-size: 13px; color: var(--dim);
+          font-variant-numeric: tabular-nums; }
+#xptext { color: var(--gold); }
+
+/* ---- Tabs: underline style ---- */
+.tabs { display: flex; gap: 28px; margin: 0 24px; border-bottom: 1px solid var(--line); }
 .tabs button {
-  background: none; border: 1px solid transparent; border-bottom: 0; border-radius: 8px 8px 0 0;
-  color: var(--dim); padding: 8px 16px; font: inherit; cursor: pointer;
+  background: none; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px; padding: 10px 0;
+  color: var(--dim); font: inherit; font-size: 14px; letter-spacing: .06em; cursor: pointer;
 }
 .tabs button:hover { color: var(--text); }
-.tabs button.active { color: var(--gold); border-color: var(--glow); background: var(--panel); }
-main { padding: 20px 24px; max-width: 980px; }
-h2 { font: 700 12px Georgia, serif; letter-spacing: .3em; text-transform: uppercase; color: var(--gold); margin: 20px 0 8px; }
+.tabs button.active { color: var(--gold); border-bottom-color: var(--gold); }
+.tabs button:focus-visible { outline: 1px solid var(--gold); outline-offset: 4px; }
+.pill { display: inline-block; margin-left: 4px; padding: 0 7px; border-radius: 9px; font-size: 11px; vertical-align: 1px;
+        background: rgba(255, 200, 61, .12); color: var(--gold); font-variant-numeric: tabular-nums; }
+.pill:empty { display: none; }
+
+main { padding: 22px 24px 40px; }
+h2 { display: flex; align-items: center; gap: 12px; font: 700 12px Georgia, serif; letter-spacing: .35em;
+     text-transform: uppercase; color: var(--gold); margin: 26px 0 10px; }
+h2::after { content: ""; flex: 1; height: 1px; background: linear-gradient(90deg, var(--line), transparent); }
 h2:first-child { margin-top: 0; }
-.totals { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; }
-.stat { background: var(--panel); border: 1px solid var(--glow); border-radius: 8px; padding: 10px 12px; }
-.stat b { display: block; font: 700 24px Georgia, serif; color: var(--gold); }
-.stat span { color: var(--dim); font-size: 12px; }
-.skills { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
-.skills li { display: grid; grid-template-columns: minmax(120px, 200px) 56px 1fr 90px; gap: 12px; align-items: center;
-             background: var(--panel); border: 1px solid var(--glow); border-radius: 8px; padding: 6px 12px; }
-.skills li.empty { display: block; background: none; border: 0; padding: 0; }
-.skills .sname { font: 700 15px Georgia, serif; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.skills .slvl { color: var(--gold); font-weight: 700; }
-.skills .sbar { height: 8px; border: 1px solid var(--glow); border-radius: 5px; background: #0b0700; overflow: hidden; }
-.skills .sfill { height: 100%; width: 0; background: linear-gradient(90deg, #b8860b, var(--gold)); }
-.skills .sxp { color: var(--dim); font-size: 13px; text-align: right; white-space: nowrap; }
-.list { list-style: none; margin: 0; padding: 0; }
-.list li { display: flex; gap: 12px; padding: 7px 0; border-bottom: 1px solid #2a1f00; }
-.list .xp { color: var(--gold); min-width: 70px; font-weight: 600; }
+
+/* ---- Totals ---- */
+.totals { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
+.stat { background: linear-gradient(180deg, #241a00, var(--panel)); border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; }
+.stat b { display: block; font: 700 26px/1.2 Georgia, serif; color: var(--gold); font-variant-numeric: tabular-nums; }
+.stat span { color: var(--dim); font-size: 12px; letter-spacing: .04em; }
+
+/* ---- Thin progress bar; --fill recolors it ---- */
+.skills .sbar, .ach .abar { height: 6px; border-radius: 4px; background: var(--well); overflow: hidden; box-shadow: 0 0 0 1px var(--line); }
+.skills .sfill, .ach .afill { --fill: var(--gold); height: 100%; width: 0; border-radius: 4px;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--fill) 55%, #000), var(--fill)); }
+
+/* ---- Skills ---- */
+.skills { list-style: none; margin: 0; padding: 0; }
+.skills li { display: grid; grid-template-columns: minmax(120px, 200px) 52px 1fr 96px; gap: 14px; align-items: center;
+             padding: 8px 2px; border-bottom: 1px solid var(--line); }
+.skills li.empty { display: block; border: 0; padding: 0; }
+.skills .sname { min-width: 0; font: 600 15px Georgia, serif; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.skills .slvl { color: var(--gold); font-weight: 700; font-size: 13px; }
+.skills .sxp { color: var(--dim); font-size: 13px; text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+/* ---- Event rows (Recent and Event log). An achievement row takes its highest tier via --tier ---- */
+/* Rows share the list's columns (subgrid), so a wide "+12,345 exp" widens the column for every row. */
+.list { list-style: none; margin: 0; padding: 0; display: grid; column-gap: 12px;
+        grid-template-columns: minmax(64px, max-content) minmax(0, 1fr) minmax(0, 28%) max-content; }
+.list li { grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; align-items: center;
+           padding: 8px 8px; border-bottom: 1px solid var(--line); border-left: 2px solid transparent; }
+.list li.empty { display: block; grid-column: 1 / -1; border: 0; padding: 0; }
+.list .xp { color: var(--gold); font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .list .xp.zero { color: var(--dim); font-weight: 400; }
-.list .kind { min-width: 150px; }
-.list .repo { color: var(--dim); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.list li.has-ach { background: linear-gradient(90deg, var(--glow), transparent 60%); }
-.list .achbadge { display: inline-block; margin-left: 8px; padding: 0 6px; border: 1px solid var(--gold); border-radius: 4px; color: var(--gold); font-size: 12px; white-space: nowrap; }
-.list .when { color: var(--dim); font-size: 13px; white-space: nowrap; }
+.list .kind { min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; overflow-wrap: anywhere; }
+.list .repo { color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.list .when { color: var(--dim); font-size: 13px; text-align: right; white-space: nowrap; }
+.list li.has-ach { --tier: var(--gold); border-left-color: var(--tier);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--tier) 14%, transparent), transparent 70%); }
+.list .achbadge { --tier: var(--gold); display: inline-block; max-width: 100%; padding: 0 8px; border-radius: 10px; font-size: 12px;
+  color: var(--tier); border: 1px solid color-mix(in srgb, var(--tier) 60%, transparent);
+  background: color-mix(in srgb, var(--tier) 10%, transparent); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---- Event log kind chips ---- */
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+.chip { font: inherit; font-size: 12px; padding: 2px 12px; border-radius: 12px; cursor: pointer;
+        background: none; border: 1px solid var(--line); color: var(--dim); }
+.chip:hover { color: var(--text); border-color: rgba(255, 200, 61, .4); }
+.chip.on { background: var(--gold); border-color: var(--gold); color: var(--bg); font-weight: 600; }
+.chip:focus-visible { outline: 1px solid var(--gold); outline-offset: 2px; }
+
 .empty { color: var(--dim); font-style: italic; }
-.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
-.ach { background: var(--panel); border: 1px solid var(--glow); border-radius: 10px; padding: 14px; }
-.ach.unlocked { --tier: var(--gold); border: 2px solid var(--tier); background: radial-gradient(circle at 50% 0%, var(--glow), var(--panel) 80%);
-                box-shadow: 0 0 12px color-mix(in srgb, var(--tier) 35%, transparent); }
+/* ---- Achievement cards. --tier drives border, tint, glow, name glow, label and ladder bar ---- */
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 1fr)); gap: 12px; }
+.ach { --tier: #6b5a33; position: relative; min-width: 0; overflow-wrap: anywhere;
+       background: var(--panel); border: 1px dashed color-mix(in srgb, var(--tier) 80%, transparent); border-radius: 10px; padding: 14px 16px; }
+.ach.unlocked { --tier: var(--gold); border: 1px solid color-mix(in srgb, var(--tier) 60%, transparent);
+  background: radial-gradient(ellipse at 50% 0%, color-mix(in srgb, var(--tier) 16%, transparent), var(--panel) 75%);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--tier) 22%, transparent), inset 0 1px 0 color-mix(in srgb, var(--tier) 30%, transparent); }
 .ach.t-bronze { --tier: var(--bronze); } .ach.t-silver { --tier: var(--silver); } .ach.t-gold { --tier: var(--gold); }
 .ach.t-platinum { --tier: var(--platinum); } .ach.t-legendary { --tier: var(--legendary); } .ach.t-celestial { --tier: var(--celestial); }
-.ach:is(.t-platinum, .t-legendary, .t-celestial) { box-shadow: 0 0 18px color-mix(in srgb, var(--tier) 55%, transparent); }
+.ach:is(.t-platinum, .t-legendary, .t-celestial) {
+  box-shadow: 0 0 18px color-mix(in srgb, var(--tier) 55%, transparent), inset 0 1px 0 color-mix(in srgb, var(--tier) 40%, transparent); }
 /* Legendary and Celestial cards: a slow, endless light sweep and a star on the tier label. */
-.ach:is(.t-legendary, .t-celestial) { position: relative; overflow: hidden; }
+.ach:is(.t-legendary, .t-celestial) { overflow: hidden; }
 .ach:is(.t-legendary, .t-celestial)::after { content: ""; position: absolute; inset: 0; pointer-events: none;
   background: linear-gradient(105deg, transparent 35%, rgba(255, 255, 255, .14) 50%, transparent 65%);
   transform: translateX(-100%); animation: card-sweep 6s ease-in-out infinite; }
@@ -76,24 +132,30 @@ h2:first-child { margin-top: 0; }
 @keyframes card-sweep { 0%, 60% { transform: translateX(-100%); } 100% { transform: translateX(100%); } }
 @media (prefers-reduced-motion: reduce) { .ach:is(.t-legendary, .t-celestial)::after { animation: none; opacity: 0; } }
 .ach.locked { opacity: .65; }
-.ach .off { font-size: 10px; letter-spacing: .2em; text-transform: uppercase; opacity: .6; border: 1px solid currentColor; border-radius: 4px; padding: 0 5px; }
-.ach .tier { font-size: 11px; letter-spacing: .25em; text-transform: uppercase; }
-.ach .tier.bronze { color: var(--bronze); } .ach .tier.silver { color: var(--silver); } .ach .tier.gold { color: var(--gold); }
-.ach .tier.platinum { color: var(--platinum); text-shadow: 0 0 8px var(--platinum); }
-.ach .tier.legendary { color: var(--legendary); text-shadow: 0 0 8px var(--legendary); }
-.ach .tier.celestial { color: var(--celestial); text-shadow: 0 0 8px var(--celestial); }
-.ach .aprog { margin-top: 10px; }
-.ach .abar { height: 8px; border: 1px solid var(--glow); border-radius: 5px; background: #0b0700; overflow: hidden; }
-.ach .afill { height: 100%; width: 0; background: linear-gradient(90deg, #b8860b, var(--gold)); }
-.ach .atext { margin-top: 4px; font-size: 12px; color: var(--dim); }
-.hiddenleft { margin-top: 14px; color: var(--dim); font-style: italic; }
-.ach .name { font: 700 18px Georgia, serif; margin: 4px 0; }
-.ach.unlocked .name { text-shadow: 0 0 10px var(--tier); }
+.ach .off { position: absolute; top: 10px; right: 10px; font-size: 9px; letter-spacing: .2em; text-transform: uppercase;
+            color: var(--dim); border: 1px solid currentColor; border-radius: 4px; padding: 0 5px; }
+.ach .tier { font-size: 10px; letter-spacing: .3em; text-transform: uppercase; color: var(--dim); }
+.ach.unlocked .tier { color: var(--tier); }
+.ach.unlocked .tier:is(.platinum, .legendary, .celestial) { text-shadow: 0 0 8px var(--tier); }
+.ach .name { font: 700 18px/1.3 Georgia, serif; margin: 3px 0 4px; }
+.ach.unlocked .name { text-shadow: 0 0 10px color-mix(in srgb, var(--tier) 70%, transparent); }
 .ach .desc { font: italic 13px Georgia, serif; color: var(--dim); }
-.ach .meta { margin-top: 8px; font-size: 12px; color: var(--gold); }
-.filter { display: inline-block; margin-bottom: 12px; color: var(--dim); }
-select { background: var(--panel); color: var(--text); border: 1px solid var(--glow); border-radius: 6px; padding: 4px 8px; margin-left: 8px; font: inherit; }
+.ach .aprog { margin-top: 12px; }
+.ach.unlocked .afill { --fill: var(--tier); }
+.ach .atext { margin-top: 4px; font-size: 12px; color: var(--dim); font-variant-numeric: tabular-nums; }
+.ach .meta { margin-top: 10px; font-size: 12px; color: var(--tier); }
+.hiddenleft { margin: 18px 0 0; text-align: center; color: var(--dim); font: italic 14px Georgia, serif; }
+.hiddenleft::before, .hiddenleft::after { content: "\2726"; margin: 0 10px; color: var(--gold); opacity: .5; font-style: normal; }
 @media (max-width: 640px) {
-  .bar { grid-template-columns: 1fr 1fr; } .xpbar { grid-column: 1 / -1; }
-  .skills li { grid-template-columns: 1fr auto auto; } .skills .sbar { grid-column: 1 / -1; grid-row: 2; }
+  .bar { padding: 18px 16px 14px; gap: 14px; }
+  .crest { width: 64px; height: 64px; } .crest b { font-size: 26px; } .crest.wide b { font-size: 19px; }
+  .xpline { flex-direction: column; gap: 0; }
+  .tabs { margin: 0 16px; gap: 18px; overflow-x: auto; } .tabs button { white-space: nowrap; }
+  main { padding: 18px 16px 32px; }
+  .totals { grid-template-columns: 1fr 1fr; }
+  .list { grid-template-columns: minmax(56px, max-content) minmax(0, 1fr) max-content; column-gap: 10px; }
+  .list li { row-gap: 2px; }
+  .list .repo { grid-column: 2; grid-row: 2; font-size: 13px; }
+  .list .when { grid-column: 3; grid-row: 1; }
+  .skills li { grid-template-columns: minmax(0, 1fr) auto auto; gap: 4px 12px; } .skills .sbar { grid-column: 1 / -1; grid-row: 2; }
 }
