@@ -153,7 +153,7 @@
     grid.replaceChildren();
     if (!list.length && !hidden) grid.appendChild(el("p", "empty", "No achievement rules loaded."));
     list.forEach((a) => {
-      const card = el("div", "ach " + (a.unlocked ? "unlocked" : "locked") + (a.ladder ? " ladder" : ""));
+      const card = el("div", "ach " + (a.unlocked ? "unlocked t-" + a.tier : "locked") + (a.ladder ? " ladder" : ""));
       card.appendChild(el("div", "tier " + a.tier, a.tier));
       card.appendChild(el("div", "name", a.name));
       if (a.enabled === false) card.appendChild(el("span", "off", "off"));

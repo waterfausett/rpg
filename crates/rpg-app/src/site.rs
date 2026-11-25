@@ -694,4 +694,13 @@ fallback = "A skill, levelled."
         }
         assert!(OVERLAY_CSS.contains("prefers-reduced-motion"), "banner ignores prefers-reduced-motion");
     }
+
+    #[test]
+    fn unlocked_cards_style_every_tier() {
+        for tier in ["bronze", "silver", "gold", "platinum"] {
+            let sel = format!(".ach.t-{tier}");
+            assert!(SITE_CSS.contains(&sel), "site.css has no {sel} rule");
+        }
+        assert!(include_str!("../../../ui/site/site.js").contains("\"unlocked t-\" + a.tier"), "site.js doesn't tag unlocked cards with their tier");
+    }
 }
