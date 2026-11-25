@@ -39,7 +39,7 @@ Unknown fields are a load error, so a typo is reported rather than silently igno
 | `repeatable` | bool | no, default `false` | A single moment achievement can unlock again. Ignored by threshold counters, not allowed with `tiers`. |
 | `cooldown_hours` | integer | no | With `repeatable`: the minimum hours between unlocks. Ignored by threshold counters, not allowed with `tiers`. |
 | `flavor` | table | no, default `{ type = "static" }` | `{ type = "static" }` shows `fallback`. `{ type = "llm", prompt = "..." }` asks the configured LLM to rewrite it; `{fallback}`, `{name}` and `{context}` in the prompt are replaced. Any LLM failure falls back to `fallback`. |
-| `announce` | `"banner"` / `"toast"` | no | How the unlock is announced. Overrides the tier default. A step in `tiers` may set its own. Without one, the `[announce]` section of the config decides by tier (bronze `toast`, silver, gold and platinum `banner` by default). `[announce] all` in the config, if set, overrides this rule's `announce` and every step's and tier's setting. |
+| `announce` | `"banner"` / `"toast"` | no | How the unlock is announced. Overrides the tier default. A step in `tiers` may set its own. Without one, the `[announce]` section of the config decides by tier (bronze `toast`, silver, gold and platinum `banner` by default). The first time an achievement unlocks (for a ladder, its first step), it is a banner whatever this says: that's when it's news. Later unlocks use this setting. `[announce] first_banner = false` in the config turns that off. `[announce] all` in the config, if set, overrides this rule's `announce`, every step's and tier's setting, and the first-time banner. Achievements unlocked before the first-time banner existed already count as unlocked, so they don't get one. |
 | `hidden` | bool | no, default `false` | Not listed on the character sheet until earned (no "???" row). |
 | `share_text` | bool | no, default `false` | Allows the commit message or PR title into the LLM flavor context. Otherwise they stay in the local database only. |
 | `enabled` | bool | no, default `true` | `enabled = false` turns a rule off without deleting its file. The rule still loads and is validated, and the site lists it with an "off" badge, but the engine never evaluates it (meta and skill-level rules included). Turn it back on and a threshold ladder catches up on the next matching event. |
@@ -287,7 +287,7 @@ A single achievement sets `tier` (and `xp` to override the default). A series se
 | `tier` | tier | yes | Each tier at most once per ladder, so a ladder has at most four steps. |
 | `at` | integer | yes | The threshold. Must be strictly increasing from step to step. |
 | `xp` | integer | no | Defaults to the tier's XP. |
-| `announce` | `"banner"` / `"toast"` | no | Overrides the rule's `announce` for this step. |
+| `announce` | `"banner"` / `"toast"` | no | Overrides the rule's `announce` for this step. The ladder's first unlocked step is a banner anyway, unless `[announce] first_banner = false` (see `announce` above). |
 
 Each step is its own unlock, shown as e.g. "Committed (Silver)". One event can cross more than one step; each crossed step unlocks.
 

@@ -527,6 +527,40 @@ mod tests {
         assert!(bs[3].text.starts_with("…and 2 more"), "{}", bs[3].text);
     }
 
+    /// A new user's first event can unlock many achievements at once. Their first-time
+    /// banners (`[announce] first_banner`) still collapse into one storm.
+    #[test]
+    fn many_first_time_banners_collapse_to_storm() {
+        let rules = rpg_core::rules::Rules {
+            list: (1..=5)
+                .map(|i| {
+                    rpg_core::rules::parse_rule(&format!(
+                        "id=\"r{i}\"\nname=\"R{i}\"\ntier=\"bronze\"\nfallback=\"f\"\ntrigger=[\"commit\"]\nannounce=\"toast\"\nrepeatable=true"
+                    ))
+                    .unwrap()
+                })
+                .collect(),
+            ..Default::default()
+        };
+        let store = rpg_core::store::Store::open_in_memory().unwrap();
+        let cfg = rpg_core::config::Config::default();
+        let tz = chrono::FixedOffset::east_opt(0).unwrap();
+        let run = |secs| {
+            let e = ev(secs);
+            let o = rpg_core::engine::process(&store, &rules, &cfg, &e, &[], tz).unwrap();
+            vec![(e, o)]
+        };
+        let mut p = Presenter::new();
+        p.push(&run(0), false);
+        let not_level_up = |bs: Vec<Banner>| bs.into_iter().filter(|b| b.kind != BannerKind::LevelUp).collect::<Vec<_>>();
+        let bs = not_level_up(drain(&mut p));
+        assert_eq!(bs.len(), 4, "3 biggest and a summary");
+        assert_eq!(bs[3].title, STORM_TITLE);
+        // The same five again are repeats: toasts, no banners.
+        p.push(&run(60), false);
+        assert!(not_level_up(drain(&mut p)).is_empty());
+    }
+
     #[test]
     fn small_live_batch_not_collapsed() {
         let mut p = Presenter::new();

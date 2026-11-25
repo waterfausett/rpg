@@ -365,6 +365,17 @@ impl Store {
         Ok(n as u32)
     }
 
+    /// Whether rule `id` has any stored unlock: `<id>` itself or one of its steps
+    /// (`<id>.<tier>`, `<id>.<skill_id>.<tier>`).
+    pub fn rule_ever_unlocked(&self, id: &str) -> Result<bool> {
+        let n: i64 = self.conn().query_row(
+            "SELECT COUNT(*) FROM unlocks WHERE rule_id=?1 OR substr(rule_id, 1, length(?1) + 1) = ?1 || '.'",
+            params![id],
+            |r| r.get(0),
+        )?;
+        Ok(n > 0)
+    }
+
     /// How many times each stored `rule_id` was unlocked, ordered by `rule_id`.
     pub fn unlock_counts(&self) -> Result<Vec<(String, u32)>> {
         let conn = self.conn();
@@ -487,6 +498,19 @@ mod tests {
         }
         let want: Vec<(String, u32)> = vec![("a.bronze".into(), 1), ("a.silver".into(), 1), ("b".into(), 2)];
         assert_eq!(s.unlock_counts().unwrap(), want);
+    }
+
+    #[test]
+    fn rule_ever_unlocked_matches_id_and_steps_only() {
+        let s = Store::open_in_memory().unwrap();
+        assert!(!s.rule_ever_unlocked("lad").unwrap());
+        for id in ["lad_x", "ladder.bronze", "sm.rust.bronze"] {
+            s.insert_unlock(&nu(id, Utc::now())).unwrap();
+        }
+        assert!(!s.rule_ever_unlocked("lad").unwrap(), "prefixes of other ids don't count");
+        assert!(s.rule_ever_unlocked("ladder").unwrap());
+        assert!(s.rule_ever_unlocked("sm").unwrap());
+        assert!(s.rule_ever_unlocked("lad_x").unwrap());
     }
 
     #[test]

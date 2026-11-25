@@ -28,7 +28,9 @@ volume = 0.8
 
 # How an unlock is announced when its rule doesn't say: "banner" or "toast" (a small pop-up, no sound).
 [announce]
-# all = "banner"   # or "toast". Overrides the rule, step and tier settings for every achievement unlock.
+# all = "banner"   # or "toast". Overrides the rule, step and tier settings for every achievement unlock, and first_banner.
+# An achievement's first-ever unlock (for a ladder, its first step) is a banner; later unlocks use the settings below.
+first_banner = true
 bronze = "toast"
 silver = "banner"
 gold = "banner"
