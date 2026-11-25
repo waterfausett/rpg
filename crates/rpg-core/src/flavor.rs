@@ -242,6 +242,7 @@ repeatable = true
             rule_id: "r".into(),
             base_rule_id: "r".into(),
             name: "Night Owl".into(),
+            title: "Night Owl".into(),
             tier: Tier::Bronze,
             xp: 5,
             announce: crate::rules::Announce::Toast,

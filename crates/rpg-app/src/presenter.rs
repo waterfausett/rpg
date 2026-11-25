@@ -281,7 +281,7 @@ fn achievement(ev: &Event, u: &Unlock) -> Banner {
     Banner {
         kind: BannerKind::Achievement,
         title: ACHIEVEMENT_TITLE.into(),
-        name: u.name.clone(),
+        name: u.title.clone(),
         text: String::new(),
         reward: format!("+{} exp", u.xp),
         tier: Some(u.tier),
@@ -326,6 +326,7 @@ mod tests {
             rule_id: format!("rule{id}"),
             base_rule_id: format!("rule{id}"),
             name: format!("Ach {id}"),
+            title: format!("Ach {id}"),
             tier,
             xp,
             findings: serde_json::json!({}),
@@ -348,7 +349,7 @@ mod tests {
                 let o = Outcome {
                     xp_gains: vec![
                         XpGain { amount: 10, label: "commit".into(), achievement: None },
-                        XpGain { amount: u.xp, label: u.name.clone(), achievement: Some((u.tier, u.announce)) },
+                        XpGain { amount: u.xp, label: u.title.clone(), achievement: Some((u.tier, u.announce)) },
                     ],
                     unlocks: vec![u],
                     ..Default::default()
@@ -394,6 +395,15 @@ mod tests {
         p.set_dnd(true);
         p.push(&[(ev(2), Outcome { skill_level_ups: vec![skill_up("ts", 5)], ..Default::default() })], true);
         assert!(p.next_toasts().is_empty(), "DND drops skill toasts like other toasts");
+    }
+
+    #[test]
+    fn ladder_banner_name_leaves_the_tier_to_its_color() {
+        let mut p = Presenter::new();
+        let u = Unlock { name: "Ach 1 (Silver)".into(), title: "Ach 1".into(), ..unlock(1, Tier::Silver, 100) };
+        p.push(&batch(vec![u]), false);
+        let b = p.next_banner().expect("banner");
+        assert_eq!((b.name.as_str(), b.reward.as_str(), b.tier), ("Ach 1", "+100 exp", Some(Tier::Silver)));
     }
 
     #[test]

@@ -726,4 +726,10 @@ fallback = "A skill, levelled."
         let sweep = anim_after(OVERLAY_CSS, ".xp.ach[data-tier=\"Platinum\"]::after", "shimmer");
         assert!(sweep.is_some(), "Platinum toast pill has no shimmer");
     }
+
+    #[test]
+    fn banner_reward_line_leaves_the_tier_to_its_color() {
+        let js = include_str!("../../../ui/overlay/overlay.js");
+        assert!(js.contains("set(\"reward\", b.reward)"), "overlay.js should show the reward without the tier name");
+    }
 }
