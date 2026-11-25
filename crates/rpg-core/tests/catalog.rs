@@ -870,7 +870,13 @@ fn lawyered() {
     let r = starter();
     assert!(fires(&r, &[], with_files(&["src/a.rs", "LICENSE"]), "lawyered"));
     assert!(fires(&r, &[], with_files(&["vendor/x/COPYING.txt"]), "lawyered"));
+    assert!(fires(&r, &[], with_files(&["LICENSE-MIT"]), "lawyered"));
+    assert!(fires(&r, &[], with_files(&["third_party/lib/license.txt"]), "lawyered"));
+    assert!(fires(&r, &[], with_files(&["COPYING"]), "lawyered"));
     assert!(!fires(&r, &[], with_files(&["src/relicense.rs"]), "lawyered"));
+    // Source that merely starts with the word is not the license file.
+    assert!(!fires(&r, &[], with_files(&["src/license_check.rs"]), "lawyered"));
+    assert!(!fires(&r, &[], with_files(&["copyright_header.py"]), "lawyered"));
 }
 
 #[test]

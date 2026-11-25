@@ -2,7 +2,7 @@ id = "lawyered"
 name = "Lawyered"
 tier = "bronze"
 trigger = ["commit"]
-filter = { files_any = ['LICENSE*', '**/LICENSE*', 'COPYING*', '**/COPYING*'] }
+filter = { files_any = ['LICENSE', 'LICENSE.*', 'LICENSE-*', 'COPYING', 'COPYING.*', '**/LICENSE', '**/LICENSE.*', '**/LICENSE-*', '**/COPYING', '**/COPYING.*'] }
 counter = { type = "each" }
 repeatable = true
 announce = "banner"
