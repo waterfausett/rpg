@@ -6,6 +6,7 @@ The automated and scripted checks cannot see these. Do them once on your machine
 - [ ] Focus stays in the terminal: type in a terminal, commit, and keep typing while the pop-up and banner appear. No keystroke is lost and the terminal title bar stays active.
 - [ ] XP pop-up shows bottom-right on the primary display for about 3s and stacks upward on rapid commits.
 - [ ] Banner (gold, style B) shows top-center for about 8s, and **clicking it dismisses it** early.
+- [ ] While a banner shows, clicking in the glow around it (outside the banner's border) reaches the window underneath; clicking the banner itself still dismisses it.
 - [ ] Clicking in the pop-up area passes through to the window underneath.
 - [ ] Real transparency: only the pill and banner are visible, with no white or black rectangle around them.
 - [ ] No taskbar button and no Alt+Tab entry for the overlay windows. No console window flashes on commit.
@@ -20,6 +21,7 @@ The automated and scripted checks cannot see these. Do them once on your machine
 - [ ] The "While you were away" summary banner keeps the plain gold look.
 - [ ] Two banners in a row each replay their entrance (and flash or sweep).
 - [ ] With Windows **Animation effects** off (macOS: Reduce motion), a banner only fades in and out: no pop, flash or sweep.
+- [ ] A ladder step (e.g. `merge_conflict_of_interest` silver) shows the plain name on its banner and toast, with no `(Silver)` and no `· Silver` after the exp: the color tells the tier. History still lists it as `Merge Conflict of Interest (Silver)`.
 - [ ] Each tier's toast pill color matches its banner color.
 - [ ] A platinum toast pill runs one light sweep after it slides in (not with reduced motion).
 - [ ] A banner plays a sound (drop a file in `sounds/` first); **Mute sounds** silences it.
