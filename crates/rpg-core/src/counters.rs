@@ -66,7 +66,8 @@ fn moment(rule: &Rule, ctx: &EvalCtx) -> Result<Option<Value>> {
         Counter::Run { at } => {
             let history = history(ctx, |e| e.repo == ev.repo)?;
             let run = history.iter().rev().take_while(|e| rule.filter.matches(e, ctx.tz)).count();
-            (run >= *at as usize).then(|| json!({ "run": run }))
+            // Once per run: when it reaches exactly `at` (the event before it doesn't match).
+            (run == *at as usize).then(|| json!({ "run": run }))
         }
         Counter::Combo { kinds, within_minutes } => combo(ctx, kinds, *within_minutes)?,
         Counter::GapDays { min, scope } => {
@@ -395,7 +396,23 @@ mod tests {
         let other = mk(EventKind::Commit, "2026-03-01T07:00:00Z", "other", json!({ "message": "wip" }));
         assert_eq!(add(&r, &store, &other), None);
         let next = mk(EventKind::Commit, "2026-03-01T08:00:00Z", "r", json!({ "message": "wip" }));
-        assert_eq!(add(&r, &store, &next), Some(json!({ "run": 4 })));
+        assert_eq!(add(&r, &store, &next), None, "run of 4 already fired at 3");
+    }
+
+    #[test]
+    fn run_fires_once_per_run() {
+        let store = Store::open_in_memory().unwrap();
+        let r = rule("\"commit\"", "filter = { message = 'wip' }
+counter = { type = \"run\", at = 3 }");
+        let msgs = ["wip", "wip", "wip", "wip", "wip", "fix", "wip", "wip", "wip"];
+        let mut fired = vec![];
+        for (i, m) in msgs.iter().enumerate() {
+            let e = mk(EventKind::Commit, &format!("2026-03-01T{:02}:00:00Z", i + 1), "r", json!({ "message": m }));
+            if add(&r, &store, &e).is_some() {
+                fired.push(i);
+            }
+        }
+        assert_eq!(fired, vec![2, 8]);
     }
 
     fn gh(kind: EventKind, ts: &str, repo: &str) -> Event {
