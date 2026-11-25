@@ -25,7 +25,8 @@ The automated and scripted checks cannot see these. Do them once on your machine
 - [ ] Each tier's toast pill color matches its banner color.
 - [ ] A platinum toast pill runs one light sweep after it slides in (not with reduced motion).
 - [ ] A banner plays a sound (drop a file in `sounds/` first); **Mute sounds** silences it.
-- [ ] With `[sound] by_tier` mapping each tier to a different file, each tier's banner plays its own sound.
+- [ ] With files in `sounds/achievements/` and `sounds/levels/`, an achievement banner plays only from `achievements/` plus the `sounds/` root, and a level-up only from `levels/` plus the root. A file in `achievements/<tier>/` or `achievements/<rule id>/` wins for that tier or rule, unless a `by_rule` pin beats it.
+- [ ] With a different file in each `sounds/achievements/<tier>/` folder (or a `[sound] by_tier` pin per tier), each tier's banner plays its own sound.
 
 ## Tray
 - [ ] Tray icon is visible (check the overflow area) and left click opens the menu.
