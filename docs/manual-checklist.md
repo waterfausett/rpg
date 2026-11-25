@@ -13,6 +13,7 @@ The automated and scripted checks cannot see these. Do them once on your machine
 - [ ] An unlock announced as a toast (a bronze achievement by default) shows a pill `✦ <name>  +N exp` with a tier-colored border and glow, and plays no sound.
 - [ ] A platinum achievement banner shows with a pale-blue (`#cfe8ff`) glow.
 - [ ] A banner plays a sound (drop a file in `sounds/` first); **Mute sounds** silences it.
+- [ ] With files in `sounds/achievements/` and `sounds/levels/`, an achievement banner plays only from `achievements/` plus the `sounds/` root, and a level-up only from `levels/` plus the root. A file in `achievements/<tier>/` or `achievements/<rule id>/` wins for that tier or rule, unless a `by_rule` pin beats it.
 
 ## Tray
 - [ ] Tray icon is visible (check the overflow area) and left click opens the menu.
