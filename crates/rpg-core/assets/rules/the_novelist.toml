@@ -5,6 +5,8 @@ trigger = ["commit"]
 filter = { message_length = { min = 500 } }
 counter = { type = "each" }
 repeatable = true
+cooldown_hours = 24
+announce = "toast"
 hint = "Write a commit message longer than the diff deserves."
 fallback = "A commit message of five hundred characters or more. Nobody is going to read all that, but it is nice that you tried."
 flavor = { type = "llm", prompt = "Rewrite this achievement announcement for this specific unlock, in the same voice: \"{fallback}\". Use the concrete details. Context: {context}" }

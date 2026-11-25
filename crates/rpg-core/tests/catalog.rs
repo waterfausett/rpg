@@ -589,6 +589,10 @@ fn full_combo() {
     assert!(!fires(&r, &h, pr("2026-11-24T10:10:00Z", "a/other"), "full_combo"));
     // Missing the push.
     assert!(!fires(&r, &h[..1], pr("2026-11-24T10:10:00Z", "a/b"), "full_combo"));
+    // Twenty-four hour cooldown: a second combo the same day does not fire.
+    let mut twice = h.to_vec();
+    twice.extend([pr("2026-11-24T10:10:00Z", "a/b"), c("2026-11-24T15:00:00Z"), p("2026-11-24T15:05:00Z")]);
+    assert!(!fires(&r, &twice, pr("2026-11-24T15:10:00Z", "a/b"), "full_combo"));
 }
 
 fn merged(created: &str, merged_at: &str) -> Event {
@@ -636,6 +640,12 @@ fn marathon() {
     assert!(fires(&r, &[s], e, "marathon"));
     let (s, e) = session("a", "2026-11-24T08:00:00Z", 179 * 60);
     assert!(!fires(&r, &[s], e, "marathon"));
+    // Twenty-four hour cooldown: a second marathon ending 23 hours after the first does not fire.
+    let (s1, e1) = session("a", "2026-11-24T08:00:00Z", 180 * 60);
+    let (s2, e2) = session("b", "2026-11-25T07:00:00Z", 180 * 60);
+    assert!(!fires(&r, &[s1.clone(), e1.clone(), s2], e2, "marathon"));
+    let (s3, e3) = session("c", "2026-11-25T08:00:00Z", 180 * 60);
+    assert!(fires(&r, &[s1, e1, s3], e3, "marathon"));
 }
 
 #[test]
@@ -698,7 +708,11 @@ fn famous_last_words() {
     let r = starter();
     assert!(fires(&r, &[], msg("Final fix, should work now"), "famous_last_words"));
     assert!(fires(&r, &[], msg("fixed for real"), "famous_last_words"));
+    assert!(fires(&r, &[], msg("final final version"), "famous_last_words"));
     assert!(!fires(&r, &[], msg("finalize the parser"), "famous_last_words"));
+    // A bare "final" is ordinary vocabulary, not a promise.
+    assert!(!fires(&r, &[], msg("make the field final"), "famous_last_words"));
+    assert!(!fires(&r, &[], msg("final cleanup before release"), "famous_last_words"));
     // Seventy-two hour cooldown.
     let h = [msg("last fix")];
     assert!(!fires(&r, &h, commit_data("2026-11-24T12:00:00Z", json!({"message": "last fix"})), "famous_last_words"));
@@ -737,6 +751,10 @@ fn the_novelist() {
     assert!(!fires(&r, &[], msg(&"a".repeat(499)), "the_novelist"));
     // Length counts characters, not bytes: 499 two-byte chars stay under.
     assert!(!fires(&r, &[], msg(&"é".repeat(499)), "the_novelist"));
+    // Twenty-four hour cooldown.
+    let long = |ts: &str| commit_data(ts, json!({"message": "a".repeat(500)}));
+    assert!(!fires(&r, &[long(T)], long("2026-11-25T09:59:00Z"), "the_novelist"));
+    assert!(fires(&r, &[long(T)], long("2026-11-25T10:00:00Z"), "the_novelist"));
 }
 
 #[test]
@@ -831,4 +849,160 @@ fn lucky_sevens() {
     let r = starter();
     assert!(fires(&r, &[], with_hash("ab777c1234"), "lucky_sevens"));
     assert!(!fires(&r, &[], with_hash("ab77c71234"), "lucky_sevens"));
+}
+
+// ---- banner budget ----
+
+/// One workday on `day` ("YYYY-MM-DD", UTC) in two repos. `special` adds the commits a plain
+/// day lacks (a one-line change, a multi-language commit, a 500+ character message, a
+/// famous-last-words message) and makes the long Claude session run past three hours.
+fn workday(day: &str, special: bool) -> Vec<Event> {
+    let t = |hm: &str| format!("{day}T{hm}:00Z");
+    let mut out = Vec::new();
+    let repos = [("C:/work/alpha", "me/alpha", "src/lib.rs"), ("C:/work/beta", "me/beta", "web/app.ts")];
+    // 15 commits, 09:00 to 16:00 every half hour, alternating repos.
+    for i in 0..15usize {
+        let (repo, gh, file) = repos[i % 2];
+        let mut files = vec![json!({"path": file, "added": 20, "removed": 5})];
+        if i % 4 == 0 {
+            files.push(json!({"path": "tests/it.rs", "added": 10, "removed": 0}));
+        }
+        let mut message = match i % 5 {
+            0 => "Fix the parser edge case".to_string(),
+            1 => "Refactor config loading (#42)".to_string(),
+            2 => "Add retry to the poller\n\nThe GitHub API sometimes answers 502 under load, so the poller now retries\nwith backoff instead of dropping the whole cycle. Tests cover the retry path.".to_string(),
+            3 => "Tidy imports".to_string(),
+            _ => "Update docs for the new flag".to_string(),
+        };
+        if special {
+            match i {
+                3 => {
+                    files = vec![json!({"path": file, "added": 1, "removed": 0})];
+                    message = "Fix off-by-one".into();
+                }
+                5 => {
+                    files = ["src/a.rs", "web/b.ts", "tools/c.py", "Cargo.toml"]
+                        .iter()
+                        .map(|p| json!({"path": p, "added": 5, "removed": 1}))
+                        .collect();
+                }
+                7 => message = format!("Rework the event store\n\n{}", "Long explanation of the change. ".repeat(17)),
+                9 => message = "Final fix for the flaky timeout test".into(),
+                _ => {}
+            }
+        }
+        let added: u64 = files.iter().map(|f| f["added"].as_u64().unwrap()).sum();
+        let removed: u64 = files.iter().map(|f| f["removed"].as_u64().unwrap()).sum();
+        let ts = format!("{day}T{:02}:{:02}:00Z", 9 + i / 2, (i % 2) * 30);
+        let mut e = ev(
+            EventKind::Commit,
+            &ts,
+            json!({
+                "message": message,
+                "hash": format!("a1b2c3d4e5{i:02}{}", day.replace('-', "")),
+                "branch": format!("feature/{}", i % 3),
+                "files": files,
+                "lines_added": added,
+                "lines_removed": removed,
+                "github_repo": gh,
+            }),
+        );
+        e.repo = Some(repo.into());
+        out.push(e);
+    }
+    // Two pushes; the second follows the 14:30 commit in beta, and a beta PR follows within 15 minutes.
+    for (hm, (repo, gh, _)) in [("10:20", repos[0]), ("14:35", repos[1])] {
+        let mut e = ev(EventKind::Push, &t(hm), json!({"branch": "feature/1", "remote": "origin", "github_repo": gh}));
+        e.repo = Some(repo.into());
+        out.push(e);
+    }
+    let gh_ev = |kind: EventKind, hm: &str, repo: &str, data: Value| {
+        let mut e = ev(kind, &t(hm), data);
+        e.repo = Some(repo.into());
+        e
+    };
+    let pr = |n: u32, title: &str| json!({"number": n, "title": title, "additions": 120, "deletions": 30, "created_at": t("09:00")});
+    out.push(gh_ev(EventKind::PrOpened, "11:40", "me/alpha", pr(1, "Retry the poller")));
+    out.push(gh_ev(EventKind::PrOpened, "14:45", "me/beta", pr(2, "Add the settings page")));
+    let mut merged = pr(3, "Parser fixes");
+    merged["merged_at"] = json!(t("15:30"));
+    out.push(gh_ev(EventKind::PrMerged, "15:30", "me/alpha", merged));
+    for hm in ["11:00", "13:00", "16:30"] {
+        out.push(gh_ev(EventKind::ReviewSubmitted, hm, "other/lib", json!({"url": "https://github.com/other/lib/pull/9"})));
+    }
+    // 12 Claude sessions starting every 40 minutes from 09:05, 25 minutes each (so some
+    // overlap), except the first, which runs long.
+    for i in 0..12i64 {
+        let sid = format!("{day}-s{i}");
+        let mut start = ev(EventKind::ClaudeSessionStart, &t("09:05"), json!({"session_id": sid}));
+        start.ts += Duration::minutes(40 * i);
+        let minutes = match i {
+            0 if special => 200,
+            0 => 120,
+            _ => 25,
+        };
+        let mut end = ev(EventKind::ClaudeSessionEnd, &t("09:05"), json!({"session_id": sid}));
+        end.ts = start.ts + Duration::minutes(minutes);
+        out.push(start);
+        out.push(end);
+    }
+    out.sort_by_key(|e| e.ts);
+    out
+}
+
+/// Silvers that a normal day can reach are announced with a toast, not a banner.
+#[test]
+fn routine_silvers_are_toasts() {
+    use rpg_core::rules::Announce;
+    let r = starter();
+    for id in [
+        "surgical_strike",
+        "speed_run",
+        "codependent",
+        "pair_programming",
+        "polyglot",
+        "famous_last_words",
+        "the_novelist",
+        "marathon",
+        "full_combo",
+        "hat_trick",
+        "peer_pressure",
+    ] {
+        let rule = r.list.iter().find(|x| x.id == id).unwrap_or_else(|| panic!("{id}"));
+        assert_eq!(rule.announce, Some(Announce::Toast), "{id}");
+    }
+    for id in ["full_combo", "the_novelist", "marathon"] {
+        assert_eq!(r.list.iter().find(|x| x.id == id).unwrap().cooldown_hours, Some(24), "{id}");
+    }
+}
+
+/// The spec's anti-goal: a normal workday shows at most one or two banners. A week of plain
+/// workdays comes first so first-ever and new-repo unlocks are out of the way.
+#[test]
+fn typical_day_has_at_most_two_banners() {
+    use rpg_core::rules::Announce;
+    let mut r = starter();
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/skills");
+    let (skills, errs) = rpg_core::skills::load_dir(&dir);
+    assert!(errs.is_empty(), "{errs:?}");
+    r.skills = skills;
+    let store = Store::open_in_memory().unwrap();
+    let cfg = Config::default();
+    let tz = FixedOffset::east_opt(0).unwrap();
+    for d in 17..=23 {
+        for e in workday(&format!("2026-11-{d}"), false) {
+            engine::process(&store, &r, &cfg, &e, &[], tz).unwrap();
+        }
+    }
+    let mut unlocks = Vec::new();
+    for e in workday("2026-11-24", true) {
+        let out = engine::process(&store, &r, &cfg, &e, &[], tz).unwrap();
+        unlocks.extend(out.unlocks.into_iter().map(|u| (u.rule_id, u.announce)));
+    }
+    let banners: Vec<&String> = unlocks.iter().filter(|(_, a)| *a == Announce::Banner).map(|(id, _)| id).collect();
+    assert!(banners.len() <= 2, "banners: {banners:?}\nall unlocks: {unlocks:?}");
+    // The day is not empty: the specials still unlock, as toasts.
+    for id in ["surgical_strike", "polyglot", "the_novelist", "famous_last_words", "marathon", "full_combo", "speed_run", "codependent"] {
+        assert!(unlocks.iter().any(|(u, a)| u == id && *a == Announce::Toast), "{id} as a toast: {unlocks:?}");
+    }
 }
