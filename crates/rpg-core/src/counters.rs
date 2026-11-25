@@ -227,9 +227,8 @@ fn moment(rule: &Rule, ctx: &EvalCtx) -> Result<Option<Value>> {
         }
         Counter::Combo { kinds, within_minutes } => combo(ctx, kinds, *within_minutes)?,
         Counter::GapDays { min, scope } => {
-            let history = history(ctx, |e| *scope == Scope::Ever || e.repo == ev.repo)?;
-            // `history` ends with `ev`; the one before it is the previous matching event.
-            let prev = history.iter().rev().skip(1).find(|e| rule.filter.matches(e, ctx.tz));
+            let repo = if *scope == Scope::Repo { ev.repo.as_deref() } else { None };
+            let prev = previous_match(rule, ctx, repo, GAP_PAGE)?;
             prev.and_then(|p| {
                 let gap = ev.ts - p.ts;
                 (gap >= Duration::days(*min as i64)).then(|| json!({ "gap_days": gap.num_days(), "repo": ev.repo }))
@@ -261,6 +260,27 @@ fn moment(rule: &Rule, ctx: &EvalCtx) -> Result<Option<Value>> {
         // Threshold counters are handled in `evaluate`.
         Counter::Lifetime { .. } | Counter::StreakDays | Counter::Meta { .. } | Counter::SkillLevel => None,
     })
+}
+
+/// How many events `previous_match` reads per query.
+const GAP_PAGE: u32 = 64;
+
+/// The newest stored event of `ev.kind` (only in `repo`, if given) before `ev` that matches the
+/// rule's filter, reading back `page` events at a time instead of the whole history.
+fn previous_match(rule: &Rule, ctx: &EvalCtx, repo: Option<&str>, page: u32) -> Result<Option<Event>> {
+    let (mut ts, mut id) = (ctx.ev.ts, ctx.ev.id.clone());
+    loop {
+        let batch = ctx.store.events_before(ctx.ev.kind, repo, ts, &id, page)?;
+        let Some(last) = batch.last() else { return Ok(None) };
+        (ts, id) = (last.ts, last.id.clone());
+        let full = batch.len() as u32 == page;
+        if let Some(e) = batch.into_iter().find(|e| rule.filter.matches(e, ctx.tz)) {
+            return Ok(Some(e));
+        }
+        if !full {
+            return Ok(None);
+        }
+    }
 }
 
 /// Events of `ev.kind` that `keep` accepts, oldest first, up to and including `ev`.
@@ -894,6 +914,36 @@ counter = { type = \"run\", at = 3 }");
         assert_eq!(eval(&ever, &store, &a2), None, "B was 16 days before");
         let a3 = mk(EventKind::Commit, "2026-03-07T09:00:00Z", "A", json!({}));
         assert_eq!(add(&repo, &store, &a3), None, "29.96 days is under 30");
+    }
+
+    /// The previous matching event is found walking back in pages, past non-matching events.
+    #[test]
+    fn gap_days_previous_match_pages_back() {
+        let store = Store::open_in_memory().unwrap();
+        let r = rule("\"commit\"", "filter = { message = 'fix' }
+counter = { type = \"gap_days\", min = 30, scope = \"repo\" }");
+        let c = |ts: &str, repo: &str, msg: &str| mk(EventKind::Commit, ts, repo, json!({ "message": msg }));
+        store.insert_event(&c("2026-01-01T10:00:00Z", "A", "fix one")).unwrap();
+        for d in 2..=9 {
+            store.insert_event(&c(&format!("2026-01-0{d}T10:00:00Z"), "A", "other")).unwrap();
+        }
+        store.insert_event(&c("2026-02-01T10:00:00Z", "B", "fix in B")).unwrap();
+        let ev = c("2026-02-05T10:00:00Z", "A", "fix two");
+        store.insert_event(&ev).unwrap();
+        // Later events never count as previous.
+        store.insert_event(&c("2026-02-06T10:00:00Z", "A", "fix three")).unwrap();
+        let ctx = EvalCtx { ev: &ev, store: &store, broken: &[], file_ages: &[], tz: tz(), skill_curve: curve() };
+        for page in [1, 2, 3, 100] {
+            let p = previous_match(&r, &ctx, Some("A"), page).unwrap().map(|e| e.data["message"].clone());
+            assert_eq!(p, Some(json!("fix one")), "page {page}");
+            let p = previous_match(&r, &ctx, None, page).unwrap().map(|e| e.data["message"].clone());
+            assert_eq!(p, Some(json!("fix in B")), "page {page}");
+        }
+        assert_eq!(eval(&r, &store, &ev), Some(json!({ "gap_days": 35, "repo": "A" })));
+        // The oldest event has nothing before it.
+        let oldest = store.events_of(&[EventKind::Commit], None).unwrap().remove(0);
+        let ctx = EvalCtx { ev: &oldest, ..ctx };
+        assert!(previous_match(&r, &ctx, Some("A"), 2).unwrap().is_none());
     }
 
     #[test]

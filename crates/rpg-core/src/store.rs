@@ -259,6 +259,28 @@ impl Store {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
+    /// Up to `limit` events of `kind` (optionally only in `repo`) that sort strictly before
+    /// `(ts, id)` in `events_of` order, newest first (`ts DESC, id DESC`). Pass the last one
+    /// returned as the next `(ts, id)` to page further back.
+    pub fn events_before(
+        &self,
+        kind: EventKind,
+        repo: Option<&str>,
+        ts: DateTime<Utc>,
+        id: &str,
+        limit: u32,
+    ) -> Result<Vec<Event>> {
+        let sql = format!(
+            "SELECT {EVENT_COLS} FROM events e
+             WHERE e.kind=?1 AND (?2 IS NULL OR e.repo=?2) AND (e.ts<?3 OR (e.ts=?3 AND e.id<?4))
+             ORDER BY e.ts DESC, e.id DESC LIMIT ?5"
+        );
+        let conn = self.conn();
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(params![kind.as_str(), repo, ts_str(ts), id, limit as i64], event_from_row)?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
     pub fn add_xp(&self, event_id: &str, amount: u64, reason: &str, ts: DateTime<Utc>) -> Result<()> {
         self.conn().execute(
             "INSERT INTO xp_ledger(event_id, amount, reason, ts) VALUES(?1,?2,?3,?4)",
@@ -527,6 +549,25 @@ mod tests {
         s.set_record("m", 3.5, Utc::now()).unwrap();
         s.set_record("m", 7.0, Utc::now()).unwrap();
         assert_eq!(s.record("m").unwrap(), Some(7.0));
+    }
+
+    #[test]
+    fn events_before_pages_backwards() {
+        let s = Store::open_in_memory().unwrap();
+        let t0 = Utc::now() - Duration::days(1);
+        let at = |m: i64| t0 + Duration::minutes(m);
+        for (id, m, repo) in [("a", 0, "r"), ("b", 1, "x"), ("c", 2, "r"), ("d2", 3, "r"), ("d1", 3, "r"), ("e", 4, "r")] {
+            let mut e = ev(id, EventKind::Commit, at(m));
+            e.repo = Some(repo.into());
+            s.insert_event(&e).unwrap();
+        }
+        s.insert_event(&ev("p", EventKind::Push, at(2))).unwrap();
+        let ids = |v: Vec<Event>| v.into_iter().map(|e| e.id).collect::<Vec<_>>();
+        // Strictly before (ts, id) = (3, "d2"), newest first, ties broken by id descending.
+        assert_eq!(ids(s.events_before(EventKind::Commit, None, at(3), "d2", 10).unwrap()), ["d1", "c", "b", "a"]);
+        assert_eq!(ids(s.events_before(EventKind::Commit, None, at(3), "d2", 2).unwrap()), ["d1", "c"], "limit");
+        assert_eq!(ids(s.events_before(EventKind::Commit, Some("r"), at(3), "d2", 10).unwrap()), ["d1", "c", "a"]);
+        assert_eq!(ids(s.events_before(EventKind::Commit, None, at(0), "a", 10).unwrap()), Vec::<String>::new());
     }
 
     #[test]
