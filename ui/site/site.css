@@ -86,10 +86,12 @@ h2:first-child { margin-top: 0; }
 .skills .sxp { color: var(--dim); font-size: 13px; text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
 
 /* ---- Event rows (Recent and Event log). An achievement row takes its highest tier via --tier ---- */
-.list { list-style: none; margin: 0; padding: 0; }
-.list li { display: grid; grid-template-columns: 72px minmax(0, 1fr) minmax(0, 28%) 72px; gap: 12px; align-items: center;
+/* Rows share the list's columns (subgrid), so a wide "+12,345 exp" widens the column for every row. */
+.list { list-style: none; margin: 0; padding: 0; display: grid; column-gap: 12px;
+        grid-template-columns: minmax(64px, max-content) minmax(0, 1fr) minmax(0, 28%) max-content; }
+.list li { grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; align-items: center;
            padding: 8px 8px; border-bottom: 1px solid var(--line); border-left: 2px solid transparent; }
-.list li.empty { display: block; border: 0; padding: 0; }
+.list li.empty { display: block; grid-column: 1 / -1; border: 0; padding: 0; }
 .list .xp { color: var(--gold); font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .list .xp.zero { color: var(--dim); font-weight: 400; }
 .list .kind { min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; overflow-wrap: anywhere; }
@@ -151,7 +153,8 @@ h2:first-child { margin-top: 0; }
   .tabs { margin: 0 16px; gap: 18px; overflow-x: auto; } .tabs button { white-space: nowrap; }
   main { padding: 18px 16px 32px; }
   .totals { grid-template-columns: 1fr 1fr; }
-  .list li { grid-template-columns: 64px minmax(0, 1fr) auto; gap: 2px 10px; }
+  .list { grid-template-columns: minmax(56px, max-content) minmax(0, 1fr) max-content; column-gap: 10px; }
+  .list li { row-gap: 2px; }
   .list .repo { grid-column: 2; grid-row: 2; font-size: 13px; }
   .list .when { grid-column: 3; grid-row: 1; }
   .skills li { grid-template-columns: minmax(0, 1fr) auto auto; gap: 4px 12px; } .skills .sbar { grid-column: 1 / -1; grid-row: 2; }

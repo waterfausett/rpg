@@ -25,6 +25,8 @@
     return Math.floor(s / 86400) + "d ago";
   }
 
+  const num = (n) => (typeof n === "number" ? n.toLocaleString() : String(n));
+
   // Last path segment: "C:/Users/me/rpg" and "octo/rpg" both show as "rpg".
   function repoName(repo) {
     const parts = (repo || "").split(/[\\/]+/).filter(Boolean);
@@ -52,14 +54,14 @@
     }
     // Base exp here; achievement exp rides on its own badge, so the row adds up to ev.xp.
     const base = ev.base_xp !== undefined ? ev.base_xp : ev.xp;
-    const xp = el("span", "xp" + (base ? "" : " zero"), base ? "+" + base + " exp" : achs.length ? "" : "no exp");
-    xp.title = "Total: " + ev.xp + " exp";
+    const xp = el("span", "xp" + (base ? "" : " zero"), base ? "+" + num(base) + " exp" : achs.length ? "" : "no exp");
+    xp.title = "Total: " + num(ev.xp) + " exp";
     li.appendChild(xp);
     const kind = el("span", "kind", ev.kind + (ev.backfill ? " (history)" : ""));
     achs.forEach((a) => {
-      const b = el("span", "achbadge", "★ " + a.name + " +" + a.xp);
+      const b = el("span", "achbadge", "★ " + a.name + " +" + num(a.xp));
       b.style.setProperty("--tier", tierVar(a.tier));
-      b.title = "Achievement: " + a.name + " (+" + a.xp + " exp)";
+      b.title = "Achievement: " + a.name + " (+" + num(a.xp) + " exp)";
       kind.appendChild(b);
     });
     li.appendChild(kind);
@@ -133,7 +135,6 @@
   }
 
   const cap = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : "");
-  const num = (n) => (typeof n === "number" ? n.toLocaleString() : String(n));
 
   // A ladder's bar runs toward its next locked step: "Silver · 412 / 1,000".
   function ladderProgress(a) {

@@ -704,6 +704,15 @@ fallback = "A skill, levelled."
     }
 
     #[test]
+    fn event_rows_fit_large_exp() {
+        // "+12,345 exp" must be formatted and must widen the exp column for every row, not spill.
+        let js = include_str!("../../../ui/site/site.js");
+        assert!(js.contains("\"+\" + num(base) + \" exp\""), "base exp is not formatted");
+        assert!(js.contains("\" +\" + num(a.xp)"), "achievement exp is not formatted");
+        assert!(SITE_CSS.contains("grid-template-columns: subgrid"), "event rows don't share column widths");
+    }
+
+    #[test]
     fn tier_palette_matches_between_overlay_and_site() {
         for tier in ["bronze", "silver", "gold", "platinum", "legendary", "celestial"] {
             let (o, s) = (css_var(OVERLAY_CSS, tier), css_var(SITE_CSS, tier));
