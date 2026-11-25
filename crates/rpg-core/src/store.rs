@@ -343,6 +343,14 @@ impl Store {
         Ok(n as u32)
     }
 
+    /// How many times each stored `rule_id` was unlocked, ordered by `rule_id`.
+    pub fn unlock_counts(&self) -> Result<Vec<(String, u32)>> {
+        let conn = self.conn();
+        let mut st = conn.prepare("SELECT rule_id, COUNT(*) FROM unlocks GROUP BY rule_id ORDER BY rule_id")?;
+        let rows = st.query_map([], |r| Ok((r.get(0)?, r.get::<_, i64>(1)? as u32)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     pub fn last_unlock_at(&self, rule_id: &str) -> Result<Option<DateTime<Utc>>> {
         let s: Option<String> =
             self.conn().query_row("SELECT MAX(ts) FROM unlocks WHERE rule_id=?1", params![rule_id], |r| r.get(0))?;
@@ -445,6 +453,18 @@ mod tests {
         s.insert_event(&ev("d", EventKind::Commit, now)).unwrap();
         assert_eq!(s.count_live_events(EventKind::PrMerged).unwrap(), 2);
         assert_eq!(s.count_live_events(EventKind::ReviewSubmitted).unwrap(), 0);
+    }
+
+    #[test]
+    fn unlock_counts_per_rule_id() {
+        let s = Store::open_in_memory().unwrap();
+        assert!(s.unlock_counts().unwrap().is_empty());
+        for id in ["b", "a.silver", "b", "a.bronze"] {
+            let u = NewUnlock { rule_id: id.into(), name: id.into(), tier: "bronze".into(), xp: 0, context: serde_json::json!({}), ts: Utc::now() };
+            s.insert_unlock(&u).unwrap();
+        }
+        let want: Vec<(String, u32)> = vec![("a.bronze".into(), 1), ("a.silver".into(), 1), ("b".into(), 2)];
+        assert_eq!(s.unlock_counts().unwrap(), want);
     }
 
     #[test]

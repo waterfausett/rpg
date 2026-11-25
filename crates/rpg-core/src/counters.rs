@@ -3,12 +3,13 @@
 //! Moment counters look at the current event (and its history) and fire the rule's single
 //! step. Threshold counters compute a running value (`progress`) and unlock each step whose
 //! `at` it has reached. History scans are over events of `ev.kind` unless a counter says otherwise; the
-//! current event is already in the store when counters run.
+//! current event is already in the store when counters run. `meta` counts the player's unlocks
+//! and `skill_level` reads this event's skill level-ups.
 use crate::engine::SkillLevelUp;
 use crate::enrich::FileAge;
 use crate::event::{Event, EventKind};
 use crate::records::{local_day_bounds, metric_key, RecordBroken};
-use crate::rules::{Counter, FirstScope, Rule, Scope, Step};
+use crate::rules::{Counter, FirstScope, MetaOf, Rule, Scope, Step};
 use crate::store::Store;
 use anyhow::Result;
 use chrono::{DateTime, Datelike, Duration, FixedOffset, Months, NaiveDate, TimeZone, Utc};
@@ -49,6 +50,13 @@ pub fn evaluate(rule: &Rule, ctx: &EvalCtx) -> Result<Vec<Fired>> {
     if !rule.counter.is_threshold() {
         return Ok(moment(rule, ctx)?.map(|f| vec![fired(rule, rule.top(), f)]).unwrap_or_default());
     }
+    if rule.counter == Counter::SkillLevel {
+        return skill_level(rule, ctx);
+    }
+    // Nothing left to unlock: skip the (history-scanning) progress computation.
+    if all_unlocked(rule, ctx.store)? {
+        return Ok(Vec::new());
+    }
     let value = match &rule.counter {
         Counter::StreakDays => Some(streak_days(rule, ctx.store, ctx.tz, Some(local_date(ctx.ev.ts, ctx.tz)))?),
         _ => progress(rule, ctx.store, ctx.tz)?,
@@ -84,9 +92,64 @@ pub fn progress(rule: &Rule, store: &Store, tz: FixedOffset) -> Result<Option<u6
             })
         }
         Counter::StreakDays => Some(streak_days(rule, store, tz, None)?),
-        // `meta` arrives in Task 8; `skill_level` and moment counters have no running value.
+        Counter::Meta { of } => Some(meta(rule, store, *of)?),
+        // `skill_level` is per skill, and moment counters have no running value.
         _ => None,
     })
+}
+
+/// Every step's unlock key already has an unlock.
+fn all_unlocked(rule: &Rule, store: &Store) -> Result<bool> {
+    for step in &rule.steps {
+        if store.unlock_count(&rule.step_id(step.tier))? == 0 {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// Counts of the player's unlocks, leaving out the meta rule's own.
+///
+/// `distinct_unlocks`: distinct base rule ids (the part of the stored id before the first
+/// `.`), so each ladder or skill ladder counts once. `same_unlock`: the most times any one
+/// single (non-ladder, no `.` in its stored id) achievement was unlocked.
+fn meta(rule: &Rule, store: &Store, of: MetaOf) -> Result<u64> {
+    let counts = store.unlock_counts()?;
+    let base = |id: &str| id.split('.').next().unwrap_or(id).to_string();
+    let others = counts.iter().filter(|(id, _)| base(id) != rule.id);
+    Ok(match of {
+        MetaOf::DistinctUnlocks => others.map(|(id, _)| base(id)).collect::<BTreeSet<_>>().len() as u64,
+        MetaOf::SameUnlock => others.filter(|(id, _)| !id.contains('.')).map(|(_, n)| *n as u64).max().unwrap_or(0),
+    })
+}
+
+/// For each skill that leveled up on this event (its highest new level), every step with
+/// `at <= level` not yet unlocked, in step order. Keys are `{rule.id}.{skill_id}.{tier}`.
+fn skill_level(rule: &Rule, ctx: &EvalCtx) -> Result<Vec<Fired>> {
+    let mut levels: Vec<&SkillLevelUp> = Vec::new();
+    for up in ctx.skill_level_ups {
+        match levels.iter_mut().find(|l| l.skill_id == up.skill_id) {
+            Some(l) if l.level < up.level => *l = up,
+            Some(_) => {}
+            None => levels.push(up),
+        }
+    }
+    let mut out = Vec::new();
+    for up in levels {
+        for step in &rule.steps {
+            let Some(at) = step.at else { continue };
+            let key = format!("{}.{}.{}", rule.id, up.skill_id, step.tier.as_str());
+            if u64::from(up.level) >= at && ctx.store.unlock_count(&key)? == 0 {
+                out.push(Fired {
+                    unlock_key: key,
+                    name: format!("{}: {} ({})", rule.name, up.name, step.tier.label()),
+                    step: step.clone(),
+                    findings: json!({ "skill_id": up.skill_id, "skill": up.name, "level": up.level, "at": at }),
+                });
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// Stored events of the rule's `trigger` kinds since `since` that match its filter, oldest first.
@@ -260,6 +323,7 @@ fn combo(ctx: &EvalCtx, kinds: &[EventKind], within_minutes: u32) -> Result<Opti
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::SkillLevelUp;
     use crate::enrich::FileAge;
     use crate::event::{Event, EventKind, Source};
     use crate::records::{self, RecordBroken};
@@ -424,19 +488,170 @@ mod tests {
         assert!(!fires(2, 1));
     }
 
-    /// Task 8 implements these; until then they must not fire.
+    fn unlock(store: &Store, key: &str) {
+        let u = crate::store::NewUnlock {
+            rule_id: key.into(),
+            name: key.into(),
+            tier: "bronze".into(),
+            xp: 0,
+            context: json!({}),
+            ts: at("2026-03-01T00:00:00Z"),
+        };
+        store.insert_unlock(&u).unwrap();
+    }
+
     #[test]
-    fn meta_and_skill_level_counters_do_not_fire_yet() {
+    fn distinct_unlocks_counts_base_ids() {
         let store = Store::open_in_memory().unwrap();
+        // The meta rule's own id is `r`: its unlocks don't count.
+        let r = rule("\"commit\"", "at = 3
+counter = { type = \"meta\", of = \"distinct_unlocks\" }");
+        assert_eq!(progress(&r, &store, tz()).unwrap(), Some(0));
+        for key in ["a", "a", "b.bronze", "b.silver", "r"] {
+            unlock(&store, key);
+        }
+        assert_eq!(progress(&r, &store, tz()).unwrap(), Some(2));
+        unlock(&store, "skill_master.rust.bronze");
+        unlock(&store, "skill_master.python.bronze");
+        assert_eq!(progress(&r, &store, tz()).unwrap(), Some(3));
+
+        // Fires once the count reaches `at`.
+        let store = Store::open_in_memory().unwrap();
+        unlock(&store, "a");
+        unlock(&store, "b.bronze");
+        let e = mk(EventKind::Commit, "2026-03-01T01:00:00Z", "r", json!({}));
+        assert_eq!(add(&r, &store, &e), None);
+        unlock(&store, "c");
+        let e = mk(EventKind::Commit, "2026-03-01T02:00:00Z", "r", json!({}));
+        assert_eq!(add(&r, &store, &e), Some(json!({ "progress": 3, "at": 3 })));
+    }
+
+    #[test]
+    fn same_unlock_ignores_ladders() {
+        let store = Store::open_in_memory().unwrap();
+        let r = rule("\"commit\"", "at = 3
+counter = { type = \"meta\", of = \"same_unlock\" }");
+        assert_eq!(progress(&r, &store, tz()).unwrap(), Some(0));
+        for key in ["a", "a", "b", "c.bronze", "c.bronze", "c.bronze", "c.bronze", "r", "r", "r", "r"] {
+            unlock(&store, key);
+        }
+        assert_eq!(progress(&r, &store, tz()).unwrap(), Some(2), "ladder steps and the rule's own id excluded");
+        unlock(&store, "a");
+        assert_eq!(progress(&r, &store, tz()).unwrap(), Some(3));
+    }
+
+    fn up(skill_id: &str, name: &str, level: u32) -> SkillLevelUp {
+        SkillLevelUp { skill_id: skill_id.into(), name: name.into(), level }
+    }
+
+    #[test]
+    fn skill_level_per_skill() {
+        let store = Store::open_in_memory().unwrap();
+        let r = parse_rule(
+            "id=\"skill_master\"
+name=\"Skill Master\"
+fallback=\"f\"
+trigger=[\"commit\"]
+counter={type=\"skill_level\"}
+tiers=[{tier=\"bronze\",at=5},{tier=\"silver\",at=10},{tier=\"gold\",at=20}]",
+        )
+        .unwrap();
         let e = mk(EventKind::Commit, "2026-03-01T01:00:00Z", "r", json!({}));
         store.insert_event(&e).unwrap();
-        for extra in [
-            "at = 1
-counter = { type = \"meta\", of = \"distinct_unlocks\" }",
-            "at = 1
-counter = { type = \"skill_level\" }",
-        ] {
-            assert_eq!(eval(&rule("\"commit\"", extra), &store, &e), None, "{extra}");
+        // Evaluate as the engine does, storing what fired.
+        let fire = |ups: &[SkillLevelUp]| -> Vec<(String, String)> {
+            let ctx = EvalCtx { ev: &e, store: &store, broken: &[], file_ages: &[], tz: tz(), skill_level_ups: ups };
+            let f = evaluate(&r, &ctx).unwrap();
+            for x in &f {
+                unlock(&store, &x.unlock_key);
+            }
+            f.into_iter().map(|x| (x.unlock_key, x.name)).collect()
+        };
+        assert!(fire(&[]).is_empty(), "no level-ups");
+        assert!(fire(&[up("rust", "Rust", 4)]).is_empty());
+        // Several level-ups for one skill: the highest counts.
+        assert_eq!(
+            fire(&[up("rust", "Rust", 4), up("rust", "Rust", 5)]),
+            vec![("skill_master.rust.bronze".to_string(), "Skill Master: Rust (Bronze)".to_string())]
+        );
+        assert!(fire(&[up("rust", "Rust", 6)]).is_empty(), "already unlocked");
+        assert_eq!(
+            fire(&[up("python", "Python", 5)]),
+            vec![("skill_master.python.bronze".to_string(), "Skill Master: Python (Bronze)".to_string())]
+        );
+        // Catching up: one level-up crossing two steps unlocks both, in order.
+        assert_eq!(
+            fire(&[up("rust", "Rust", 10), up("docs", "Scribe", 3)])
+                .into_iter()
+                .map(|(k, _)| k)
+                .collect::<Vec<_>>(),
+            vec!["skill_master.rust.silver"]
+        );
+        assert_eq!(
+            fire(&[up("python", "Python", 20)]).into_iter().map(|(k, _)| k).collect::<Vec<_>>(),
+            vec!["skill_master.python.silver", "skill_master.python.gold"]
+        );
+        assert_eq!(progress(&r, &store, tz()).unwrap(), None, "per-skill progress is not a single value");
+    }
+
+    #[test]
+    fn skill_level_findings() {
+        let store = Store::open_in_memory().unwrap();
+        let r = rule("\"commit\"", "at = 5
+counter = { type = \"skill_level\" }");
+        let e = mk(EventKind::Commit, "2026-03-01T01:00:00Z", "r", json!({}));
+        let ups = [up("rust", "Rust", 7)];
+        let ctx = EvalCtx { ev: &e, store: &store, broken: &[], file_ages: &[], tz: tz(), skill_level_ups: &ups };
+        let f = evaluate(&r, &ctx).unwrap();
+        assert_eq!(f.len(), 1);
+        assert_eq!((f[0].unlock_key.as_str(), f[0].name.as_str()), ("r.rust.bronze", "R: Rust (Bronze)"));
+        assert_eq!(f[0].findings, json!({ "skill_id": "rust", "skill": "Rust", "level": 7, "at": 5 }));
+    }
+
+    /// With every step unlocked, `evaluate` skips computing progress: a broken events table
+    /// doesn't matter. With a step left, it still computes (and here fails).
+    #[test]
+    fn threshold_skips_progress_when_all_steps_unlocked() {
+        let ladder = |counter: &str| {
+            parse_rule(&format!(
+                "id=\"l\"\nname=\"L\"\nfallback=\"f\"\ntrigger=[\"commit\"]\ncounter={counter}\ntiers=[{{tier=\"bronze\",at=1}},{{tier=\"silver\",at=2}}]"
+            ))
+            .unwrap()
+        };
+        let rules = [
+            ladder("{type=\"lifetime\"}"),
+            ladder("{type=\"streak_days\"}"),
+            ladder("{type=\"meta\",of=\"distinct_unlocks\"}"),
+        ];
+        // Same results with and without the skip: steps fire until all are unlocked, then nothing.
+        for r in &rules {
+            let store = Store::open_in_memory().unwrap();
+            unlock(&store, "x");
+            unlock(&store, "y");
+            let mut keys = vec![];
+            for d in 1..=3 {
+                let e = mk(EventKind::Commit, &format!("2026-03-0{d}T01:00:00Z"), "r", json!({}));
+                store.insert_event(&e).unwrap();
+                for f in eval_with(r, &store, &e, &[], &[]) {
+                    unlock(&store, &f.unlock_key);
+                    keys.push((d, f.unlock_key));
+                }
+            }
+            assert_eq!(keys.last().map(|k| k.1.as_str()), Some("l.silver"), "{:?}", r.counter);
+            assert!(keys.len() == 2, "{:?}: {keys:?}", r.counter);
+        }
+        let e = mk(EventKind::Commit, "2026-03-01T01:00:00Z", "r", json!({}));
+        for r in &rules {
+            let store = Store::open_in_memory().unwrap();
+            // Meta reads unlocks, not events: for it this only checks the result.
+            store.exec_raw("DROP TABLE events").unwrap();
+            unlock(&store, "l.bronze");
+            let ctx = EvalCtx { ev: &e, store: &store, broken: &[], file_ages: &[], tz: tz(), skill_level_ups: &[] };
+            if !matches!(r.counter, Counter::Meta { .. }) {
+                assert!(evaluate(r, &ctx).is_err(), "{:?}: silver is left, so progress is computed", r.counter);
+            }
+            unlock(&store, "l.silver");
+            assert_eq!(evaluate(r, &ctx).unwrap(), vec![], "{:?}", r.counter);
         }
     }
 

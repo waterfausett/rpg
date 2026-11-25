@@ -4,7 +4,7 @@ use crate::counters::{evaluate, EvalCtx};
 use crate::enrich::FileAge;
 use crate::event::{Event, EventKind};
 use crate::records;
-use crate::rules::{Rules, Tier};
+use crate::rules::{Counter, Rule, Rules, Tier};
 use crate::store::{NewUnlock, Store};
 use crate::xp::level_for;
 use anyhow::Result;
@@ -167,7 +167,10 @@ fn process_inner(
     }
 
     let skill_level_ups = out.skill_level_ups.clone();
-    for rule in rules.for_kind(ev.kind) {
+    // Meta rules run last so their counts include this event's unlocks.
+    let is_meta = |r: &&Rule| matches!(r.counter, Counter::Meta { .. });
+    let ordered = rules.for_kind(ev.kind).filter(|r| !is_meta(r)).chain(rules.for_kind(ev.kind).filter(is_meta));
+    for rule in ordered {
         if !rule.filter.matches(ev, tz) {
             continue;
         }
@@ -576,6 +579,39 @@ counter = { type = \"lifetime\" }", 1)],
         let u = &o.unlocks[0];
         assert_eq!((u.base_rule_id.as_str(), u.name.as_str(), u.tier, u.xp), ("committed", "Committed (Bronze)", Tier::Bronze, 5));
         assert_eq!(u.findings, serde_json::json!({ "progress": 151, "at": 100 }));
+    }
+
+    #[test]
+    fn meta_sees_same_event_unlocks() {
+        let store = Store::open_in_memory().unwrap();
+        // The meta rule is listed first; it still runs after the others.
+        let meta = rule("hunter", EventKind::Commit, "at = 2
+counter = { type = \"meta\", of = \"distinct_unlocks\" }", 3);
+        let rules = Rules {
+            list: vec![meta, rule("a", EventKind::Commit, "", 1), rule("b", EventKind::Commit, "", 1)],
+            ..Default::default()
+        };
+        let o = run(&store, &rules, &mk(EventKind::Commit, "2026-01-01T10:00:00Z", serde_json::json!({})));
+        assert_eq!(keys(&o), vec!["a", "b", "hunter"]);
+        assert_eq!(o.unlocks[2].findings, serde_json::json!({ "progress": 2, "at": 2 }));
+        assert_eq!(store.total_xp().unwrap(), 10 + 1 + 1 + 3);
+    }
+
+    #[test]
+    fn skill_level_rule_reads_this_events_level_ups() {
+        let store = Store::open_in_memory().unwrap();
+        let mut rules = skills(&["id = \"rust\"
+name = \"Rust\"
+globs = [\"*.rs\"]
+xp = 100
+"]);
+        rules.list.push(rule("sm", EventKind::Commit, "at = 2
+counter = { type = \"skill_level\" }", 4));
+        // 100 skill xp reaches level 2 (default skill curve).
+        let o = run(&store, &rules, &commit_with("2026-01-01T10:00:00Z", &["a.rs"]));
+        assert_eq!(keys(&o), vec!["sm.rust.bronze"]);
+        assert_eq!((o.unlocks[0].base_rule_id.as_str(), o.unlocks[0].name.as_str()), ("sm", "Name sm: Rust (Bronze)"));
+        assert!(run(&store, &rules, &commit_with("2026-01-01T11:00:00Z", &["b.rs"])).unlocks.is_empty());
     }
 
     #[test]

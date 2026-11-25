@@ -658,6 +658,20 @@ counter={type=\"combo\",kinds=[\"push\",\"commit\"],within_minutes=5}")).is_ok()
         assert_eq!(rules.for_kind(EventKind::Push).count(), 0);
     }
 
+    #[test]
+    fn docs_examples_parse() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/rules.md");
+        let doc = fs::read_to_string(path).unwrap().replace("\r\n", "\n");
+        let blocks: Vec<&str> = doc.split("```toml\n").skip(1).map(|b| b.split("```").next().unwrap()).collect();
+        // The intro example plus one per counter.
+        assert_eq!(blocks.len(), 14);
+        for b in blocks {
+            if let Err(e) = parse_rule(b) {
+                panic!("{e}\n{b}");
+            }
+        }
+    }
+
     fn commit_at(ts: &str) -> Event {
         let mut e = Event::new(EventKind::Commit, Source::Git, Some("r".into()), serde_json::json!({}));
         e.ts = DateTime::parse_from_rfc3339(ts).unwrap().with_timezone(&Utc);

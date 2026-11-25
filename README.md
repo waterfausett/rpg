@@ -24,7 +24,7 @@ Output: `target/release/rpg-app.exe` plus installers in `target/release/bundle/{
    - `rpg install-hooks` (hooks then call `rpg.exe` instead of the app)
 
    This sets a global git `core.hooksPath` to rpg's shim folder and adds `SessionStart`/`SessionEnd` entries to `~/.claude/settings.json` (a backup is written next to it as `settings.json.rpg-backup`, and your other settings are kept). Every standard git hook except `reference-transaction` and `post-index-change` (see Known limitations) gets a pass-through shim, so a repo's own `.git/hooks/*` keep working.
-3. Commit something. A `+10 exp · commit` pop-up appears bottom-right; unlocks show a gold banner top-center.
+3. Commit something. A `+10 exp · commit` pop-up appears bottom-right; unlocks show a gold banner top-center. To write your own achievements, see the [rule format reference](docs/rules.md).
 
 Tray menu: Open character sheet, Mute sounds, Do not disturb, Open rules folder, Install hooks, Uninstall hooks, Check for updates, Quit. Only one app instance runs at a time. Hooks never fail a git command; errors go to `rpg.log`.
 
