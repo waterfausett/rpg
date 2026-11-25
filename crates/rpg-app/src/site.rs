@@ -665,4 +665,24 @@ fallback = "A skill, levelled."
         assert!(v[0].get("source").is_none());
         assert_eq!(v[0]["id"], "x");
     }
+
+    const OVERLAY_CSS: &str = include_str!("../../../ui/overlay/overlay.css");
+    const SITE_CSS: &str = include_str!("../../../ui/site/site.css");
+
+    /// The value of the first `--<name>:` declaration in `css`.
+    fn css_var<'a>(css: &'a str, name: &str) -> Option<&'a str> {
+        let pat = format!("--{name}:");
+        let rest = &css[css.find(&pat)? + pat.len()..];
+        Some(rest[..rest.find(';')?].trim())
+    }
+
+    #[test]
+    fn tier_palette_matches_between_overlay_and_site() {
+        for tier in ["bronze", "silver", "gold", "platinum"] {
+            let (o, s) = (css_var(OVERLAY_CSS, tier), css_var(SITE_CSS, tier));
+            assert!(o.is_some() && s.is_some(), "--{tier} missing: overlay {o:?}, site {s:?}");
+            assert_eq!(o, s, "--{tier} differs between overlay.css and site.css");
+        }
+        assert_eq!(css_var(OVERLAY_CSS, "silver"), Some("#c0c8d0"));
+    }
 }

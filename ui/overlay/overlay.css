@@ -1,6 +1,8 @@
 /* Overlay windows are transparent: only the pill / banner is painted. */
 html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; height: 100%; }
 body { user-select: none; -webkit-user-select: none; }
+/* Tier palette. Keep in sync with ui/site/site.css (a test in site.rs checks). */
+:root { --bronze: #cd7f32; --silver: #c0c8d0; --gold: #ffc83d; --platinum: #cfe8ff; }
 
 /* ---- XP toasts: gold pills bottom-right, stacking upward, fading over 3s ---- */
 .toasts { position: fixed; right: 8px; bottom: 8px; display: flex; flex-direction: column-reverse;
@@ -13,10 +15,10 @@ body { user-select: none; -webkit-user-select: none; }
       will-change: opacity, transform; backface-visibility: hidden; }
 .xp.skill { color: #7ee8c8; border-color: #7ee8c855; box-shadow: 0 0 18px #7ee8c844; }
 .xp.ach { color: var(--tier); border-color: var(--tier); box-shadow: 0 0 18px var(--tier); }
-.xp.ach[data-tier="Bronze"]   { --tier: #cd7f32; }
-.xp.ach[data-tier="Silver"]   { --tier: #c0c0c0; }
-.xp.ach[data-tier="Gold"]     { --tier: #ffc83d; }
-.xp.ach[data-tier="Platinum"] { --tier: #cfe8ff; }
+.xp.ach[data-tier="Bronze"]   { --tier: var(--bronze); }
+.xp.ach[data-tier="Silver"]   { --tier: var(--silver); }
+.xp.ach[data-tier="Gold"]     { --tier: var(--gold); }
+.xp.ach[data-tier="Platinum"] { --tier: var(--platinum); }
 .xp small { color: #cfd6e0; font-weight: 400; margin-left: 6px; }
 .xp small:empty { display: none; }
 .xp small::before { content: "· "; }

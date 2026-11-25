@@ -6,6 +6,7 @@
   --gold: #ffc83d;
   --text: #fff3cf;
   --dim: rgba(255, 243, 207, 0.62);
+  /* Tier palette. Keep in sync with ui/overlay/overlay.css (a test in site.rs checks). */
   --bronze: #cd7f32;
   --silver: #c0c8d0;
   --platinum: #cfe8ff;
