@@ -50,8 +50,17 @@ pub struct EventRow {
     pub event: Event,
     /// Total XP the event earned.
     pub xp: u64,
-    /// The ledger entries behind `xp`, in the order they were awarded: `(reason, amount)`.
-    pub gains: Vec<(String, u64)>,
+    /// The ledger entries behind `xp`, in the order they were awarded.
+    pub gains: Vec<Gain>,
+}
+
+/// One ledger entry. `tier` is set when the entry is an achievement's reward: it comes from the
+/// unlock with the same name and timestamp (the engine writes both with the event's `ts`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Gain {
+    pub reason: String,
+    pub amount: u64,
+    pub tier: Option<String>,
 }
 
 fn conv_err<E: std::error::Error + Send + Sync + 'static>(e: E) -> rusqlite::Error {
@@ -423,9 +432,15 @@ impl Store {
             Ok(EventRow { event: event_from_row(r)?, xp: r.get::<_, i64>(7)?.max(0) as u64, gains: vec![] })
         })?;
         let mut rows: Vec<EventRow> = rows.collect::<rusqlite::Result<_>>()?;
-        let mut gains = conn.prepare("SELECT reason, amount FROM xp_ledger WHERE event_id=?1 ORDER BY id")?;
+        let mut gains = conn.prepare(
+            "SELECT l.reason, l.amount,
+                    (SELECT u.tier FROM unlocks u WHERE u.name=l.reason AND u.ts=l.ts ORDER BY u.id LIMIT 1)
+             FROM xp_ledger l WHERE l.event_id=?1 ORDER BY l.id",
+        )?;
         for row in &mut rows {
-            let g = gains.query_map(params![row.event.id], |r| Ok((r.get(0)?, r.get::<_, i64>(1)?.max(0) as u64)))?;
+            let g = gains.query_map(params![row.event.id], |r| {
+                Ok(Gain { reason: r.get(0)?, amount: r.get::<_, i64>(1)?.max(0) as u64, tier: r.get(2)? })
+            })?;
             row.gains = g.collect::<rusqlite::Result<_>>()?;
         }
         Ok(rows)
@@ -627,7 +642,7 @@ mod tests {
         assert!(!s.has_prior_event(EventKind::Commit, Some("x"), "other").unwrap());
         let rows = s.list_events(Some(EventKind::Commit), 10).unwrap();
         assert_eq!((rows.len(), rows[0].xp), (1, 15));
-        assert_eq!(rows[0].gains.iter().map(|g| g.1).sum::<u64>(), 15);
+        assert_eq!(rows[0].gains.iter().map(|g| g.amount).sum::<u64>(), 15);
         assert_eq!(s.list_events(None, 10).unwrap().len(), 2);
         s.meta_set("k", "v").unwrap();
         assert_eq!(s.meta_get("k").unwrap().as_deref(), Some("v"));
@@ -636,5 +651,31 @@ mod tests {
         s.set_unlock_flavor(id, "hi").unwrap();
         let u = s.list_unlocks().unwrap();
         assert_eq!(u[0].flavor_text.as_deref(), Some("hi"));
+    }
+
+    #[test]
+    fn gains_carry_unlock_tier() {
+        let s = Store::open_in_memory().unwrap();
+        let now = Utc::now();
+        s.insert_event(&ev("c1", EventKind::Commit, now)).unwrap();
+        s.add_xp("c1", 10, "commit", now).unwrap();
+        s.insert_unlock(&NewUnlock { rule_id: "hat".into(), name: "Hat Trick".into(), tier: "silver".into(),
+            xp: 50, context: serde_json::json!({}), ts: now }).unwrap();
+        s.add_xp("c1", 50, "Hat Trick", now).unwrap();
+        let g = &s.list_events(None, 10).unwrap()[0].gains;
+        assert_eq!((g[0].reason.as_str(), g[0].tier.as_deref()), ("commit", None));
+        assert_eq!((g[1].reason.as_str(), g[1].amount, g[1].tier.as_deref()), ("Hat Trick", 50, Some("silver")));
+    }
+
+    #[test]
+    fn gains_without_unlock_have_no_tier() {
+        // Same name unlocked at a different time must not match.
+        let s = Store::open_in_memory().unwrap();
+        let now = Utc::now();
+        s.insert_event(&ev("c1", EventKind::Commit, now)).unwrap();
+        s.insert_unlock(&NewUnlock { rule_id: "hat".into(), name: "Hat Trick".into(), tier: "silver".into(),
+            xp: 50, context: serde_json::json!({}), ts: now - Duration::days(1) }).unwrap();
+        s.add_xp("c1", 50, "Hat Trick", now).unwrap();
+        assert_eq!(s.list_events(None, 10).unwrap()[0].gains[0].tier, None);
     }
 }

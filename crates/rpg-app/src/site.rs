@@ -77,12 +77,21 @@ pub async fn serve(mut state: SiteState, port: u16) -> std::io::Result<()> {
 fn event_json(r: &EventRow) -> Value {
     let e = &r.event;
     let base = rpg_core::engine::base_label(e.kind);
-    let (base_gains, ach_gains): (Vec<_>, Vec<_>) = r.gains.iter().partition(|(reason, _)| Some(reason.as_str()) == base);
-    let achievements: Vec<Value> = ach_gains.iter().map(|(name, xp)| json!({ "name": name, "xp": xp })).collect();
+    let (base_gains, ach_gains): (Vec<_>, Vec<_>) = r.gains.iter().partition(|g| Some(g.reason.as_str()) == base);
+    let achievements: Vec<Value> = ach_gains
+        .iter()
+        .map(|g| {
+            let mut a = json!({ "name": g.reason, "xp": g.amount });
+            if let Some(t) = &g.tier {
+                a["tier"] = json!(t);
+            }
+            a
+        })
+        .collect();
     json!({
         "id": e.id, "kind": e.kind.as_str(), "ts": e.ts, "repo": e.repo,
         "backfill": e.backfill, "xp": r.xp,
-        "base_xp": base_gains.iter().map(|(_, xp)| xp).sum::<u64>(),
+        "base_xp": base_gains.iter().map(|g| g.amount).sum::<u64>(),
         "achievements": achievements,
     })
 }
@@ -365,7 +374,7 @@ globs = [\"*.md\"]
         let v = get_json(&st, "/api/events").await;
         assert_eq!(v[0]["xp"], 350, "100 base + 250 bronze");
         assert_eq!(v[0]["base_xp"], 100);
-        assert_eq!(v[0]["achievements"], json!([{ "name": "Merge Maestro", "xp": 250 }]));
+        assert_eq!(v[0]["achievements"], json!([{ "name": "Merge Maestro", "xp": 250, "tier": "bronze" }]));
     }
 
     #[tokio::test]
