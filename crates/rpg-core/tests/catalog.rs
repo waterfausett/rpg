@@ -719,6 +719,7 @@ fn profanity_filter_disabled() {
     assert!(fires(&r, &[], msg("well damn, that was the wrong branch"), "profanity_filter_disabled"));
     // A word that merely contains a listed one (the Scunthorpe problem) is clean.
     assert!(!fires(&r, &[], msg("fix the damnation of the build"), "profanity_filter_disabled"));
+    assert!(!fires(&r, &[], msg("fix dependency hell"), "profanity_filter_disabled"));
 }
 
 #[test]
