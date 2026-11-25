@@ -5,7 +5,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use std::path::Path;
 use std::sync::Mutex;
 
-const SCHEMA_VERSION: &str = "2";
+const SCHEMA_VERSION: &str = "3";
 
 /// SQLite-backed store. Timestamps are stored as fixed-width RFC3339 UTC
 /// strings with millisecond precision, which sort lexicographically.
@@ -55,7 +55,7 @@ pub struct EventRow {
 }
 
 /// One ledger entry. `tier` is set when the entry is an achievement's reward: it comes from the
-/// unlock with the same name and timestamp (the engine writes both with the event's `ts`).
+/// unlock the ledger row points at (`xp_ledger.unlock_id`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Gain {
     pub reason: String,
@@ -124,14 +124,13 @@ impl Store {
              CREATE INDEX IF NOT EXISTS idx_events_kind_ts ON events(kind, ts);
              CREATE TABLE IF NOT EXISTS xp_ledger(
                 id INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT NOT NULL,
-                amount INTEGER NOT NULL, reason TEXT NOT NULL, ts TEXT NOT NULL);
+                amount INTEGER NOT NULL, reason TEXT NOT NULL, ts TEXT NOT NULL, unlock_id INTEGER);
              CREATE INDEX IF NOT EXISTS idx_ledger_event ON xp_ledger(event_id);
              CREATE TABLE IF NOT EXISTS unlocks(
                 id INTEGER PRIMARY KEY AUTOINCREMENT, rule_id TEXT NOT NULL, name TEXT NOT NULL,
                 tier TEXT NOT NULL, xp INTEGER NOT NULL, context TEXT NOT NULL,
                 flavor_text TEXT, ts TEXT NOT NULL);
              CREATE INDEX IF NOT EXISTS idx_unlocks_rule ON unlocks(rule_id);
-             CREATE INDEX IF NOT EXISTS idx_unlocks_name_ts ON unlocks(name, ts);
              CREATE TABLE IF NOT EXISTS skill_xp(
                 id INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT NOT NULL, skill_id TEXT NOT NULL,
                 name TEXT NOT NULL, amount INTEGER NOT NULL, ts TEXT NOT NULL);
@@ -146,8 +145,10 @@ impl Store {
 
     /// Bring an older database up to `SCHEMA_VERSION`.
     fn migrate(conn: &Connection) -> Result<()> {
-        let v: String = conn.query_row("SELECT value FROM meta WHERE key='schema_version'", [], |r| r.get(0))?;
-        if v == "1" {
+        let version = || -> Result<String> {
+            Ok(conn.query_row("SELECT value FROM meta WHERE key='schema_version'", [], |r| r.get(0))?)
+        };
+        if version()? == "1" {
             // v2: repos are normalized at ingest; rewrite the ones stored before that.
             let tx = conn.unchecked_transaction()?;
             let repos: Vec<String> = {
@@ -162,6 +163,26 @@ impl Store {
                 }
             }
             tx.execute("UPDATE meta SET value='2' WHERE key='schema_version'", [])?;
+            tx.commit()?;
+        }
+        if version()? == "2" {
+            // v3: an achievement's ledger row points at its unlock. Older rows are matched once by
+            // name, timestamp and amount (the engine wrote both with the event's ts and the step's xp).
+            let tx = conn.unchecked_transaction()?;
+            let has_col: bool =
+                tx.query_row("SELECT COUNT(*) FROM pragma_table_info('xp_ledger') WHERE name='unlock_id'", [], |r| r.get(0))?;
+            if !has_col {
+                tx.execute("ALTER TABLE xp_ledger ADD COLUMN unlock_id INTEGER", [])?;
+            }
+            tx.execute_batch(
+                "CREATE INDEX IF NOT EXISTS idx_unlocks_name_ts ON unlocks(name, ts);
+                 UPDATE xp_ledger SET unlock_id = (
+                    SELECT u.id FROM unlocks u
+                    WHERE u.name = xp_ledger.reason AND u.ts = xp_ledger.ts AND u.xp = xp_ledger.amount
+                    ORDER BY u.id LIMIT 1);
+                 DROP INDEX idx_unlocks_name_ts;
+                 UPDATE meta SET value='3' WHERE key='schema_version';",
+            )?;
             tx.commit()?;
         }
         Ok(())
@@ -291,10 +312,11 @@ impl Store {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
-    pub fn add_xp(&self, event_id: &str, amount: u64, reason: &str, ts: DateTime<Utc>) -> Result<()> {
+    /// `unlock_id` is set when the XP is an achievement's reward (see `insert_unlock`).
+    pub fn add_xp(&self, event_id: &str, amount: u64, reason: &str, unlock_id: Option<i64>, ts: DateTime<Utc>) -> Result<()> {
         self.conn().execute(
-            "INSERT INTO xp_ledger(event_id, amount, reason, ts) VALUES(?1,?2,?3,?4)",
-            params![event_id, amount as i64, reason, ts_str(ts)],
+            "INSERT INTO xp_ledger(event_id, amount, reason, ts, unlock_id) VALUES(?1,?2,?3,?4,?5)",
+            params![event_id, amount as i64, reason, ts_str(ts), unlock_id],
         )?;
         Ok(())
     }
@@ -434,9 +456,9 @@ impl Store {
         })?;
         let mut rows: Vec<EventRow> = rows.collect::<rusqlite::Result<_>>()?;
         let mut gains = conn.prepare(
-            "SELECT l.reason, l.amount,
-                    (SELECT u.tier FROM unlocks u WHERE u.name=l.reason AND u.ts=l.ts ORDER BY u.id LIMIT 1)
-             FROM xp_ledger l WHERE l.event_id=?1 ORDER BY l.id",
+            "SELECT l.reason, l.amount, u.tier
+             FROM xp_ledger l LEFT JOIN unlocks u ON u.id = l.unlock_id
+             WHERE l.event_id=?1 ORDER BY l.id",
         )?;
         for row in &mut rows {
             let g = gains.query_map(params![row.event.id], |r| {
@@ -487,7 +509,7 @@ mod tests {
         let repos: Vec<_> = s.list_events(None, 10).unwrap().into_iter().map(|r| r.event.repo.unwrap()).collect();
         assert!(repos.contains(&"C:/work/rpg".to_string()), "{repos:?}");
         assert!(repos.contains(&"octo/widgets".to_string()), "{repos:?}");
-        assert_eq!(s.meta_get("schema_version").unwrap().as_deref(), Some("2"));
+        assert_eq!(s.meta_get("schema_version").unwrap().as_deref(), Some("3"));
     }
 
     #[test]
@@ -633,8 +655,8 @@ mod tests {
         st.data = serde_json::json!({"session_id": "abc"});
         s.insert_event(&st).unwrap();
         s.insert_event(&ev("c1", EventKind::Commit, now)).unwrap();
-        s.add_xp("c1", 10, "commit", now).unwrap();
-        s.add_xp("c1", 5, "bonus", now).unwrap();
+        s.add_xp("c1", 10, "commit", None, now).unwrap();
+        s.add_xp("c1", 5, "bonus", None, now).unwrap();
         assert_eq!(s.total_xp().unwrap(), 15);
         assert_eq!(s.find_session_start("abc").unwrap().unwrap().id, "s1");
         assert!(s.find_session_start("zzz").unwrap().is_none());
@@ -647,11 +669,16 @@ mod tests {
         assert_eq!(s.list_events(None, 10).unwrap().len(), 2);
         s.meta_set("k", "v").unwrap();
         assert_eq!(s.meta_get("k").unwrap().as_deref(), Some("v"));
-        assert_eq!(s.meta_get("schema_version").unwrap().as_deref(), Some("2"));
+        assert_eq!(s.meta_get("schema_version").unwrap().as_deref(), Some("3"));
         let id = s.insert_unlock(&nu("r1", now)).unwrap();
         s.set_unlock_flavor(id, "hi").unwrap();
         let u = s.list_unlocks().unwrap();
         assert_eq!(u[0].flavor_text.as_deref(), Some("hi"));
+    }
+
+    fn unlock(s: &Store, name: &str, tier: &str, xp: u64, ts: DateTime<Utc>) -> i64 {
+        s.insert_unlock(&NewUnlock { rule_id: name.into(), name: name.into(), tier: tier.into(), xp,
+            context: serde_json::json!({}), ts }).unwrap()
     }
 
     #[test]
@@ -659,38 +686,58 @@ mod tests {
         let s = Store::open_in_memory().unwrap();
         let now = Utc::now();
         s.insert_event(&ev("c1", EventKind::Commit, now)).unwrap();
-        s.add_xp("c1", 10, "commit", now).unwrap();
-        s.insert_unlock(&NewUnlock { rule_id: "hat".into(), name: "Hat Trick".into(), tier: "silver".into(),
-            xp: 50, context: serde_json::json!({}), ts: now }).unwrap();
-        s.add_xp("c1", 50, "Hat Trick", now).unwrap();
+        s.add_xp("c1", 10, "commit", None, now).unwrap();
+        let id = unlock(&s, "Hat Trick", "silver", 50, now);
+        s.add_xp("c1", 50, "Hat Trick", Some(id), now).unwrap();
         let g = &s.list_events(None, 10).unwrap()[0].gains;
         assert_eq!((g[0].reason.as_str(), g[0].tier.as_deref()), ("commit", None));
         assert_eq!((g[1].reason.as_str(), g[1].amount, g[1].tier.as_deref()), ("Hat Trick", 50, Some("silver")));
     }
 
     #[test]
-    fn gains_without_unlock_have_no_tier() {
-        // Same name unlocked at a different time must not match.
+    fn same_named_unlocks_on_one_event_keep_their_own_tiers() {
+        // Two rules sharing a name, both firing on one event: matching by name and time can't tell them apart.
         let s = Store::open_in_memory().unwrap();
         let now = Utc::now();
         s.insert_event(&ev("c1", EventKind::Commit, now)).unwrap();
-        s.insert_unlock(&NewUnlock { rule_id: "hat".into(), name: "Hat Trick".into(), tier: "silver".into(),
-            xp: 50, context: serde_json::json!({}), ts: now - Duration::days(1) }).unwrap();
-        s.add_xp("c1", 50, "Hat Trick", now).unwrap();
-        assert_eq!(s.list_events(None, 10).unwrap()[0].gains[0].tier, None);
+        let a = unlock(&s, "Twin", "bronze", 50, now);
+        let b = unlock(&s, "Twin", "gold", 50, now);
+        s.add_xp("c1", 50, "Twin", Some(a), now).unwrap();
+        s.add_xp("c1", 50, "Twin", Some(b), now).unwrap();
+        let tiers: Vec<_> = s.list_events(None, 10).unwrap()[0].gains.iter().map(|g| g.tier.clone()).collect();
+        assert_eq!(tiers, [Some("bronze".to_string()), Some("gold".to_string())]);
     }
 
     #[test]
-    fn tier_lookup_uses_an_index() {
-        let s = Store::open_in_memory().unwrap();
-        let conn = s.conn();
-        let plan: Vec<String> = conn
-            .prepare("EXPLAIN QUERY PLAN SELECT tier FROM unlocks WHERE name='x' AND ts='y'")
-            .unwrap()
-            .query_map([], |r| r.get::<_, String>(3))
-            .unwrap()
-            .collect::<rusqlite::Result<_>>()
+    fn v2_database_gets_ledger_unlock_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rpg.db");
+        let now = Utc::now();
+        let (t, old) = (ts_str(now), ts_str(now - Duration::days(1)));
+        {
+            // The v2 shape of the two tables involved: no xp_ledger.unlock_id yet.
+            let c = Connection::open(&path).unwrap();
+            c.execute_batch(
+                "CREATE TABLE xp_ledger(id INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT NOT NULL,
+                    amount INTEGER NOT NULL, reason TEXT NOT NULL, ts TEXT NOT NULL);
+                 CREATE TABLE unlocks(id INTEGER PRIMARY KEY AUTOINCREMENT, rule_id TEXT NOT NULL, name TEXT NOT NULL,
+                    tier TEXT NOT NULL, xp INTEGER NOT NULL, context TEXT NOT NULL, flavor_text TEXT, ts TEXT NOT NULL);
+                 CREATE INDEX idx_unlocks_name_ts ON unlocks(name, ts);
+                 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                 INSERT INTO meta VALUES('schema_version', '2');",
+            )
             .unwrap();
-        assert!(plan.iter().any(|d| d.contains("idx_unlocks_name_ts")), "plan: {plan:?}");
+            c.execute("INSERT INTO unlocks(rule_id, name, tier, xp, context, ts) VALUES('h','Hat Trick','silver',50,'{}',?1)", [&t]).unwrap();
+            c.execute("INSERT INTO unlocks(rule_id, name, tier, xp, context, ts) VALUES('h','Hat Trick','gold',50,'{}',?1)", [&old]).unwrap();
+            c.execute("INSERT INTO xp_ledger(event_id, amount, reason, ts) VALUES('c1',10,'commit',?1)", [&t]).unwrap();
+            c.execute("INSERT INTO xp_ledger(event_id, amount, reason, ts) VALUES('c1',50,'Hat Trick',?1)", [&t]).unwrap();
+        }
+        let s = Store::open(&path).unwrap();
+        s.insert_event(&ev("c1", EventKind::Commit, now)).unwrap();
+        let g = &s.list_events(None, 10).unwrap()[0].gains;
+        assert_eq!((g[0].tier.as_deref(), g[1].tier.as_deref()), (None, Some("silver")));
+        assert_eq!(s.meta_get("schema_version").unwrap().as_deref(), Some("3"));
+        let idx: i64 = s.conn().query_row("SELECT COUNT(*) FROM sqlite_master WHERE name='idx_unlocks_name_ts'", [], |r| r.get(0)).unwrap();
+        assert_eq!(idx, 0, "the name/ts index is only needed for the one-time backfill");
     }
 }
