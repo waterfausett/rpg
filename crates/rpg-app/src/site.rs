@@ -695,6 +695,15 @@ fallback = "A skill, levelled."
     }
 
     #[test]
+    fn event_log_uses_chips_for_every_kind() {
+        let html = include_str!("../../../ui/site/index.html");
+        assert!(!html.contains("<select"), "the kind dropdown should be chips now");
+        for kind in ["", "commit", "push", "pr_opened", "pr_merged", "review_submitted", "claude_session_start", "claude_session_end"] {
+            assert!(html.contains(&format!("data-kind=\"{kind}\"")), "no chip for {kind:?}");
+        }
+    }
+
+    #[test]
     fn tier_palette_matches_between_overlay_and_site() {
         for tier in ["bronze", "silver", "gold", "platinum", "legendary", "celestial"] {
             let (o, s) = (css_var(OVERLAY_CSS, tier), css_var(SITE_CSS, tier));

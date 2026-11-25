@@ -85,16 +85,30 @@ h2:first-child { margin-top: 0; }
 .skills .slvl { color: var(--gold); font-weight: 700; font-size: 13px; }
 .skills .sxp { color: var(--dim); font-size: 13px; text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
 
-/* ---- Event rows (Recent and Event log) ---- */
+/* ---- Event rows (Recent and Event log). An achievement row takes its highest tier via --tier ---- */
 .list { list-style: none; margin: 0; padding: 0; }
-.list li { display: flex; gap: 12px; padding: 7px 0; border-bottom: 1px solid var(--line); }
-.list .xp { color: var(--gold); min-width: 70px; font-weight: 600; }
+.list li { display: grid; grid-template-columns: 72px minmax(0, 1fr) minmax(0, 28%) 72px; gap: 12px; align-items: center;
+           padding: 8px 8px; border-bottom: 1px solid var(--line); border-left: 2px solid transparent; }
+.list li.empty { display: block; border: 0; padding: 0; }
+.list .xp { color: var(--gold); font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .list .xp.zero { color: var(--dim); font-weight: 400; }
-.list .kind { min-width: 150px; }
-.list .repo { color: var(--dim); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.list li.has-ach { background: linear-gradient(90deg, var(--glow), transparent 60%); }
-.list .achbadge { display: inline-block; margin-left: 8px; padding: 0 6px; border: 1px solid var(--gold); border-radius: 4px; color: var(--gold); font-size: 12px; white-space: nowrap; }
-.list .when { color: var(--dim); font-size: 13px; white-space: nowrap; }
+.list .kind { min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; overflow-wrap: anywhere; }
+.list .repo { color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.list .when { color: var(--dim); font-size: 13px; text-align: right; white-space: nowrap; }
+.list li.has-ach { --tier: var(--gold); border-left-color: var(--tier);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--tier) 14%, transparent), transparent 70%); }
+.list .achbadge { --tier: var(--gold); display: inline-block; max-width: 100%; padding: 0 8px; border-radius: 10px; font-size: 12px;
+  color: var(--tier); border: 1px solid color-mix(in srgb, var(--tier) 60%, transparent);
+  background: color-mix(in srgb, var(--tier) 10%, transparent); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---- Event log kind chips ---- */
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+.chip { font: inherit; font-size: 12px; padding: 2px 12px; border-radius: 12px; cursor: pointer;
+        background: none; border: 1px solid var(--line); color: var(--dim); }
+.chip:hover { color: var(--text); border-color: rgba(255, 200, 61, .4); }
+.chip.on { background: var(--gold); border-color: var(--gold); color: var(--bg); font-weight: 600; }
+.chip:focus-visible { outline: 1px solid var(--gold); outline-offset: 2px; }
+
 .empty { color: var(--dim); font-style: italic; }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
 .ach { background: var(--panel); border: 1px solid var(--glow); border-radius: 10px; padding: 14px; }
@@ -125,8 +139,6 @@ h2:first-child { margin-top: 0; }
 .ach.unlocked .name { text-shadow: 0 0 10px var(--tier); }
 .ach .desc { font: italic 13px Georgia, serif; color: var(--dim); }
 .ach .meta { margin-top: 8px; font-size: 12px; color: var(--gold); }
-.filter { display: inline-block; margin-bottom: 12px; color: var(--dim); }
-select { background: var(--panel); color: var(--text); border: 1px solid var(--glow); border-radius: 6px; padding: 4px 8px; margin-left: 8px; font: inherit; }
 @media (max-width: 640px) {
   .bar { padding: 18px 16px 14px; gap: 14px; }
   .crest { width: 64px; height: 64px; } .crest b { font-size: 26px; } .crest.wide b { font-size: 19px; }
@@ -134,5 +146,8 @@ select { background: var(--panel); color: var(--text); border: 1px solid var(--g
   .tabs { margin: 0 16px; gap: 18px; overflow-x: auto; } .tabs button { white-space: nowrap; }
   main { padding: 18px 16px 32px; }
   .totals { grid-template-columns: 1fr 1fr; }
+  .list li { grid-template-columns: 64px minmax(0, 1fr) auto; gap: 2px 10px; }
+  .list .repo { grid-column: 2; grid-row: 2; font-size: 13px; }
+  .list .when { grid-column: 3; grid-row: 1; }
   .skills li { grid-template-columns: minmax(0, 1fr) auto auto; gap: 4px 12px; } .skills .sbar { grid-column: 1 / -1; grid-row: 2; }
 }

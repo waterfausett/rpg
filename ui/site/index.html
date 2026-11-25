@@ -44,18 +44,16 @@
     </section>
 
     <section id="tab-events" class="panel" hidden>
-      <label class="filter">Kind
-        <select id="kind">
-          <option value="">all</option>
-          <option value="commit">commit</option>
-          <option value="push">push</option>
-          <option value="pr_opened">pr_opened</option>
-          <option value="pr_merged">pr_merged</option>
-          <option value="review_submitted">review_submitted</option>
-          <option value="claude_session_start">claude_session_start</option>
-          <option value="claude_session_end">claude_session_end</option>
-        </select>
-      </label>
+      <div class="chips" id="kinds" role="group" aria-label="Kind">
+        <button class="chip on" data-kind="" aria-pressed="true">all</button>
+        <button class="chip" data-kind="commit" aria-pressed="false">commit</button>
+        <button class="chip" data-kind="push" aria-pressed="false">push</button>
+        <button class="chip" data-kind="pr_opened" aria-pressed="false">pr_opened</button>
+        <button class="chip" data-kind="pr_merged" aria-pressed="false">pr_merged</button>
+        <button class="chip" data-kind="review_submitted" aria-pressed="false">review</button>
+        <button class="chip" data-kind="claude_session_start" aria-pressed="false">session start</button>
+        <button class="chip" data-kind="claude_session_end" aria-pressed="false">session end</button>
+      </div>
       <ul class="list" id="eventlog"></ul>
     </section>
   </main>
