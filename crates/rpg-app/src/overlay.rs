@@ -24,6 +24,8 @@ const TOAST_SIZE: (f64, f64) = (360.0, 400.0);
 const BANNER_SIZE: (f64, f64) = (620.0, 280.0);
 /// Must match the `.ach-b` `inset` in `ui/overlay/overlay.css`.
 const BANNER_INSET: f64 = 40.0;
+// Room for the strongest glow (32px) on every side of the frame.
+const _: () = assert!(BANNER_INSET >= 32.0);
 /// Where the banner frame's top sits below the top of the work area.
 const BANNER_TOP: f64 = 42.0;
 /// While a banner shows, how often to check whether the cursor is over its frame.
@@ -513,7 +515,6 @@ fallback = "LADDER"
         assert!(css.contains(&format!("inset: {BANNER_INSET}px")), "overlay.css .ach-b inset != BANNER_INSET");
         // The banner frame itself stays 540x200, with room for the strongest glow (32px) around it.
         assert_eq!((BANNER_SIZE.0 - 2.0 * BANNER_INSET, BANNER_SIZE.1 - 2.0 * BANNER_INSET), (540.0, 200.0));
-        assert!(BANNER_INSET >= 32.0);
     }
 
     #[test]
