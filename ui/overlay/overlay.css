@@ -38,21 +38,51 @@ body { user-select: none; -webkit-user-select: none; }
            transition: height .25s ease-out, padding .25s ease-out, border-width .25s ease-out,
                        margin .25s ease-out; }
 
-/* ---- Gold Banner (style B) ---- */
-.ach-b { position: fixed; inset: 10px; box-sizing: border-box; display: flex; flex-direction: column;
-         justify-content: center; background: radial-gradient(circle at 50% 0%, #4a3500, #140e00 70%);
-         border: 2px solid #ffc83d; color: #fff3cf; text-align: center; padding: 16px 22px; border-radius: 12px;
-         font-family: Georgia, serif; box-shadow: 0 0 18px #ffc83d55; cursor: pointer;
+/* ---- Gold Banner (style B) ----
+   One frame for every tier; --tier colors it, --tint warms the gradient center and
+   the glow grows with rarity. No tier (the summary banner) keeps the plain gold look. */
+.ach-b { --tier: var(--gold); --tint: #4a3500; --glow: 18px; --glow-a: 33%;
+         position: fixed; inset: 10px; box-sizing: border-box; display: flex; flex-direction: column;
+         justify-content: center; background: radial-gradient(circle at 50% 0%, var(--tint), #140e00 70%);
+         border: 2px solid var(--tier); color: #fff3cf; text-align: center; padding: 16px 22px; border-radius: 12px;
+         font-family: Georgia, serif; cursor: pointer; overflow: hidden;
+         box-shadow: 0 0 var(--glow) color-mix(in srgb, var(--tier) var(--glow-a), transparent);
          opacity: 0; transform: scale(.85); visibility: hidden; }
 .ach-b.in  { visibility: visible; animation: banner-in .28s cubic-bezier(.2, 1.4, .4, 1) forwards; }
 .ach-b.out { visibility: visible; animation: banner-out .4s ease-in forwards; }
-.ach-b .hdr { font-size: 12px; letter-spacing: .3em; color: #ffc83d; }
-.ach-b .name { font-size: 24px; font-weight: 700; margin: 6px 0; text-shadow: 0 0 12px #ffc83d; }
+.ach-b .hdr { font-size: 12px; letter-spacing: .3em; color: var(--tier); }
+.ach-b .name { font-size: 24px; font-weight: 700; margin: 6px 0; text-shadow: 0 0 12px var(--tier); }
 .ach-b .desc { font-style: italic; font-size: 13px; opacity: .85; display: -webkit-box; -webkit-line-clamp: 4;
                -webkit-box-orient: vertical; overflow: hidden; }
 .ach-b .desc:empty, .ach-b .rew:empty { display: none; }
-.ach-b .rew { margin-top: 10px; font-family: system-ui, sans-serif; font-size: 13px; color: #ffc83d; }
-.ach-b[data-tier="Gold"] { box-shadow: 0 0 28px #ffc83d99; }
-.ach-b[data-tier="Platinum"] { box-shadow: 0 0 28px #cfe8ffcc; }
+.ach-b .rew { margin-top: 10px; font-family: system-ui, sans-serif; font-size: 13px; color: var(--tier); }
+.ach-b[data-tier="Bronze"]   { --tier: var(--bronze);   --tint: #3d2410; --glow: 14px; --glow-a: 33%; }
+.ach-b[data-tier="Silver"]   { --tier: var(--silver);   --tint: #2c3036; --glow: 18px; --glow-a: 45%; }
+.ach-b[data-tier="Gold"]     { --tier: var(--gold);     --tint: #4a3500; --glow: 28px; --glow-a: 60%; }
+.ach-b[data-tier="Platinum"] { --tier: var(--platinum); --tint: #1f3347; --glow: 32px; --glow-a: 80%; }
+/* Gold and Platinum: a bigger pop (peak 1.03 fits the 10px inset) and one border flash on landing. */
+.ach-b.in:is([data-tier="Gold"], [data-tier="Platinum"]) {
+  animation: banner-in-big .45s cubic-bezier(.2, .9, .3, 1) forwards, tier-flash .6s ease-out .35s; }
+/* Platinum: one light sweep across the banner after it lands. */
+.ach-b::after { content: ""; position: absolute; inset: 0; pointer-events: none; border-radius: inherit; opacity: 0;
+                background: linear-gradient(105deg, transparent 35%, rgba(255, 255, 255, .3) 50%, transparent 65%); }
+.ach-b[data-tier="Platinum"].in::after { animation: shimmer 1s ease-in-out .55s; }
 @keyframes banner-in  { from { opacity: 0; transform: scale(.85); } to { opacity: 1; transform: scale(1); } }
 @keyframes banner-out { from { opacity: 1; transform: scale(1); } to { opacity: 0; transform: scale(.96); } }
+@keyframes banner-in-big {
+  0%   { opacity: 0; transform: scale(.7); }
+  60%  { opacity: 1; transform: scale(1.03); }
+  100% { opacity: 1; transform: scale(1); } }
+@keyframes tier-flash {
+  40% { border-color: color-mix(in srgb, var(--tier) 40%, white);
+        box-shadow: 0 0 40px var(--tier), inset 0 0 18px color-mix(in srgb, var(--tier) 50%, transparent); } }
+@keyframes shimmer { from { opacity: 1; transform: translateX(-100%); } to { opacity: 1; transform: translateX(100%); } }
+@keyframes banner-fade-in  { from { opacity: 0; } to { opacity: 1; } }
+@keyframes banner-fade-out { from { opacity: 1; } to { opacity: 0; } }
+/* Reduced motion: fade only. No scale, flash or shimmer. */
+@media (prefers-reduced-motion: reduce) {
+  .ach-b { transform: none; }
+  .ach-b.in, .ach-b[data-tier].in { animation: banner-fade-in .28s ease-out forwards; }
+  .ach-b.out { animation: banner-fade-out .4s ease-in forwards; }
+  .ach-b[data-tier].in::after { animation: none; }
+}

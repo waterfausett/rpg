@@ -685,4 +685,13 @@ fallback = "A skill, levelled."
         }
         assert_eq!(css_var(OVERLAY_CSS, "silver"), Some("#c0c8d0"));
     }
+
+    #[test]
+    fn banner_styles_every_tier_and_reduced_motion() {
+        for tier in ["Bronze", "Silver", "Gold", "Platinum"] {
+            let sel = format!(".ach-b[data-tier=\"{tier}\"]");
+            assert!(OVERLAY_CSS.contains(&sel), "overlay.css has no {sel} rule");
+        }
+        assert!(OVERLAY_CSS.contains("prefers-reduced-motion"), "banner ignores prefers-reduced-motion");
+    }
 }
