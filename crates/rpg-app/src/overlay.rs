@@ -361,7 +361,7 @@ pub fn resolve_flavor(state: &AppState, unlock: &Unlock, ev: &Event) -> String {
         .unwrap_or_else(|p| p.into_inner())
         .list
         .iter()
-        .find(|r| r.id == unlock.rule_id)
+        .find(|r| r.id == unlock.base_rule_id) // `rule_id` is `id.tier` for ladder steps
         .cloned();
     // The rule was removed since the unlock: nothing to say beyond its name.
     let Some(rule) = rule else { return String::new() };
@@ -448,5 +448,26 @@ flavor = {flavor}
         let (ev, u) = unlock_once(&st);
         assert_eq!(resolve_flavor(&st, &u, &ev), "STATIC");
         assert_eq!(st.store.list_unlocks().unwrap()[0].flavor_text.as_deref(), Some("STATIC"));
+    }
+
+    #[test]
+    fn ladder_step_flavor_finds_its_rule() {
+        let (_t, st) = state(r#"{ type = "static" }"#, None);
+        let ladder = parse_rule(
+            r#"
+id = "pusher"
+name = "Pusher"
+trigger = ["push"]
+counter = { type = "lifetime" }
+tiers = [{ tier = "bronze", at = 1 }, { tier = "silver", at = 5 }]
+fallback = "LADDER"
+"#,
+        )
+        .unwrap();
+        st.rules.write().unwrap().list = vec![ladder];
+        let (ev, u) = unlock_once(&st);
+        assert_eq!(u.rule_id, "pusher.bronze", "unlock key is the step id");
+        assert_eq!(resolve_flavor(&st, &u, &ev), "LADDER");
+        assert_eq!(st.store.list_unlocks().unwrap()[0].flavor_text.as_deref(), Some("LADDER"));
     }
 }
