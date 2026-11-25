@@ -4,7 +4,7 @@ tier = "silver"
 trigger = ["review_submitted"]
 counter = { type = "per_day", at = 5 }
 repeatable = true
-announce = "toast"
+announce = "banner"
 hint = "Other people's code will not read itself."
 fallback = "Five reviews submitted in one day. You have read more of your colleagues' code than they have, and it shows."
 flavor = { type = "llm", prompt = "Rewrite this achievement announcement for this specific unlock, in the same voice: \"{fallback}\". Use the concrete details. Context: {context}" }
