@@ -2,10 +2,10 @@ id = "naming_things_is_hard"
 name = "Naming Things Is Hard"
 tier = "bronze"
 trigger = ["commit"]
-filter = { branch = ['test', 'temp', 'tmp', 'asdf', 'fix2', 'new-branch', 'wip'] }
+filter = { branch = ['test', 'temp', 'tmp', 'asdf', 'fix2', 'new-branch', 'wip', 'idk', 'fml'] }
 counter = { type = "each" }
 repeatable = true
 cooldown_hours = 168
 hidden = true
 hint = "Commit on a branch with a name that gave up."
-fallback = "Committing on a branch called something like asdf or tmp. That branch is going to outlive the project."
+fallback = "Some names are just too hard...you didn't name the branch, you surrendered to it. That branch is going to outlive the project."
