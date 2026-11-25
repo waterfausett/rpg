@@ -32,12 +32,12 @@ struct RawSkill {
     repos: Option<Vec<String>>,
 }
 
-fn glob(pattern: &str) -> Result<Glob, globset::Error> {
+pub(crate) fn glob(pattern: &str) -> Result<Glob, globset::Error> {
     // `*` crosses `/`, so `*.ts` matches `src/app.ts`; case-insensitive for Windows paths.
     GlobBuilder::new(pattern).case_insensitive(true).build()
 }
 
-fn glob_set(field: &str, patterns: Option<Vec<String>>) -> Result<Option<GlobSet>, String> {
+pub(crate) fn glob_set(field: &str, patterns: Option<Vec<String>>) -> Result<Option<GlobSet>, String> {
     let Some(patterns) = patterns else { return Ok(None) };
     if patterns.is_empty() {
         return Err(format!("`{field}` is empty (leave it out to match everything)"));
