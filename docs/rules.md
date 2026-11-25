@@ -42,7 +42,7 @@ Unknown fields are a load error, so a typo is reported rather than silently igno
 | `announce` | `"banner"` / `"toast"` | no | How the unlock is announced. Overrides the tier default. A step in `tiers` may set its own. (Banner/toast selection and the `[announce]` tier defaults in config are coming in this release.) |
 | `hidden` | bool | no, default `false` | Not listed on the character sheet until earned (no "???" row). |
 | `share_text` | bool | no, default `false` | Allows the commit message or PR title into the LLM flavor context. Otherwise they stay in the local database only. |
-| `enabled` | bool | no, default `true` | (Coming in this release.) `enabled = false` turns a rule off without deleting its file. Until it lands, a file with `enabled` fails to load as an unknown field. |
+| `enabled` | bool | no, default `true` | `enabled = false` turns a rule off without deleting its file. The rule still loads and is validated, and the site lists it with an "off" badge, but the engine never evaluates it (meta and skill-level rules included). Turn it back on and a threshold ladder catches up on the next matching event. |
 
 ## Event kinds
 

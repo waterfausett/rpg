@@ -588,6 +588,38 @@ counter = { type = \"lifetime\" }", 1)],
     }
 
     #[test]
+    fn disabled_rule_loads_but_never_fires() {
+        let store = Store::open_in_memory().unwrap();
+        let rules = Rules {
+            list: vec![
+                rule("off", EventKind::Commit, "enabled = false", 5),
+                rule("m", EventKind::Commit, "enabled = false
+at = 1
+counter = { type = \"meta\", of = \"distinct_unlocks\" }", 5),
+                rule("on", EventKind::Commit, "", 1),
+            ],
+            ..Default::default()
+        };
+        assert_eq!(rules.list.len(), 3, "a disabled rule stays in the list");
+        assert!(!rules.list[0].enabled && rules.list[2].enabled);
+        let o = run(&store, &rules, &mk(EventKind::Commit, "2026-01-01T10:00:00Z", serde_json::json!({})));
+        assert_eq!(keys(&o), vec!["on"]);
+    }
+
+    #[test]
+    fn reenabled_ladder_catches_up() {
+        let store = Store::open_in_memory().unwrap();
+        let mut rules = committed_ladder();
+        rules.list[0].enabled = false;
+        store_commits(&store, 150, at("2026-01-01T00:00:00Z"), serde_json::json!({}), false);
+        let o = run(&store, &rules, &mk(EventKind::Commit, "2026-01-02T00:00:00Z", serde_json::json!({})));
+        assert!(o.unlocks.is_empty());
+        rules.list[0].enabled = true;
+        let o = run(&store, &rules, &mk(EventKind::Commit, "2026-01-02T01:00:00Z", serde_json::json!({})));
+        assert_eq!(keys(&o), vec!["committed.bronze"]);
+    }
+
+    #[test]
     fn meta_sees_same_event_unlocks() {
         let store = Store::open_in_memory().unwrap();
         // The meta rule is listed first; it still runs after the others.

@@ -171,7 +171,7 @@ fn achievement_json(
         "hint": if unlocked { r.hint.clone() } else { Some(r.hint.clone().unwrap_or_else(|| MASK.into())) },
         "ladder": r.ladder,
         "progress": progress,
-        "enabled": true,
+        "enabled": r.enabled,
     });
     if r.ladder {
         v["steps"] = Value::Array(steps);
@@ -508,6 +508,16 @@ fallback = "You commit."
         assert_eq!(ids(&v), vec!["committed", "committedx"], "a shared prefix without the dot is still an orphan");
         assert_eq!(v["achievements"][0]["tier"], "silver");
         assert_eq!(v["achievements"][0]["count"], 2);
+    }
+
+    #[tokio::test]
+    async fn disabled_rule_shown_off() {
+        let off = format!("{RULE}enabled = false
+");
+        let st = state_with(Rules { list: vec![parse_rule(&off).unwrap()], ..Default::default() });
+        let v = get_json(&st, "/api/achievements").await;
+        let a = &v["achievements"].as_array().unwrap()[0];
+        assert_eq!((a["id"].clone(), a["enabled"].clone()), (json!("first-merge"), json!(false)));
     }
 
     #[tokio::test]

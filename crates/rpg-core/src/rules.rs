@@ -161,6 +161,8 @@ pub struct Rule {
     pub announce: Option<Announce>,
     pub hidden: bool,
     pub share_text: bool,
+    /// `false` keeps the rule listed but the engine never evaluates it.
+    pub enabled: bool,
 }
 
 impl Rule {
@@ -213,6 +215,12 @@ struct RawRule {
     hidden: bool,
     #[serde(default)]
     share_text: bool,
+    #[serde(default = "yes")]
+    enabled: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// The rule's steps, checked against its counter.
@@ -313,6 +321,7 @@ pub fn parse_rule(text: &str) -> Result<Rule, String> {
         announce: r.announce,
         hidden: r.hidden,
         share_text: r.share_text,
+        enabled: r.enabled,
     })
 }
 
@@ -325,7 +334,7 @@ pub struct Rules {
 
 impl Rules {
     pub fn for_kind(&self, kind: EventKind) -> impl Iterator<Item = &Rule> {
-        self.list.iter().filter(move |r| r.trigger.contains(&kind))
+        self.list.iter().filter(move |r| r.enabled && r.trigger.contains(&kind))
     }
 }
 

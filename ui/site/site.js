@@ -156,6 +156,7 @@
       const card = el("div", "ach " + (a.unlocked ? "unlocked" : "locked") + (a.ladder ? " ladder" : ""));
       card.appendChild(el("div", "tier " + a.tier, a.tier));
       card.appendChild(el("div", "name", a.name));
+      if (a.enabled === false) card.appendChild(el("span", "off", "off"));
       const text = a.unlocked ? a.flavor_text_latest : a.hint;
       if (text) card.appendChild(el("div", "desc", text));
       if (a.ladder) card.appendChild(ladderProgress(a));
