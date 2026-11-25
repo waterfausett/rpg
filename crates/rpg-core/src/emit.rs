@@ -31,6 +31,23 @@ fn new_path(p: &str) -> String {
     }
 }
 
+/// Extract `owner/name` from a GitHub remote URL (https or scp-style ssh); None for other hosts.
+pub fn github_repo_from_url(url: &str) -> Option<String> {
+    let url = url.trim();
+    let rest = ["https://github.com/", "http://github.com/", "git@github.com:", "ssh://git@github.com/"]
+        .iter()
+        .find_map(|p| url.strip_prefix(p))?;
+    let rest = rest.trim_end_matches('/');
+    let rest = rest.strip_suffix(".git").unwrap_or(rest);
+    let (owner, name) = rest.split_once('/')?;
+    (!owner.is_empty() && !name.is_empty() && !name.contains('/')).then(|| format!("{owner}/{name}"))
+}
+
+/// The GitHub `owner/name` of `origin`; None when there is no origin or it is not GitHub.
+fn github_repo(repo: &Path) -> Option<String> {
+    git(repo, &["remote", "get-url", "origin"]).ok().and_then(|u| github_repo_from_url(&u))
+}
+
 fn toplevel(repo: &Path) -> Result<String> {
     git(repo, &["rev-parse", "--show-toplevel"])
 }
@@ -40,6 +57,7 @@ pub fn commit_event(repo: &Path, hash: &str) -> Result<Event> {
     let top = toplevel(repo)?;
     let branch = git(repo, &["rev-parse", "--abbrev-ref", "HEAD"])?;
     let stat = git(repo, &["-c", "core.quotepath=false", "show", "--numstat", "--format=", hash])?;
+    let message = git(repo, &["show", "-s", "--format=%B", hash])?;
     let (mut added, mut removed) = (0u64, 0u64);
     let mut files = Vec::new();
     for line in stat.lines().filter(|l| !l.trim().is_empty()) {
@@ -61,6 +79,7 @@ pub fn commit_event(repo: &Path, hash: &str) -> Result<Event> {
         json!({
             "hash": hash, "branch": branch, "repo_path": top,
             "files": files, "lines_added": added, "lines_removed": removed,
+            "message": message, "github_repo": github_repo(repo),
         }),
     ))
 }
@@ -72,7 +91,7 @@ pub fn push_event(repo: &Path, remote: &str) -> Result<Event> {
         EventKind::Push,
         Source::Git,
         Some(top.clone()),
-        json!({ "remote": remote, "branch": branch, "repo_path": top }),
+        json!({ "remote": remote, "branch": branch, "repo_path": top, "github_repo": github_repo(repo) }),
     ))
 }
 
