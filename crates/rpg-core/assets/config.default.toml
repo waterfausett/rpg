@@ -35,6 +35,8 @@ bronze = "toast"
 silver = "banner"
 gold = "banner"
 platinum = "banner"
+legendary = "banner"
+celestial = "banner"
 
 [site]
 port = 47474

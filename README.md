@@ -93,7 +93,7 @@ Rules are TOML files in `rules/` (hot-reloaded; a broken file is skipped with a 
 ```toml
 id = "my_rule"                 # unique; first file wins on duplicates
 name = "Midnight Oil"          # shown once unlocked ("???" before)
-tier = "silver"                # bronze | silver | gold | platinum (default xp 250 / 500 / 1000 / 2000)
+tier = "silver"                # bronze | silver | gold | platinum | legendary | celestial (default xp 250 / 500 / 1000 / 2000 / 4000 / 8000)
 xp = 600                       # optional; overrides the tier default
 fallback = "Static text shown when there is no LLM flavor."
 hint = "Shown while still locked."          # optional

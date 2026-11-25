@@ -678,7 +678,7 @@ fallback = "A skill, levelled."
 
     #[test]
     fn tier_palette_matches_between_overlay_and_site() {
-        for tier in ["bronze", "silver", "gold", "platinum"] {
+        for tier in ["bronze", "silver", "gold", "platinum", "legendary", "celestial"] {
             let (o, s) = (css_var(OVERLAY_CSS, tier), css_var(SITE_CSS, tier));
             assert!(o.is_some() && s.is_some(), "--{tier} missing: overlay {o:?}, site {s:?}");
             assert_eq!(o, s, "--{tier} differs between overlay.css and site.css");
@@ -688,7 +688,7 @@ fallback = "A skill, levelled."
 
     #[test]
     fn banner_styles_every_tier_and_reduced_motion() {
-        for tier in ["Bronze", "Silver", "Gold", "Platinum"] {
+        for tier in ["Bronze", "Silver", "Gold", "Platinum", "Legendary", "Celestial"] {
             let sel = format!(".ach-b[data-tier=\"{tier}\"]");
             assert!(OVERLAY_CSS.contains(&sel), "overlay.css has no {sel} rule");
         }
@@ -697,7 +697,7 @@ fallback = "A skill, levelled."
 
     #[test]
     fn unlocked_cards_style_every_tier() {
-        for tier in ["bronze", "silver", "gold", "platinum"] {
+        for tier in ["bronze", "silver", "gold", "platinum", "legendary", "celestial"] {
             let sel = format!(".ach.t-{tier}");
             assert!(SITE_CSS.contains(&sel), "site.css has no {sel} rule");
         }
@@ -714,17 +714,28 @@ fallback = "A skill, levelled."
     }
 
     #[test]
-    fn platinum_banner_flash_and_shimmer_run_together() {
-        let flash = anim_after(OVERLAY_CSS, ".ach-b.in[data-tier=\"Platinum\"]", "tier-flash");
-        let sweep = anim_after(OVERLAY_CSS, ".ach-b[data-tier=\"Platinum\"].in::after", "shimmer");
-        assert!(flash.is_some(), "no Platinum tier-flash");
-        assert_eq!(flash, sweep, "Platinum flash and shimmer timings differ");
+    fn platinum_and_up_banner_flash_and_shimmer_run_together() {
+        let flash = anim_after(OVERLAY_CSS, ".ach-b.in:is([data-tier=\"Platinum\"], [data-tier=\"Legendary\"], [data-tier=\"Celestial\"])", "tier-flash");
+        let sweep = anim_after(OVERLAY_CSS, ".ach-b:is([data-tier=\"Platinum\"], [data-tier=\"Legendary\"], [data-tier=\"Celestial\"]).in::after", "shimmer");
+        assert!(flash.is_some(), "no Platinum-and-up tier-flash");
+        assert_eq!(flash, sweep, "flash and shimmer timings differ");
     }
 
     #[test]
-    fn platinum_toast_pill_shimmers() {
-        let sweep = anim_after(OVERLAY_CSS, ".xp.ach[data-tier=\"Platinum\"]::after", "shimmer");
-        assert!(sweep.is_some(), "Platinum toast pill has no shimmer");
+    fn platinum_and_up_toast_pill_shimmers() {
+        let sweep = anim_after(OVERLAY_CSS, ".xp.ach:is([data-tier=\"Platinum\"], [data-tier=\"Legendary\"], [data-tier=\"Celestial\"])::after", "shimmer");
+        assert!(sweep.is_some(), "Platinum-and-up toast pill has no shimmer");
+    }
+
+    #[test]
+    fn top_tiers_have_their_extra_flourishes() {
+        for needle in [".ach-b.in[data-tier=\"Legendary\"]", ".ach-b.in[data-tier=\"Celestial\"]", "tier-pulse", ".ach-pulse", "tier-bloom", "name-drift", "twinkle"] {
+            assert!(OVERLAY_CSS.contains(needle), "overlay.css lacks {needle}");
+        }
+        assert!(SITE_CSS.contains("card-sweep"), "site.css lacks the card sweep");
+        let reduced = &OVERLAY_CSS[OVERLAY_CSS.find("prefers-reduced-motion").unwrap()..];
+        assert!(reduced.contains("[data-tier=\"Celestial\"]::before { animation: none; }"), "reduced motion leaves the stars twinkling");
+        assert!(SITE_CSS.contains("prefers-reduced-motion"), "site.css ignores reduced motion");
     }
 
     #[test]
