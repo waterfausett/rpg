@@ -10,6 +10,8 @@ The automated and scripted checks cannot see these. Do them once on your machine
 - [ ] Real transparency: only the pill and banner are visible, with no white or black rectangle around them.
 - [ ] No taskbar button and no Alt+Tab entry for the overlay windows. No console window flashes on commit.
 - [ ] A commit that takes a skill to a new level shows a teal `▲ <Skill> Lv N` pop-up after the exp pop-up, with no banner or sound.
+- [ ] An unlock announced as a toast (a bronze achievement by default) shows a pill `✦ <name>  +N exp` with a tier-colored border and glow, and plays no sound.
+- [ ] A platinum achievement banner shows with a pale-blue (`#cfe8ff`) glow.
 - [ ] A banner plays a sound (drop a file in `sounds/` first); **Mute sounds** silences it.
 
 ## Tray

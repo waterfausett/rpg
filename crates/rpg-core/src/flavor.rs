@@ -227,6 +227,7 @@ repeatable = true
             name: "Night Owl".into(),
             tier: Tier::Bronze,
             xp: 5,
+            announce: crate::rules::Announce::Toast,
             findings: serde_json::json!({"path": "src/old.rs", "age_days": 400}),
             unlock_count: 2,
             last_unlocked_at: None,

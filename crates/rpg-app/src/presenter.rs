@@ -2,7 +2,7 @@
 //! Disturb, and collapsing of achievement storms / away batches. Pure (no Tauri).
 use rpg_core::engine::{Outcome, SkillLevelUp, Unlock};
 use rpg_core::event::Event;
-use rpg_core::rules::Tier;
+use rpg_core::rules::{Announce, Tier};
 use std::collections::VecDeque;
 
 /// More unlocks than this in one live batch is a storm.
@@ -23,6 +23,8 @@ pub struct Toast {
     pub notice: bool,
     /// A skill level-up ("TypeScript Lv 9"), shown as a plain message in skill colors.
     pub skill: bool,
+    /// Set for an achievement toast (an unlock announced as a toast): its tier.
+    pub tier: Option<Tier>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -92,14 +94,24 @@ impl Presenter {
     }
 
     fn push_xp(&mut self, batch: &[(Event, Outcome)], away: bool) {
-        let unlocks: Vec<(&Event, &Unlock)> = batch.iter().flat_map(|(e, o)| o.unlocks.iter().map(move |u| (e, u))).collect();
+        // Only banner-announced unlocks become banners (and count toward a storm).
+        let unlocks: Vec<(&Event, &Unlock)> = batch
+            .iter()
+            .flat_map(|(e, o)| o.unlocks.iter().filter(|u| u.announce == Announce::Banner).map(move |u| (e, u)))
+            .collect();
         let level_ups: Vec<u32> = batch.iter().flat_map(|(_, o)| o.level_ups.iter().copied()).collect();
         let gains = batch.iter().flat_map(|(_, o)| &o.xp_gains);
 
         let storm = away || unlocks.len() > STORM_CAP;
         if !storm {
             if !self.dnd {
-                self.toasts.extend(gains.map(|g| Toast { amount: g.amount, label: g.label.clone(), notice: false, skill: false }));
+                self.toasts.extend(gains.map(|g| Toast {
+                    amount: g.amount,
+                    label: g.label.clone(),
+                    notice: false,
+                    skill: false,
+                    tier: g.achievement.filter(|&(_, a)| a == Announce::Toast).map(|(t, _)| t),
+                }));
             }
             self.banners.extend(unlocks.iter().map(|(e, u)| achievement(e, u)));
             self.banners.extend(level_ups.into_iter().map(level_up));
@@ -108,7 +120,7 @@ impl Presenter {
 
         let sum: u64 = gains.map(|g| g.amount).sum();
         if sum > 0 && !self.dnd {
-            self.toasts.push(Toast { amount: sum, label: if away { AWAY_LABEL.into() } else { String::new() }, notice: false, skill: false });
+            self.toasts.push(Toast { amount: sum, label: if away { AWAY_LABEL.into() } else { String::new() }, notice: false, skill: false, tier: None });
         }
         let achs = unlocks.iter().map(|(e, u)| achievement(e, u)).collect();
         self.banners.extend(collapse(achs, (0, 0), away));
@@ -121,7 +133,7 @@ impl Presenter {
     /// silent banner at the head of the queue. Both ignore DND: the user just asked.
     pub fn notice(&mut self, ok: bool, title: &str, detail: &str) {
         if ok {
-            self.toasts.push(Toast { amount: 0, label: title.into(), notice: true, skill: false });
+            self.toasts.push(Toast { amount: 0, label: title.into(), notice: true, skill: false, tier: None });
             return;
         }
         self.banners.push_front(Banner {
@@ -228,7 +240,7 @@ fn skill_toasts<'a>(ups: impl Iterator<Item = &'a SkillLevelUp>) -> Vec<Toast> {
         }
     }
     best.into_iter()
-        .map(|u| Toast { amount: 0, label: format!("{} Lv {}", u.name, u.level), notice: true, skill: true })
+        .map(|u| Toast { amount: 0, label: format!("{} Lv {}", u.name, u.level), notice: true, skill: true, tier: None })
         .collect()
 }
 
@@ -273,7 +285,7 @@ fn achievement(ev: &Event, u: &Unlock) -> Banner {
         text: String::new(),
         reward: format!("+{} exp", u.xp),
         tier: Some(u.tier),
-        sound_key: SoundKey::Achievement { rule_id: u.rule_id.clone(), tier: u.tier },
+        sound_key: SoundKey::Achievement { rule_id: u.base_rule_id.clone(), tier: u.tier },
         flavor: Some(FlavorSource { unlock: u.clone(), event: ev.clone() }),
         text_ready: false,
         more: None,
@@ -319,7 +331,12 @@ mod tests {
             findings: serde_json::json!({}),
             unlock_count: 1,
             last_unlocked_at: None,
+            announce: Announce::Banner,
         }
+    }
+
+    fn toast_unlock(id: i64, tier: Tier, xp: u64) -> Unlock {
+        Unlock { announce: Announce::Toast, ..unlock(id, tier, xp) }
     }
 
     /// One event per unlock, `secs` apart, each with a 10 exp commit gain plus the unlock's xp.
@@ -330,8 +347,8 @@ mod tests {
             .map(|(i, u)| {
                 let o = Outcome {
                     xp_gains: vec![
-                        XpGain { amount: 10, label: "commit".into() },
-                        XpGain { amount: u.xp, label: u.name.clone() },
+                        XpGain { amount: 10, label: "commit".into(), achievement: None },
+                        XpGain { amount: u.xp, label: u.name.clone(), achievement: Some((u.tier, u.announce)) },
                     ],
                     unlocks: vec![u],
                     ..Default::default()
@@ -366,7 +383,7 @@ mod tests {
     #[test]
     fn skill_level_ups_toast_once_per_skill_after_exp() {
         let mut p = Presenter::new();
-        let mut a = Outcome { xp_gains: vec![XpGain { amount: 10, label: "commit".into() }], ..Default::default() };
+        let mut a = Outcome { xp_gains: vec![XpGain { amount: 10, label: "commit".into(), achievement: None }], ..Default::default() };
         a.skill_level_ups = vec![skill_up("ts", 2), skill_up("ts", 3), skill_up("yaml", 4)];
         let b = Outcome { skill_level_ups: vec![skill_up("ts", 4)], ..Default::default() };
         p.push(&[(ev(0), a), (ev(1), b)], false);
@@ -385,7 +402,7 @@ mod tests {
         p.push(&batch(vec![unlock(1, Tier::Bronze, 250), unlock(2, Tier::Silver, 500)]), false);
         let toasts = p.next_toasts();
         assert_eq!(toasts.len(), 4, "every xp gain is a toast: {toasts:?}");
-        assert_eq!(toasts[0], Toast { amount: 10, label: "commit".into(), notice: false, skill: false });
+        assert_eq!(toasts[0], Toast { amount: 10, label: "commit".into(), notice: false, skill: false, tier: None });
         assert!(p.next_toasts().is_empty(), "toasts are drained");
 
         let first = p.next_banner().expect("first banner");
@@ -404,6 +421,52 @@ mod tests {
     }
 
     #[test]
+    fn toast_announced_unlock_is_a_toast_not_a_banner() {
+        let mut p = Presenter::new();
+        p.push(&batch(vec![toast_unlock(1, Tier::Silver, 250)]), false);
+        let toasts = p.next_toasts();
+        assert_eq!(toasts.len(), 2);
+        assert_eq!(toasts[0].tier, None);
+        assert_eq!(toasts[1], Toast { amount: 250, label: "Ach 1".into(), notice: false, skill: false, tier: Some(Tier::Silver) });
+        assert!(p.next_banner().is_none(), "a toast unlock gets no banner");
+
+        p.set_dnd(true);
+        p.push(&batch(vec![toast_unlock(2, Tier::Bronze, 100)]), false);
+        assert!(p.next_toasts().is_empty(), "DND drops achievement toasts");
+    }
+
+    #[test]
+    fn storm_counts_only_banner_unlocks() {
+        let mut p = Presenter::new();
+        let mut us: Vec<Unlock> = (1..=5).map(|i| toast_unlock(i, Tier::Bronze, 100)).collect();
+        us.extend([unlock(6, Tier::Silver, 500), unlock(7, Tier::Silver, 500)]);
+        p.push(&batch(us), false);
+        let toasts = p.next_toasts();
+        assert_eq!(toasts.len(), 14, "no storm summary toast: every gain stays a toast");
+        assert_eq!(toasts.iter().filter(|t| t.tier == Some(Tier::Bronze)).count(), 5);
+        let bs = drain(&mut p);
+        assert_eq!(bs.iter().map(|b| b.name.as_str()).collect::<Vec<_>>(), vec!["Ach 6", "Ach 7"]);
+        assert!(bs.iter().all(|b| b.kind == BannerKind::Achievement), "no storm summary");
+    }
+
+    #[test]
+    fn platinum_ranks_first_in_collapse() {
+        let mut p = Presenter::new();
+        let us = vec![
+            unlock(1, Tier::Gold, 1500),
+            unlock(2, Tier::Gold, 1400),
+            unlock(3, Tier::Gold, 1300),
+            unlock(4, Tier::Silver, 900),
+            unlock(5, Tier::Platinum, 100),
+        ];
+        p.push(&batch(us), false);
+        let bs = drain(&mut p);
+        let got: Vec<&str> = bs.iter().map(|b| b.name.as_str()).collect();
+        assert_eq!(&got[..3], &["Ach 5", "Ach 1", "Ach 2"]);
+        assert_eq!(bs[3].kind, BannerKind::AwaySummary);
+    }
+
+    #[test]
     fn away_batch_caps_banners() {
         let mut p = Presenter::new();
         // Ascending size: bronze first, one gold last.
@@ -419,7 +482,7 @@ mod tests {
         p.push(&batch(us), true);
         let toasts = p.next_toasts();
         let total = 7 * 10 + 100 + 200 + 250 + 400 + 500 + 500 + 1000;
-        assert_eq!(toasts, vec![Toast { amount: total, label: AWAY_LABEL.into(), notice: false, skill: false }]);
+        assert_eq!(toasts, vec![Toast { amount: total, label: AWAY_LABEL.into(), notice: false, skill: false, tier: None }]);
 
         let bs = drain(&mut p);
         assert_eq!(bs.len(), 4, "3 achievements + 1 summary");
@@ -439,7 +502,7 @@ mod tests {
         let mut p = Presenter::new();
         p.push(&batch(vec![unlock(1, Tier::Bronze, 100), unlock(2, Tier::Gold, 1000)]), true);
         assert_eq!(names(&mut p), vec!["Ach 2", "Ach 1"], "sorted, no summary");
-        assert_eq!(p.next_toasts(), vec![Toast { amount: 20 + 1100, label: AWAY_LABEL.into(), notice: false, skill: false }]);
+        assert_eq!(p.next_toasts(), vec![Toast { amount: 20 + 1100, label: AWAY_LABEL.into(), notice: false, skill: false, tier: None }]);
     }
 
     #[test]
@@ -454,7 +517,7 @@ mod tests {
         ];
         p.push(&batch(us), false);
         let toasts = p.next_toasts();
-        assert_eq!(toasts, vec![Toast { amount: 50 + 100 + 500 + 300 + 1000 + 250, label: String::new(), notice: false, skill: false }]);
+        assert_eq!(toasts, vec![Toast { amount: 50 + 100 + 500 + 300 + 1000 + 250, label: String::new(), notice: false, skill: false, tier: None }]);
         let bs = drain(&mut p);
         let got: Vec<&str> = bs.iter().map(|b| b.name.as_str()).collect();
         assert_eq!(&got[..3], &["Ach 4", "Ach 2", "Ach 3"]);
@@ -567,7 +630,7 @@ mod tests {
         let mut p = Presenter::new();
         p.set_dnd(true);
         p.notice(true, "Hooks installed", "git + Claude Code");
-        assert_eq!(p.next_toasts(), vec![Toast { amount: 0, label: "Hooks installed".into(), notice: true, skill: false }]);
+        assert_eq!(p.next_toasts(), vec![Toast { amount: 0, label: "Hooks installed".into(), notice: true, skill: false, tier: None }]);
         assert!(p.next_banner().is_none(), "success needs no banner");
     }
 

@@ -44,6 +44,8 @@ struct ToastPayload {
     label: String,
     notice: bool,
     skill: bool,
+    /// Tier label of an achievement toast ("Bronze"...).
+    tier: Option<&'static str>,
 }
 
 #[derive(Deserialize)]
@@ -259,7 +261,7 @@ fn pump(inner: &Arc<Inner>) {
 fn show_toasts(inner: &Arc<Inner>, f: &mut Flow, toasts: Vec<Toast>) {
     let Some(win) = inner.window(TOAST) else { return };
     let _ = win.show();
-    let payload: Vec<ToastPayload> = toasts.into_iter().map(|t| ToastPayload { amount: t.amount, label: t.label, notice: t.notice, skill: t.skill }).collect();
+    let payload: Vec<ToastPayload> = toasts.into_iter().map(|t| ToastPayload { amount: t.amount, label: t.label, notice: t.notice, skill: t.skill, tier: t.tier.map(|t| t.label()) }).collect();
     if let Err(e) = inner.app.emit_to(TOAST, "toast", payload) {
         log(&inner.state.paths, &format!("emitting toast failed: {e}"));
     }

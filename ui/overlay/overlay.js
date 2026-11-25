@@ -9,8 +9,11 @@
 
   function addToast(t) {
     const pill = document.createElement("div");
-    pill.className = t.skill ? "xp skill" : "xp";
-    if (t.notice) {
+    pill.className = t.skill ? "xp skill" : t.tier ? "xp ach" : "xp";
+    if (t.tier) {
+      pill.dataset.tier = t.tier;
+      pill.textContent = "✦ " + (t.label || "") + "  +" + t.amount + " exp";
+    } else if (t.notice) {
       pill.textContent = (t.skill ? "▲ " : "") + (t.label || "");
     } else {
       pill.textContent = "+" + t.amount + " exp";

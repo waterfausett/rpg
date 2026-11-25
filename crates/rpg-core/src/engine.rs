@@ -4,7 +4,7 @@ use crate::counters::{evaluate, EvalCtx};
 use crate::enrich::FileAge;
 use crate::event::{Event, EventKind};
 use crate::records;
-use crate::rules::{Counter, Rule, Rules, Tier};
+use crate::rules::{Announce, Counter, Rule, Rules, Tier};
 use crate::store::{NewUnlock, Store};
 use crate::xp::level_for;
 use anyhow::Result;
@@ -14,6 +14,8 @@ use chrono::{DateTime, Duration, FixedOffset, Utc};
 pub struct XpGain {
     pub amount: u64,
     pub label: String,
+    /// `Some` for the exp an unlock paid: its tier and how it is announced. `None` for base event exp.
+    pub achievement: Option<(Tier, Announce)>,
 }
 
 #[derive(Debug, Clone)]
@@ -26,6 +28,8 @@ pub struct Unlock {
     pub name: String,
     pub tier: Tier,
     pub xp: u64,
+    /// Banner or toast: the step's setting, else the rule's, else the config's for its tier.
+    pub announce: Announce,
     pub findings: serde_json::Value,
     /// Includes this unlock.
     pub unlock_count: u32,
@@ -161,7 +165,7 @@ fn process_inner(
     if let Some((amount, label)) = base_xp(store, cfg, ev)? {
         if amount > 0 {
             store.add_xp(&ev.id, amount, label, ev.ts)?;
-            out.xp_gains.push(XpGain { amount, label: label.to_string() });
+            out.xp_gains.push(XpGain { amount, label: label.to_string(), achievement: None });
         }
         award_skills(store, rules, cfg, ev, &mut out)?;
     }
@@ -198,9 +202,10 @@ fn process_inner(
                 context: f.findings.clone(),
                 ts: ev.ts,
             })?;
+            let announce = f.step.announce.or(rule.announce).unwrap_or(cfg.announce.for_tier(f.step.tier));
             if f.step.xp > 0 {
                 store.add_xp(&ev.id, f.step.xp, &f.name, ev.ts)?;
-                out.xp_gains.push(XpGain { amount: f.step.xp, label: f.name.clone() });
+                out.xp_gains.push(XpGain { amount: f.step.xp, label: f.name.clone(), achievement: Some((f.step.tier, announce)) });
             }
             out.unlocks.push(Unlock {
                 unlock_id,
@@ -209,6 +214,7 @@ fn process_inner(
                 name: f.name,
                 tier: f.step.tier,
                 xp: f.step.xp,
+                announce,
                 findings: f.findings,
                 unlock_count: count + 1,
                 last_unlocked_at: last,
@@ -242,7 +248,7 @@ fn award_skills(store: &Store, rules: &Rules, cfg: &Config, ev: &Event, out: &mu
 mod tests {
     use super::*;
     use crate::event::Source;
-    use crate::rules::{parse_rule, Rule};
+    use crate::rules::{parse_rule, Announce, Rule};
 
     fn tz() -> FixedOffset {
         FixedOffset::east_opt(0).unwrap()
@@ -385,7 +391,7 @@ trigger = ["{kind}"]
         }
         assert_eq!(ups, vec![2], "level 2 at exactly 1000 exp");
         assert_eq!((last.total_xp, last.level), (1000, 2));
-        assert_eq!(last.xp_gains[0], XpGain { amount: 100, label: "PR merged".into() });
+        assert_eq!(last.xp_gains[0], XpGain { amount: 100, label: "PR merged".into(), achievement: None });
     }
 
     #[test]
@@ -399,7 +405,7 @@ trigger = ["{kind}"]
         assert!(run(&store, &rules, &start).xp_gains.is_empty());
         let end2 = mk(EventKind::ClaudeSessionEnd, "2026-01-01T12:00:00Z", serde_json::json!({"session_id": "s2"}));
         let o = run(&store, &rules, &end2);
-        assert_eq!(o.xp_gains, vec![XpGain { amount: 15, label: "Claude session".into() }]);
+        assert_eq!(o.xp_gains, vec![XpGain { amount: 15, label: "Claude session".into(), achievement: None }]);
     }
 
     #[test]
@@ -612,6 +618,53 @@ counter = { type = \"skill_level\" }", 4));
         assert_eq!(keys(&o), vec!["sm.rust.bronze"]);
         assert_eq!((o.unlocks[0].base_rule_id.as_str(), o.unlocks[0].name.as_str()), ("sm", "Name sm: Rust (Bronze)"));
         assert!(run(&store, &rules, &commit_with("2026-01-01T11:00:00Z", &["b.rs"])).unlocks.is_empty());
+    }
+
+    #[test]
+    fn announce_resolution_order() {
+        let ladder = parse_rule(
+            "id=\"lad\"
+name=\"Lad\"
+fallback=\"f\"
+trigger=[\"commit\"]
+announce=\"banner\"
+counter={type=\"lifetime\"}
+tiers=[{tier=\"bronze\",at=100,xp=5},{tier=\"silver\",at=1000,xp=50,announce=\"toast\"}]",
+        )
+        .unwrap();
+        let plain = rule("plain", EventKind::Commit, "", 7);
+        let rules = Rules { list: vec![ladder, plain], ..Default::default() };
+        let go = |cfg: &Config| {
+            let store = Store::open_in_memory().unwrap();
+            store_commits(&store, 1200, at("2026-01-01T00:00:00Z"), serde_json::json!({}), false);
+            let ev = mk(EventKind::Commit, "2026-01-02T00:00:00Z", serde_json::json!({}));
+            let o = process(&store, &rules, cfg, &ev, &[], tz()).unwrap();
+            let unlocks: Vec<(String, Announce)> = o.unlocks.iter().map(|u| (u.rule_id.clone(), u.announce)).collect();
+            let gains: Vec<Option<(Tier, Announce)>> = o.xp_gains.iter().map(|g| g.achievement).collect();
+            (unlocks, gains)
+        };
+        // Step over rule over config: the rule's banner beats the config, the silver step's toast beats the rule.
+        let (unlocks, gains) = go(&Config::default());
+        assert_eq!(
+            unlocks,
+            vec![
+                ("lad.bronze".to_string(), Announce::Banner),
+                ("lad.silver".to_string(), Announce::Toast),
+                ("plain".to_string(), Announce::Toast),
+            ]
+        );
+        assert_eq!(
+            gains,
+            vec![
+                None,
+                Some((Tier::Bronze, Announce::Banner)),
+                Some((Tier::Silver, Announce::Toast)),
+                Some((Tier::Bronze, Announce::Toast)),
+            ]
+        );
+        // With neither set, the config decides by tier.
+        let cfg: Config = toml::from_str("[announce]\nbronze = \"banner\"\n").unwrap();
+        assert_eq!(go(&cfg).0[2], ("plain".to_string(), Announce::Banner));
     }
 
     #[test]
