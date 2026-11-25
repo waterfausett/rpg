@@ -25,7 +25,10 @@ pub struct Unlock {
     pub rule_id: String,
     /// The id of the rule that fired.
     pub base_rule_id: String,
+    /// Stored and in history; a ladder step's includes the tier, e.g. "Committed (Silver)".
     pub name: String,
+    /// `name` without the tier, for the banner and toast, which show the tier as color.
+    pub title: String,
     pub tier: Tier,
     pub xp: u64,
     /// Banner or toast: the step's setting, else the rule's, else the config's for its tier.
@@ -210,13 +213,14 @@ fn process_inner(
             };
             if f.step.xp > 0 {
                 store.add_xp(&ev.id, f.step.xp, &f.name, ev.ts)?;
-                out.xp_gains.push(XpGain { amount: f.step.xp, label: f.name.clone(), achievement: Some((f.step.tier, announce)) });
+                out.xp_gains.push(XpGain { amount: f.step.xp, label: f.title.clone(), achievement: Some((f.step.tier, announce)) });
             }
             out.unlocks.push(Unlock {
                 unlock_id,
                 rule_id: f.unlock_key,
                 base_rule_id: rule.id.clone(),
                 name: f.name,
+                title: f.title,
                 tier: f.step.tier,
                 xp: f.step.xp,
                 announce,
@@ -589,6 +593,9 @@ counter = { type = \"lifetime\" }", 1)],
         assert_eq!(keys(&o), vec!["committed.bronze"]);
         let u = &o.unlocks[0];
         assert_eq!((u.base_rule_id.as_str(), u.name.as_str(), u.tier, u.xp), ("committed", "Committed (Bronze)", Tier::Bronze, 5));
+        // The tier shows as color on the banner and toast, so their text leaves it out.
+        assert_eq!(u.title, "Committed");
+        assert!(o.xp_gains.iter().any(|g| g.achievement.is_some() && g.label == "Committed"), "{:?}", o.xp_gains);
         assert_eq!(u.findings, serde_json::json!({ "progress": 151, "at": 100 }));
     }
 

@@ -665,4 +665,71 @@ fallback = "A skill, levelled."
         assert!(v[0].get("source").is_none());
         assert_eq!(v[0]["id"], "x");
     }
+
+    const OVERLAY_CSS: &str = include_str!("../../../ui/overlay/overlay.css");
+    const SITE_CSS: &str = include_str!("../../../ui/site/site.css");
+
+    /// The value of the first `--<name>:` declaration in `css`.
+    fn css_var<'a>(css: &'a str, name: &str) -> Option<&'a str> {
+        let pat = format!("--{name}:");
+        let rest = &css[css.find(&pat)? + pat.len()..];
+        Some(rest[..rest.find(';')?].trim())
+    }
+
+    #[test]
+    fn tier_palette_matches_between_overlay_and_site() {
+        for tier in ["bronze", "silver", "gold", "platinum"] {
+            let (o, s) = (css_var(OVERLAY_CSS, tier), css_var(SITE_CSS, tier));
+            assert!(o.is_some() && s.is_some(), "--{tier} missing: overlay {o:?}, site {s:?}");
+            assert_eq!(o, s, "--{tier} differs between overlay.css and site.css");
+        }
+        assert_eq!(css_var(OVERLAY_CSS, "silver"), Some("#c0c8d0"));
+    }
+
+    #[test]
+    fn banner_styles_every_tier_and_reduced_motion() {
+        for tier in ["Bronze", "Silver", "Gold", "Platinum"] {
+            let sel = format!(".ach-b[data-tier=\"{tier}\"]");
+            assert!(OVERLAY_CSS.contains(&sel), "overlay.css has no {sel} rule");
+        }
+        assert!(OVERLAY_CSS.contains("prefers-reduced-motion"), "banner ignores prefers-reduced-motion");
+    }
+
+    #[test]
+    fn unlocked_cards_style_every_tier() {
+        for tier in ["bronze", "silver", "gold", "platinum"] {
+            let sel = format!(".ach.t-{tier}");
+            assert!(SITE_CSS.contains(&sel), "site.css has no {sel} rule");
+        }
+        assert!(include_str!("../../../ui/site/site.js").contains("\"unlocked t-\" + a.tier"), "site.js doesn't tag unlocked cards with their tier");
+    }
+
+    /// The `<name> <timing>` animation entry in `css` after `anchor`, e.g. `tier-flash 1s ease-in-out .45s`.
+    fn anim_after<'a>(css: &'a str, anchor: &str, name: &str) -> Option<&'a str> {
+        let rule = &css[css.find(anchor)?..];
+        let rule = &rule[..rule.find('}')?];
+        let at = rule.find(&format!("{name} "))? + name.len() + 1;
+        let rest = &rule[at..];
+        Some(rest[..rest.find([',', ';']).unwrap_or(rest.len())].trim())
+    }
+
+    #[test]
+    fn platinum_banner_flash_and_shimmer_run_together() {
+        let flash = anim_after(OVERLAY_CSS, ".ach-b.in[data-tier=\"Platinum\"]", "tier-flash");
+        let sweep = anim_after(OVERLAY_CSS, ".ach-b[data-tier=\"Platinum\"].in::after", "shimmer");
+        assert!(flash.is_some(), "no Platinum tier-flash");
+        assert_eq!(flash, sweep, "Platinum flash and shimmer timings differ");
+    }
+
+    #[test]
+    fn platinum_toast_pill_shimmers() {
+        let sweep = anim_after(OVERLAY_CSS, ".xp.ach[data-tier=\"Platinum\"]::after", "shimmer");
+        assert!(sweep.is_some(), "Platinum toast pill has no shimmer");
+    }
+
+    #[test]
+    fn banner_reward_line_leaves_the_tier_to_its_color() {
+        let js = include_str!("../../../ui/overlay/overlay.js");
+        assert!(js.contains("set(\"reward\", b.reward)"), "overlay.js should show the reward without the tier name");
+    }
 }

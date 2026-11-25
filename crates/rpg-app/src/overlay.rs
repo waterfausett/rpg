@@ -19,7 +19,17 @@ use tauri::{AppHandle, Emitter, Listener, Manager, PhysicalPosition, WebviewUrl,
 const TOAST: &str = "toast";
 const BANNER: &str = "banner";
 const TOAST_SIZE: (f64, f64) = (360.0, 400.0);
-const BANNER_SIZE: (f64, f64) = (560.0, 220.0);
+/// The banner frame is 540x200; the window adds BANNER_INSET on every side so the
+/// tier glow (up to 32px, plus the flash) is not cut off at the window edge.
+const BANNER_SIZE: (f64, f64) = (620.0, 280.0);
+/// Must match the `.ach-b` `inset` in `ui/overlay/overlay.css`.
+const BANNER_INSET: f64 = 40.0;
+// Room for the strongest glow (32px) on every side of the frame.
+const _: () = assert!(BANNER_INSET >= 32.0);
+/// Where the banner frame's top sits below the top of the work area.
+const BANNER_TOP: f64 = 42.0;
+/// While a banner shows, how often to check whether the cursor is over its frame.
+const CLICK_POLL: Duration = Duration::from_millis(40);
 /// Margin from the screen edge, in logical pixels.
 const MARGIN: f64 = 16.0;
 /// Hide the toast window this long after the last toast (pills fade over 3s).
@@ -241,7 +251,7 @@ fn place_windows(app: &AppHandle) {
     }
     if let Some(w) = app.get_webview_window(BANNER) {
         let x = ax + (aw - BANNER_SIZE.0 * s) / 2.0;
-        let y = ay + 2.0 * MARGIN * s;
+        let y = ay + (BANNER_TOP - BANNER_INSET) * s;
         let _ = w.set_position(at(x, y));
     }
 }
@@ -335,6 +345,8 @@ fn show_banner(inner: &Arc<Inner>, id: u64, mut b: Banner) {
         f.banner_hovered = false;
         f.current = Some(Current { id, shown: Some(b) });
     }
+    let i = inner.clone();
+    let _ = std::thread::Builder::new().name("rpg-banner-clicks".into()).spawn(move || pass_clicks_outside_banner(&i, id));
     let mut deadline = Instant::now() + BANNER_WATCHDOG;
     while Instant::now() < deadline {
         std::thread::sleep(WATCHDOG_POLL);
@@ -347,6 +359,32 @@ fn show_banner(inner: &Arc<Inner>, id: u64, mut b: Banner) {
         }
     }
     finish_banner(inner, id);
+}
+
+/// Whether `cursor` is over the banner frame of a banner window at `win` (both in
+/// physical desktop pixels) on a display with `scale`. The glow margin around the frame isn't.
+fn over_banner(cursor: (f64, f64), win: (f64, f64), scale: f64) -> bool {
+    let (x, y) = ((cursor.0 - win.0) / scale, (cursor.1 - win.1) / scale);
+    (BANNER_INSET..BANNER_SIZE.0 - BANNER_INSET).contains(&x) && (BANNER_INSET..BANNER_SIZE.1 - BANNER_INSET).contains(&y)
+}
+
+/// While banner `id` shows, let clicks on its transparent glow margin through to the
+/// window underneath and keep the frame itself clickable. A window only ignores the
+/// mouse as a whole, so this follows the cursor and switches as it crosses the frame.
+fn pass_clicks_outside_banner(inner: &Arc<Inner>, id: u64) {
+    let Some(win) = inner.window(BANNER) else { return };
+    let mut ignoring = None;
+    while inner.flow().current_id() == Some(id) {
+        let over = match (inner.app.cursor_position(), win.outer_position(), win.scale_factor()) {
+            (Ok(c), Ok(p), Ok(s)) => over_banner((c.x, c.y), (p.x as f64, p.y as f64), s),
+            _ => true, // can't tell: keep the banner clickable
+        };
+        if ignoring != Some(!over) {
+            let _ = win.set_ignore_cursor_events(!over);
+            ignoring = Some(!over);
+        }
+        std::thread::sleep(CLICK_POLL);
+    }
 }
 
 fn payload(id: u64, b: &Banner) -> BannerPayload {
@@ -501,5 +539,24 @@ fallback = "LADDER"
         assert_eq!(u.rule_id, "pusher.bronze", "unlock key is the step id");
         assert_eq!(resolve_flavor(&st, &u, &ev), "LADDER");
         assert_eq!(st.store.list_unlocks().unwrap()[0].flavor_text.as_deref(), Some("LADDER"));
+    }
+
+    #[test]
+    fn banner_window_leaves_room_for_the_glow() {
+        let css = include_str!("../../../ui/overlay/overlay.css");
+        assert!(css.contains(&format!("inset: {BANNER_INSET}px")), "overlay.css .ach-b inset != BANNER_INSET");
+        // The banner frame itself stays 540x200, with room for the strongest glow (32px) around it.
+        assert_eq!((BANNER_SIZE.0 - 2.0 * BANNER_INSET, BANNER_SIZE.1 - 2.0 * BANNER_INSET), (540.0, 200.0));
+    }
+
+    #[test]
+    fn cursor_is_over_banner_only_inside_its_frame() {
+        // Window at (100, 50) on a 150% display: the frame spans x 160..970, y 110..410.
+        let over = |x, y| over_banner((x, y), (100.0, 50.0), 1.5);
+        assert!(over(160.0, 110.0) && over(969.0, 409.0) && over(500.0, 250.0));
+        assert!(!over(159.0, 200.0), "left glow margin");
+        assert!(!over(500.0, 105.0), "top glow margin");
+        assert!(!over(970.0, 200.0), "right glow margin");
+        assert!(!over(500.0, 410.0), "bottom glow margin");
     }
 }

@@ -6,6 +6,7 @@
   --gold: #ffc83d;
   --text: #fff3cf;
   --dim: rgba(255, 243, 207, 0.62);
+  /* Tier palette. Keep in sync with ui/overlay/overlay.css (a test in site.rs checks). */
   --bronze: #cd7f32;
   --silver: #c0c8d0;
   --platinum: #cfe8ff;
@@ -59,7 +60,10 @@ h2:first-child { margin-top: 0; }
 .empty { color: var(--dim); font-style: italic; }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
 .ach { background: var(--panel); border: 1px solid var(--glow); border-radius: 10px; padding: 14px; }
-.ach.unlocked { border: 2px solid var(--gold); background: radial-gradient(circle at 50% 0%, var(--glow), var(--panel) 80%); }
+.ach.unlocked { --tier: var(--gold); border: 2px solid var(--tier); background: radial-gradient(circle at 50% 0%, var(--glow), var(--panel) 80%);
+                box-shadow: 0 0 12px color-mix(in srgb, var(--tier) 35%, transparent); }
+.ach.t-bronze { --tier: var(--bronze); } .ach.t-silver { --tier: var(--silver); } .ach.t-gold { --tier: var(--gold); }
+.ach.t-platinum { --tier: var(--platinum); box-shadow: 0 0 18px color-mix(in srgb, var(--tier) 55%, transparent); }
 .ach.locked { opacity: .65; }
 .ach .off { font-size: 10px; letter-spacing: .2em; text-transform: uppercase; opacity: .6; border: 1px solid currentColor; border-radius: 4px; padding: 0 5px; }
 .ach .tier { font-size: 11px; letter-spacing: .25em; text-transform: uppercase; }
@@ -71,7 +75,7 @@ h2:first-child { margin-top: 0; }
 .ach .atext { margin-top: 4px; font-size: 12px; color: var(--dim); }
 .hiddenleft { margin-top: 14px; color: var(--dim); font-style: italic; }
 .ach .name { font: 700 18px Georgia, serif; margin: 4px 0; }
-.ach.unlocked .name { text-shadow: 0 0 10px var(--gold); }
+.ach.unlocked .name { text-shadow: 0 0 10px var(--tier); }
 .ach .desc { font: italic 13px Georgia, serif; color: var(--dim); }
 .ach .meta { margin-top: 8px; font-size: 12px; color: var(--gold); }
 .filter { display: inline-block; margin-bottom: 12px; color: var(--dim); }

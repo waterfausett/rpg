@@ -33,6 +33,8 @@ pub struct Fired {
     pub unlock_key: String,
     /// `rule.name`, or `"{name} ({Tier})"` for a ladder step.
     pub name: String,
+    /// `name` without the tier, for the banner and toast, which show the tier as color.
+    pub title: String,
     pub step: Step,
     /// Context for the flavor text.
     pub findings: Value,
@@ -40,7 +42,7 @@ pub struct Fired {
 
 fn fired(rule: &Rule, step: &Step, findings: Value) -> Fired {
     let name = if rule.ladder { format!("{} ({})", rule.name, step.tier.label()) } else { rule.name.clone() };
-    Fired { unlock_key: rule.step_id(step.tier), name, step: step.clone(), findings }
+    Fired { unlock_key: rule.step_id(step.tier), name, title: rule.name.clone(), step: step.clone(), findings }
 }
 
 /// The steps `rule` unlocks for `ctx.ev`. The caller has already checked `rule.filter`.
@@ -149,6 +151,7 @@ fn skill_level(rule: &Rule, ctx: &EvalCtx) -> Result<Vec<Fired>> {
                 out.push(Fired {
                     unlock_key: key,
                     name: format!("{}: {} ({})", rule.name, skill.name, step.tier.label()),
+                    title: format!("{}: {}", rule.name, skill.name),
                     step: step.clone(),
                     findings: json!({ "skill_id": skill.skill_id, "skill": skill.name, "level": level, "at": at }),
                 });

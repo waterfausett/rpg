@@ -66,7 +66,7 @@
     set("title", b.title);
     set("name", b.name);
     set("text", b.text);
-    set("reward", b.tier && b.reward ? b.reward + " · " + b.tier : b.reward);
+    set("reward", b.reward); // the tier shows as the banner's color, not as text
     const el = document.getElementById("banner");
     el.dataset.tier = b.tier || "";
     el.dataset.kind = b.kind;
