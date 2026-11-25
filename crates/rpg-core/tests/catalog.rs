@@ -438,6 +438,16 @@ fn frequent_flyer() {
     assert!(fires_seeded(&r, &h, &[], in_repo("e"), "frequent_flyer.bronze"));
     assert!(!fires_seeded(&r, &h[..3], &[], in_repo("e"), "frequent_flyer.bronze"));
     assert!(!fires_seeded(&r, &h, &[], in_repo("a"), "frequent_flyer.bronze"));
+    // Worktrees: two local paths of one GitHub repo count once.
+    let worktree = |path: &str, gh: &str| {
+        let mut e = commit_data("2026-11-23T10:00:00Z", json!({"github_repo": gh}));
+        e.repo = Some(path.into());
+        e
+    };
+    let mut wt = h[..3].to_vec();
+    wt.push(worktree("C:/work/rpg", "me/rpg"));
+    assert!(!fires_seeded(&r, &wt, &[], worktree("C:/work/rpg-wt/feature", "me/rpg"), "frequent_flyer.bronze"));
+    assert!(fires_seeded(&r, &wt, &[], worktree("C:/work/other", "me/other"), "frequent_flyer.bronze"));
 }
 
 #[test]

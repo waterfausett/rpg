@@ -86,8 +86,15 @@ pub fn progress(rule: &Rule, store: &Store, tz: FixedOffset) -> Result<Option<u6
                 let total: f64 = events.iter().map(|e| e.data[field.as_str()].as_f64().unwrap_or(0.0)).sum();
                 total.max(0.0).floor() as u64
             } else if distinct.is_some() {
-                // `distinct` is validated to be "repo".
-                events.iter().filter_map(|e| e.repo.as_deref()).collect::<BTreeSet<_>>().len() as u64
+                // `distinct` is validated to be "repo": the GitHub repo when the event knows
+                // it, so worktrees and clones of one repo count once, else the local path.
+                let repo_key = |e: &Event| -> Option<String> {
+                    match e.data["github_repo"].as_str().filter(|g| !g.is_empty()) {
+                        Some(gh) => Some(format!("gh:{gh}")),
+                        None => e.repo.as_ref().map(|r| format!("path:{r}")),
+                    }
+                };
+                events.iter().filter_map(repo_key).collect::<BTreeSet<_>>().len() as u64
             } else {
                 events.len() as u64
             })
@@ -686,6 +693,13 @@ counter = { type = \"lifetime\", distinct = \"repo\" }");
         }
         assert_eq!(fired, vec![4], "the third distinct repo");
         assert_eq!(progress(&r, &store, tz()).unwrap(), Some(3));
+        // A GitHub repo counts once whatever its local paths (worktrees, clones); an empty
+        // `github_repo` falls back to the path.
+        for (path, gh) in [("C:/wt/one", "me/x"), ("C:/wt/two", "me/x"), ("D", ""), ("E", "me/x")] {
+            let e = mk(EventKind::Commit, "2026-03-02T01:00:00Z", path, json!({ "github_repo": gh }));
+            store.insert_event(&e).unwrap();
+        }
+        assert_eq!(progress(&r, &store, tz()).unwrap(), Some(5), "A, B, C, me/x and D");
     }
 
     #[test]
