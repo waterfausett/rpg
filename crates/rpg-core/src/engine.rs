@@ -201,7 +201,7 @@ fn process_inner(
                 context: f.findings.clone(),
                 ts: ev.ts,
             })?;
-            let announce = f.step.announce.or(rule.announce).unwrap_or(cfg.announce.for_tier(f.step.tier));
+            let announce = cfg.announce.all.or(f.step.announce).or(rule.announce).unwrap_or(cfg.announce.for_tier(f.step.tier));
             if f.step.xp > 0 {
                 store.add_xp(&ev.id, f.step.xp, &f.name, ev.ts)?;
                 out.xp_gains.push(XpGain { amount: f.step.xp, label: f.name.clone(), achievement: Some((f.step.tier, announce)) });
@@ -696,6 +696,44 @@ tiers=[{tier=\"bronze\",at=100,xp=5},{tier=\"silver\",at=1000,xp=50,announce=\"t
         // With neither set, the config decides by tier.
         let cfg: Config = toml::from_str("[announce]\nbronze = \"banner\"\n").unwrap();
         assert_eq!(go(&cfg).0[2], ("plain".to_string(), Announce::Banner));
+    }
+
+    #[test]
+    fn announce_all_overrides_step_rule_and_tier() {
+        let ladder = parse_rule(
+            "id=\"lad\"
+name=\"Lad\"
+fallback=\"f\"
+trigger=[\"commit\"]
+announce=\"toast\"
+counter={type=\"lifetime\"}
+tiers=[{tier=\"bronze\",at=100,xp=5},{tier=\"silver\",at=1000,xp=50,announce=\"toast\"}]",
+        )
+        .unwrap();
+        let gold = parse_rule("id=\"g\"\nname=\"G\"\ntier=\"gold\"\nfallback=\"f\"\ntrigger=[\"commit\"]\nannounce=\"banner\"").unwrap();
+        let plat = parse_rule("id=\"p\"\nname=\"P\"\ntier=\"platinum\"\nfallback=\"f\"\ntrigger=[\"commit\"]").unwrap();
+        let rules = Rules { list: vec![ladder, gold, plat], ..Default::default() };
+        let go = |toml_text: &str| {
+            let cfg: Config = toml::from_str(toml_text).unwrap();
+            let store = Store::open_in_memory().unwrap();
+            store_commits(&store, 1200, at("2026-01-01T00:00:00Z"), serde_json::json!({}), false);
+            let ev = mk(EventKind::Commit, "2026-01-02T00:00:00Z", serde_json::json!({}));
+            let o = process(&store, &rules, &cfg, &ev, &[], tz()).unwrap();
+            let gains: Vec<Announce> = o.xp_gains.iter().filter_map(|g| g.achievement.map(|(_, a)| a)).collect();
+            let unlocks: Vec<(String, Announce)> = o.unlocks.into_iter().map(|u| (u.rule_id, u.announce)).collect();
+            (unlocks, gains)
+        };
+        let ids = ["lad.bronze", "lad.silver", "g", "p"];
+        for want in [Announce::Banner, Announce::Toast] {
+            let name = if want == Announce::Banner { "banner" } else { "toast" };
+            let (unlocks, gains) = go(&format!("[announce]\nall = \"{name}\"\n"));
+            assert_eq!(unlocks, ids.iter().map(|id| (id.to_string(), want)).collect::<Vec<_>>(), "all = {name}");
+            assert_eq!(gains, vec![want; 4], "all = {name}");
+        }
+        // Unset: the step, rule and tier settings decide as usual.
+        let (unlocks, _) = go("");
+        let got: Vec<Announce> = unlocks.into_iter().map(|(_, a)| a).collect();
+        assert_eq!(got, vec![Announce::Toast, Announce::Toast, Announce::Banner, Announce::Banner]);
     }
 
     #[test]
