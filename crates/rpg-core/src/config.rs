@@ -33,11 +33,13 @@ pub struct AnnounceConfig {
     pub silver: Announce,
     pub gold: Announce,
     pub platinum: Announce,
+    pub legendary: Announce,
+    pub celestial: Announce,
 }
 
 impl Default for AnnounceConfig {
     fn default() -> Self {
-        Self { all: None, first_banner: true, bronze: Announce::Toast, silver: Announce::Banner, gold: Announce::Banner, platinum: Announce::Banner }
+        Self { all: None, first_banner: true, bronze: Announce::Toast, silver: Announce::Banner, gold: Announce::Banner, platinum: Announce::Banner, legendary: Announce::Banner, celestial: Announce::Banner }
     }
 }
 
@@ -48,6 +50,8 @@ impl AnnounceConfig {
             Tier::Silver => self.silver,
             Tier::Gold => self.gold,
             Tier::Platinum => self.platinum,
+            Tier::Legendary => self.legendary,
+            Tier::Celestial => self.celestial,
         }
     }
 }
@@ -278,8 +282,8 @@ mod tests {
     #[test]
     fn announce_defaults() {
         let c = Config::default();
-        let got: Vec<Announce> = [Tier::Bronze, Tier::Silver, Tier::Gold, Tier::Platinum].into_iter().map(|t| c.announce.for_tier(t)).collect();
-        assert_eq!(got, vec![Announce::Toast, Announce::Banner, Announce::Banner, Announce::Banner]);
+        let got: Vec<Announce> = [Tier::Bronze, Tier::Silver, Tier::Gold, Tier::Platinum, Tier::Legendary, Tier::Celestial].into_iter().map(|t| c.announce.for_tier(t)).collect();
+        assert_eq!(got, vec![Announce::Toast, Announce::Banner, Announce::Banner, Announce::Banner, Announce::Banner, Announce::Banner]);
         let c: Config = toml::from_str("[announce]\nbronze = \"banner\"\ngold = \"toast\"\n").unwrap();
         assert_eq!((c.announce.bronze, c.announce.silver, c.announce.gold), (Announce::Banner, Announce::Banner, Announce::Toast));
         assert_eq!(c.announce.all, None);

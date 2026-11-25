@@ -460,7 +460,7 @@ mod tests {
     }
 
     #[test]
-    fn platinum_ranks_first_in_collapse() {
+    fn higher_tiers_rank_first_in_collapse() {
         let mut p = Presenter::new();
         let us = vec![
             unlock(1, Tier::Gold, 1500),
@@ -468,11 +468,13 @@ mod tests {
             unlock(3, Tier::Gold, 1300),
             unlock(4, Tier::Silver, 900),
             unlock(5, Tier::Platinum, 100),
+            unlock(6, Tier::Legendary, 50),
+            unlock(7, Tier::Celestial, 10),
         ];
         p.push(&batch(us), false);
         let bs = drain(&mut p);
         let got: Vec<&str> = bs.iter().map(|b| b.name.as_str()).collect();
-        assert_eq!(&got[..3], &["Ach 5", "Ach 1", "Ach 2"]);
+        assert_eq!(&got[..3], &["Ach 7", "Ach 6", "Ach 5"]);
         assert_eq!(bs[3].kind, BannerKind::AwaySummary);
     }
 

@@ -2,7 +2,7 @@
 html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; height: 100%; }
 body { user-select: none; -webkit-user-select: none; }
 /* Tier palette. Keep in sync with ui/site/site.css (a test in site.rs checks). */
-:root { --bronze: #cd7f32; --silver: #c0c8d0; --gold: #ffc83d; --platinum: #cfe8ff; }
+:root { --bronze: #cd7f32; --silver: #c0c8d0; --gold: #ffc83d; --platinum: #cfe8ff; --legendary: #c77dff; --celestial: #7df3ff; }
 
 /* ---- XP toasts: gold pills bottom-right, stacking upward, fading over 3s ---- */
 .toasts { position: fixed; right: 8px; bottom: 8px; display: flex; flex-direction: column-reverse;
@@ -18,9 +18,12 @@ body { user-select: none; -webkit-user-select: none; }
 .xp.ach[data-tier="Bronze"]   { --tier: var(--bronze); }
 .xp.ach[data-tier="Silver"]   { --tier: var(--silver); }
 .xp.ach[data-tier="Gold"]     { --tier: var(--gold); }
-.xp.ach[data-tier="Platinum"] { --tier: var(--platinum); position: relative; overflow: hidden; }
-/* Platinum pill: one light sweep once it has slid in. */
-.xp.ach[data-tier="Platinum"]::after { content: ""; position: absolute; inset: 0; pointer-events: none; border-radius: inherit;
+.xp.ach[data-tier="Platinum"] { --tier: var(--platinum); }
+.xp.ach[data-tier="Legendary"] { --tier: var(--legendary); }
+.xp.ach[data-tier="Celestial"] { --tier: var(--celestial); }
+.xp.ach:is([data-tier="Platinum"], [data-tier="Legendary"], [data-tier="Celestial"]) { position: relative; overflow: hidden; }
+/* Platinum and above: one light sweep once the pill has slid in. */
+.xp.ach:is([data-tier="Platinum"], [data-tier="Legendary"], [data-tier="Celestial"])::after { content: ""; position: absolute; inset: 0; pointer-events: none; border-radius: inherit;
   opacity: 0; background: linear-gradient(105deg, transparent 35%, rgba(255, 255, 255, .35) 50%, transparent 65%);
   animation: shimmer .9s ease-in-out .3s; }
 .xp small { color: #cfd6e0; font-weight: 400; margin-left: 6px; }
@@ -65,15 +68,17 @@ body { user-select: none; -webkit-user-select: none; }
 .ach-b[data-tier="Silver"]   { --tier: var(--silver);   --tint: #2c3036; --glow: 18px; --glow-a: 45%; }
 .ach-b[data-tier="Gold"]     { --tier: var(--gold);     --tint: #4a3500; --glow: 28px; --glow-a: 60%; }
 .ach-b[data-tier="Platinum"] { --tier: var(--platinum); --tint: #1f3347; --glow: 32px; --glow-a: 80%; }
-/* Gold and Platinum: a bigger pop (peak 1.03 fits the inset) and one border flash on landing. */
-.ach-b.in:is([data-tier="Gold"], [data-tier="Platinum"]) {
+.ach-b[data-tier="Legendary"] { --tier: var(--legendary); --tint: #3a1a52; --glow: 38px; --glow-a: 85%; }
+.ach-b[data-tier="Celestial"] { --tier: var(--celestial); --tint: #123f4a; --glow: 44px; --glow-a: 90%; }
+/* Gold and up: a bigger pop (peak 1.03 fits the inset) and one border flash on landing. */
+.ach-b.in:is([data-tier="Gold"], [data-tier="Platinum"], [data-tier="Legendary"], [data-tier="Celestial"]) {
   animation: banner-in-big .45s cubic-bezier(.2, .9, .3, 1) forwards, tier-flash .6s ease-out .35s; }
-/* Platinum: the flash and one light sweep run together (same timing), peaking as the sweep crosses the middle. */
-.ach-b.in[data-tier="Platinum"] {
+/* Platinum and up: the flash and one light sweep run together (same timing), peaking as the sweep crosses the middle. */
+.ach-b.in:is([data-tier="Platinum"], [data-tier="Legendary"], [data-tier="Celestial"]) {
   animation: banner-in-big .45s cubic-bezier(.2, .9, .3, 1) forwards, tier-flash 1s ease-in-out .45s; }
 .ach-b::after { content: ""; position: absolute; inset: 0; pointer-events: none; border-radius: inherit; opacity: 0;
                 background: linear-gradient(105deg, transparent 35%, rgba(255, 255, 255, .3) 50%, transparent 65%); }
-.ach-b[data-tier="Platinum"].in::after { animation: shimmer 1s ease-in-out .45s; }
+.ach-b:is([data-tier="Platinum"], [data-tier="Legendary"], [data-tier="Celestial"]).in::after { animation: shimmer 1s ease-in-out .45s; }
 @keyframes banner-in  { from { opacity: 0; transform: scale(.85); } to { opacity: 1; transform: scale(1); } }
 @keyframes banner-out { from { opacity: 1; transform: scale(1); } to { opacity: 0; transform: scale(.96); } }
 @keyframes banner-in-big {
@@ -91,5 +96,5 @@ body { user-select: none; -webkit-user-select: none; }
   .ach-b { transform: none; }
   .ach-b.in, .ach-b[data-tier].in { animation: banner-fade-in .28s ease-out forwards; }
   .ach-b.out { animation: banner-fade-out .4s ease-in forwards; }
-  .ach-b[data-tier].in::after, .xp.ach[data-tier="Platinum"]::after { animation: none; }
+  .ach-b[data-tier].in::after, .xp.ach:is([data-tier="Platinum"], [data-tier="Legendary"], [data-tier="Celestial"])::after { animation: none; }
 }
