@@ -111,7 +111,7 @@ Counters (set `type` plus the params):
 
 **Upgrading from 0.2:** the old `detector = {...}` field is gone, and a rule file that still has it fails to load. After upgrading to this version, empty your `rules/` folder, `skills/` included; the app reseeds it on the next start (move custom rules or skills aside first and copy them back after).
 
-The starter rules in `rules/` (copied from `crates/rpg-core/assets/rules/` on first run) are working examples.
+The starter rules in `rules/` (copied from `crates/rpg-core/assets/rules/` on first run; starters added by later versions are copied on upgrade, and one you delete stays deleted) are working examples.
 
 ## Skills
 
