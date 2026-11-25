@@ -12,6 +12,8 @@ pub enum Tier {
     Silver,
     Gold,
     Platinum,
+    Legendary,
+    Celestial,
 }
 
 impl Tier {
@@ -21,6 +23,8 @@ impl Tier {
             Tier::Silver => 500,
             Tier::Gold => 1000,
             Tier::Platinum => 2000,
+            Tier::Legendary => 4000,
+            Tier::Celestial => 8000,
         }
     }
 
@@ -30,6 +34,8 @@ impl Tier {
             Tier::Silver => "silver",
             Tier::Gold => "gold",
             Tier::Platinum => "platinum",
+            Tier::Legendary => "legendary",
+            Tier::Celestial => "celestial",
         }
     }
 
@@ -39,16 +45,20 @@ impl Tier {
             Tier::Silver => "Silver",
             Tier::Gold => "Gold",
             Tier::Platinum => "Platinum",
+            Tier::Legendary => "Legendary",
+            Tier::Celestial => "Celestial",
         }
     }
 
-    /// 0 (bronze) ..= 3 (platinum).
+    /// 0 (bronze) ..= 5 (celestial).
     pub fn rank(self) -> u8 {
         match self {
             Tier::Bronze => 0,
             Tier::Silver => 1,
             Tier::Gold => 2,
             Tier::Platinum => 3,
+            Tier::Legendary => 4,
+            Tier::Celestial => 5,
         }
     }
 }
@@ -451,10 +461,15 @@ fallback = "f"
         assert_eq!(Tier::Platinum.default_xp(), 2000);
         let p = parse_rule(&base("tier=\"platinum\"")).unwrap();
         assert_eq!((p.top().tier, p.top().xp), (Tier::Platinum, 2000));
-        let all = [Tier::Bronze, Tier::Silver, Tier::Gold, Tier::Platinum];
-        assert_eq!(all.map(Tier::as_str), ["bronze", "silver", "gold", "platinum"]);
-        assert_eq!(all.map(Tier::label), ["Bronze", "Silver", "Gold", "Platinum"]);
-        assert_eq!(all.map(Tier::rank), [0, 1, 2, 3]);
+        assert_eq!(Tier::Legendary.default_xp(), 4000);
+        assert_eq!(Tier::Celestial.default_xp(), 8000);
+        let l = parse_rule(&base("tier=\"legendary\"")).unwrap();
+        let c = parse_rule(&base("tier=\"celestial\"")).unwrap();
+        assert_eq!((l.top().tier, c.top().tier), (Tier::Legendary, Tier::Celestial));
+        let all = [Tier::Bronze, Tier::Silver, Tier::Gold, Tier::Platinum, Tier::Legendary, Tier::Celestial];
+        assert_eq!(all.map(Tier::as_str), ["bronze", "silver", "gold", "platinum", "legendary", "celestial"]);
+        assert_eq!(all.map(Tier::label), ["Bronze", "Silver", "Gold", "Platinum", "Legendary", "Celestial"]);
+        assert_eq!(all.map(Tier::rank), [0, 1, 2, 3, 4, 5]);
     }
 
     #[test]

@@ -29,7 +29,7 @@ Unknown fields are a load error, so a typo is reported rather than silently igno
 | `name` | string | yes | Shown in banners, toasts and on the character sheet. |
 | `fallback` | string | yes | The announcement text. Used as is, or as the base of the LLM text when `flavor` is `llm`. |
 | `trigger` | list of event kinds | yes | Which events the rule looks at (see [Event kinds](#event-kinds)). |
-| `tier` | `"bronze"` / `"silver"` / `"gold"` / `"platinum"` | one of `tier`, `tiers` | A single achievement. |
+| `tier` | `"bronze"` / `"silver"` / `"gold"` / `"platinum"` / `"legendary"` / `"celestial"` | one of `tier`, `tiers` | A single achievement. |
 | `tiers` | list of steps | one of `tier`, `tiers` | A series (ladder). Threshold counters only. See [Tiers](#tiers). |
 | `at` | integer | threshold counters with `tier` | The threshold for a single threshold achievement. Not allowed with moment counters or with `tiers`. |
 | `xp` | integer | no | XP for a single achievement. Defaults to the tier's XP. Not allowed with `tiers` (set `xp` per step). |
@@ -39,7 +39,7 @@ Unknown fields are a load error, so a typo is reported rather than silently igno
 | `repeatable` | bool | no, default `false` | A single moment achievement can unlock again. Ignored by threshold counters, not allowed with `tiers`. |
 | `cooldown_hours` | integer | no | With `repeatable`: the minimum hours between unlocks. Ignored by threshold counters, not allowed with `tiers`. |
 | `flavor` | table | no, default `{ type = "static" }` | `{ type = "static" }` shows `fallback`. `{ type = "llm", prompt = "..." }` asks the configured LLM to rewrite it; `{fallback}`, `{name}` and `{context}` in the prompt are replaced. Any LLM failure falls back to `fallback`. |
-| `announce` | `"banner"` / `"toast"` | no | How the unlock is announced. Overrides the tier default. A step in `tiers` may set its own. Without one, the `[announce]` section of the config decides by tier (bronze `toast`, silver, gold and platinum `banner` by default). The first time an achievement unlocks (for a ladder, its first step), it is a banner whatever this says: that's when it's news. Later unlocks use this setting. `[announce] first_banner = false` in the config turns that off. `[announce] all` in the config, if set, overrides this rule's `announce`, every step's and tier's setting, and the first-time banner. Achievements unlocked before the first-time banner existed already count as unlocked, so they don't get one. |
+| `announce` | `"banner"` / `"toast"` | no | How the unlock is announced. Overrides the tier default. A step in `tiers` may set its own. Without one, the `[announce]` section of the config decides by tier (bronze `toast`, silver, gold, platinum, legendary and celestial `banner` by default). The first time an achievement unlocks (for a ladder, its first step), it is a banner whatever this says: that's when it's news. Later unlocks use this setting. `[announce] first_banner = false` in the config turns that off. `[announce] all` in the config, if set, overrides this rule's `announce`, every step's and tier's setting, and the first-time banner. Achievements unlocked before the first-time banner existed already count as unlocked, so they don't get one. |
 | `hidden` | bool | no, default `false` | Not listed on the character sheet until earned (no "???" row). |
 | `share_text` | bool | no, default `false` | Allows the commit message or PR title into the LLM flavor context. Otherwise they stay in the local database only. |
 | `enabled` | bool | no, default `true` | `enabled = false` turns a rule off without deleting its file. The rule still loads and is validated, and the site lists it with an "off" badge, but the engine never evaluates it (meta and skill-level rules included). Turn it back on and a threshold ladder catches up on the next matching event. |
@@ -279,6 +279,8 @@ A threshold rule only runs on its `trigger` kinds, so a `meta` rule should list 
 | `silver` | 500 |
 | `gold` | 1,000 |
 | `platinum` | 2,000 |
+| `legendary` | 4,000 |
+| `celestial` | 8,000 |
 
 A single achievement sets `tier` (and `xp` to override the default). A series sets `tiers`, a list of steps:
 
