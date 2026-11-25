@@ -37,7 +37,7 @@ pub fn derive(store: &Store, ev: &mut Event) -> Result<()> {
             let open = events
                 .iter()
                 .filter(|e| e.kind == EventKind::ClaudeSessionStart && e.id != ev.id && e.ts <= ev.ts)
-                .filter(|e| session_id(e).map_or(true, |s| !ended.contains(s)))
+                .filter(|e| session_id(e).is_none_or(|s| !ended.contains(s)))
                 .count() as u64
                 + 1;
             if let Some(obj) = ev.data.as_object_mut() {

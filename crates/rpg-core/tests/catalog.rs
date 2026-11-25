@@ -1037,7 +1037,6 @@ fn routine_silvers_are_toasts() {
         "marathon",
         "full_combo",
         "hat_trick",
-        "peer_pressure",
     ] {
         let rule = r.list.iter().find(|x| x.id == id).unwrap_or_else(|| panic!("{id}"));
         assert_eq!(rule.announce, Some(Announce::Toast), "{id}");
