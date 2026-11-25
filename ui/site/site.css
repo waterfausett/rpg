@@ -110,15 +110,19 @@ h2:first-child { margin-top: 0; }
 .chip:focus-visible { outline: 1px solid var(--gold); outline-offset: 2px; }
 
 .empty { color: var(--dim); font-style: italic; }
-.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
-.ach { background: var(--panel); border: 1px solid var(--glow); border-radius: 10px; padding: 14px; }
-.ach.unlocked { --tier: var(--gold); border: 2px solid var(--tier); background: radial-gradient(circle at 50% 0%, var(--glow), var(--panel) 80%);
-                box-shadow: 0 0 12px color-mix(in srgb, var(--tier) 35%, transparent); }
+/* ---- Achievement cards. --tier drives border, tint, glow, name glow, label and ladder bar ---- */
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 1fr)); gap: 12px; }
+.ach { --tier: #6b5a33; position: relative; min-width: 0; overflow-wrap: anywhere;
+       background: var(--panel); border: 1px dashed color-mix(in srgb, var(--tier) 80%, transparent); border-radius: 10px; padding: 14px 16px; }
+.ach.unlocked { --tier: var(--gold); border: 1px solid color-mix(in srgb, var(--tier) 60%, transparent);
+  background: radial-gradient(ellipse at 50% 0%, color-mix(in srgb, var(--tier) 16%, transparent), var(--panel) 75%);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--tier) 22%, transparent), inset 0 1px 0 color-mix(in srgb, var(--tier) 30%, transparent); }
 .ach.t-bronze { --tier: var(--bronze); } .ach.t-silver { --tier: var(--silver); } .ach.t-gold { --tier: var(--gold); }
 .ach.t-platinum { --tier: var(--platinum); } .ach.t-legendary { --tier: var(--legendary); } .ach.t-celestial { --tier: var(--celestial); }
-.ach:is(.t-platinum, .t-legendary, .t-celestial) { box-shadow: 0 0 18px color-mix(in srgb, var(--tier) 55%, transparent); }
+.ach:is(.t-platinum, .t-legendary, .t-celestial) {
+  box-shadow: 0 0 18px color-mix(in srgb, var(--tier) 55%, transparent), inset 0 1px 0 color-mix(in srgb, var(--tier) 40%, transparent); }
 /* Legendary and Celestial cards: a slow, endless light sweep and a star on the tier label. */
-.ach:is(.t-legendary, .t-celestial) { position: relative; overflow: hidden; }
+.ach:is(.t-legendary, .t-celestial) { overflow: hidden; }
 .ach:is(.t-legendary, .t-celestial)::after { content: ""; position: absolute; inset: 0; pointer-events: none;
   background: linear-gradient(105deg, transparent 35%, rgba(255, 255, 255, .14) 50%, transparent 65%);
   transform: translateX(-100%); animation: card-sweep 6s ease-in-out infinite; }
@@ -126,19 +130,20 @@ h2:first-child { margin-top: 0; }
 @keyframes card-sweep { 0%, 60% { transform: translateX(-100%); } 100% { transform: translateX(100%); } }
 @media (prefers-reduced-motion: reduce) { .ach:is(.t-legendary, .t-celestial)::after { animation: none; opacity: 0; } }
 .ach.locked { opacity: .65; }
-.ach .off { font-size: 10px; letter-spacing: .2em; text-transform: uppercase; opacity: .6; border: 1px solid currentColor; border-radius: 4px; padding: 0 5px; }
-.ach .tier { font-size: 11px; letter-spacing: .25em; text-transform: uppercase; }
-.ach .tier.bronze { color: var(--bronze); } .ach .tier.silver { color: var(--silver); } .ach .tier.gold { color: var(--gold); }
-.ach .tier.platinum { color: var(--platinum); text-shadow: 0 0 8px var(--platinum); }
-.ach .tier.legendary { color: var(--legendary); text-shadow: 0 0 8px var(--legendary); }
-.ach .tier.celestial { color: var(--celestial); text-shadow: 0 0 8px var(--celestial); }
-.ach .aprog { margin-top: 10px; }
-.ach .atext { margin-top: 4px; font-size: 12px; color: var(--dim); }
-.hiddenleft { margin-top: 14px; color: var(--dim); font-style: italic; }
-.ach .name { font: 700 18px Georgia, serif; margin: 4px 0; }
-.ach.unlocked .name { text-shadow: 0 0 10px var(--tier); }
+.ach .off { position: absolute; top: 10px; right: 10px; font-size: 9px; letter-spacing: .2em; text-transform: uppercase;
+            color: var(--dim); border: 1px solid currentColor; border-radius: 4px; padding: 0 5px; }
+.ach .tier { font-size: 10px; letter-spacing: .3em; text-transform: uppercase; color: var(--dim); }
+.ach.unlocked .tier { color: var(--tier); }
+.ach.unlocked .tier:is(.platinum, .legendary, .celestial) { text-shadow: 0 0 8px var(--tier); }
+.ach .name { font: 700 18px/1.3 Georgia, serif; margin: 3px 0 4px; }
+.ach.unlocked .name { text-shadow: 0 0 10px color-mix(in srgb, var(--tier) 70%, transparent); }
 .ach .desc { font: italic 13px Georgia, serif; color: var(--dim); }
-.ach .meta { margin-top: 8px; font-size: 12px; color: var(--gold); }
+.ach .aprog { margin-top: 12px; }
+.ach.unlocked .afill { --fill: var(--tier); }
+.ach .atext { margin-top: 4px; font-size: 12px; color: var(--dim); font-variant-numeric: tabular-nums; }
+.ach .meta { margin-top: 10px; font-size: 12px; color: var(--tier); }
+.hiddenleft { margin: 18px 0 0; text-align: center; color: var(--dim); font: italic 14px Georgia, serif; }
+.hiddenleft::before, .hiddenleft::after { content: "\2726"; margin: 0 10px; color: var(--gold); opacity: .5; font-style: normal; }
 @media (max-width: 640px) {
   .bar { padding: 18px 16px 14px; gap: 14px; }
   .crest { width: 64px; height: 64px; } .crest b { font-size: 26px; } .crest.wide b { font-size: 19px; }
