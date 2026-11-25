@@ -1046,29 +1046,50 @@ fn routine_silvers_are_toasts() {
     }
 }
 
-/// The spec's anti-goal: a normal workday shows at most one or two banners. A week of plain
-/// workdays comes first so first-ever and new-repo unlocks are out of the way.
-#[test]
-fn typical_day_has_at_most_two_banners() {
-    use rpg_core::rules::Announce;
+/// The unlocks (and how each is announced) of a typical workday, after a week of plain
+/// workdays so first-ever and new-repo unlocks are out of the way.
+fn typical_day_unlocks(cfg: &Config) -> Vec<(String, rpg_core::rules::Announce)> {
     let mut r = starter();
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/skills");
     let (skills, errs) = rpg_core::skills::load_dir(&dir);
     assert!(errs.is_empty(), "{errs:?}");
     r.skills = skills;
     let store = Store::open_in_memory().unwrap();
-    let cfg = Config::default();
     let tz = FixedOffset::east_opt(0).unwrap();
     for d in 17..=23 {
         for e in workday(&format!("2026-11-{d}"), false) {
-            engine::process(&store, &r, &cfg, &e, &[], tz).unwrap();
+            engine::process(&store, &r, cfg, &e, &[], tz).unwrap();
         }
     }
     let mut unlocks = Vec::new();
     for e in workday("2026-11-24", true) {
-        let out = engine::process(&store, &r, &cfg, &e, &[], tz).unwrap();
+        let out = engine::process(&store, &r, cfg, &e, &[], tz).unwrap();
         unlocks.extend(out.unlocks.into_iter().map(|u| (u.rule_id, u.announce)));
     }
+    unlocks
+}
+
+/// `[announce] all` overrides the catalog's own settings: Polyglot (`announce = "toast"`)
+/// becomes a banner, and with `all = "toast"` nothing is a banner.
+#[test]
+fn announce_all_overrides_the_catalog() {
+    use rpg_core::rules::Announce;
+    let cfg: Config = toml::from_str("[announce]\nall = \"banner\"\n").unwrap();
+    let unlocks = typical_day_unlocks(&cfg);
+    assert!(unlocks.iter().any(|(u, a)| u == "polyglot" && *a == Announce::Banner), "{unlocks:?}");
+    assert!(unlocks.iter().all(|(_, a)| *a == Announce::Banner), "{unlocks:?}");
+    let cfg: Config = toml::from_str("[announce]\nall = \"toast\"\n").unwrap();
+    let unlocks = typical_day_unlocks(&cfg);
+    assert!(!unlocks.is_empty());
+    assert!(unlocks.iter().all(|(_, a)| *a == Announce::Toast), "{unlocks:?}");
+}
+
+/// The spec's anti-goal: a normal workday shows at most one or two banners. This budget
+/// assumes `[announce] all` is unset; `all = "banner"` breaks it on purpose.
+#[test]
+fn typical_day_has_at_most_two_banners() {
+    use rpg_core::rules::Announce;
+    let unlocks = typical_day_unlocks(&Config::default());
     let banners: Vec<&String> = unlocks.iter().filter(|(_, a)| *a == Announce::Banner).map(|(id, _)| id).collect();
     assert!(banners.len() <= 2, "banners: {banners:?}\nall unlocks: {unlocks:?}");
     // The day is not empty: the specials still unlock, as toasts.
