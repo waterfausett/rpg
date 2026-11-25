@@ -70,7 +70,9 @@ impl Paths {
 
     /// Seed starter rules not yet in the manifest, so new starters arrive on upgrade while
     /// deleted ones stay deleted. A missing manifest starts from the starters already in `rules/`.
-    /// Never overwrites an existing file.
+    /// A `rules/` folder with no `*.toml` file at all (subfolders such as `skills/` don't count)
+    /// is a fresh install whatever the manifest says: every starter is seeded and the manifest
+    /// rewritten. Never overwrites an existing file.
     fn seed_starter_rules(&self) -> Result<()> {
         let rules = self.rules();
         let manifest_path = self.seeded_manifest();
@@ -78,14 +80,18 @@ impl Paths {
             .files()
             .filter_map(|f| Some((f.path().file_name()?.to_string_lossy().into_owned(), f.contents())))
             .collect();
-        let mut seeded: std::collections::BTreeSet<String> = match std::fs::read_to_string(&manifest_path) {
-            Ok(text) => text.lines().map(str::trim).filter(|l| !l.is_empty()).map(String::from).collect(),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                starters.iter().filter(|(n, _)| rules.join(n).is_file()).map(|(n, _)| n.clone()).collect()
-            }
-            Err(e) => return Err(e).with_context(|| format!("reading {}", manifest_path.display())),
-        };
         let before = std::fs::read_to_string(&manifest_path).ok();
+        let mut seeded: std::collections::BTreeSet<String> = if !has_rule_file(&rules)? {
+            Default::default()
+        } else {
+            match std::fs::read_to_string(&manifest_path) {
+                Ok(text) => text.lines().map(str::trim).filter(|l| !l.is_empty()).map(String::from).collect(),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    starters.iter().filter(|(n, _)| rules.join(n).is_file()).map(|(n, _)| n.clone()).collect()
+                }
+                Err(e) => return Err(e).with_context(|| format!("reading {}", manifest_path.display())),
+            }
+        };
         for (name, contents) in &starters {
             if seeded.contains(name) {
                 continue;
@@ -113,7 +119,6 @@ impl Paths {
         if !self.config_file().exists() {
             std::fs::write(self.config_file(), DEFAULT_CONFIG).context("writing default config")?;
         }
-        // Before creating `skills/`, which would make `rules/` non-empty.
         self.seed_starter_rules()?;
         std::fs::create_dir_all(self.skills()).with_context(|| format!("creating {}", self.skills().display()))?;
         if std::fs::read_dir(self.skills())?.next().is_none() {
@@ -121,6 +126,17 @@ impl Paths {
         }
         Ok(())
     }
+}
+
+/// Whether `dir` directly holds a `*.toml` file (subfolders are not looked into).
+fn has_rule_file(dir: &std::path::Path) -> Result<bool> {
+    for entry in std::fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
+        let path = entry?.path();
+        if path.is_file() && path.extension().is_some_and(|x| x.eq_ignore_ascii_case("toml")) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn seed(from: &Dir, to: &std::path::Path, what: &str) -> Result<()> {
@@ -227,6 +243,43 @@ mod tests {
                 assert_eq!(std::fs::read_to_string(p.rules().join(n)).unwrap(), "mine");
             }
         }
+    }
+
+    /// The README's upgrade path: an old install (v0 starters, no manifest) starts once, which
+    /// writes the manifest; the user then empties `rules/` (skills too) and everything reseeds.
+    #[test]
+    fn emptied_rules_folder_reseeds_everything() {
+        let (_t, p) = setup();
+        std::fs::create_dir_all(p.rules()).unwrap();
+        for n in ["first_blood.toml", "night_shift.toml", "hat_trick.toml"] {
+            std::fs::write(p.rules().join(n), "old").unwrap();
+        }
+        p.ensure().unwrap();
+        let toml = |p: &Paths| {
+            std::fs::read_dir(p.rules())
+                .unwrap()
+                .map(|e| e.unwrap().path())
+                .filter(|f| f.extension().and_then(|x| x.to_str()) == Some("toml"))
+                .collect::<Vec<_>>()
+        };
+        for f in toml(&p) {
+            std::fs::remove_file(f).unwrap();
+        }
+        // The skills/ subfolder may survive (here it is left in place): rules/ still counts as empty.
+        p.ensure().unwrap();
+        for n in starter_names() {
+            assert!(p.rules().join(&n).is_file(), "{n}");
+        }
+        let starter = STARTER_RULES.get_file("first_blood.toml").unwrap().contents();
+        assert_eq!(std::fs::read(p.rules().join("first_blood.toml")).unwrap(), starter, "the old file is not kept");
+        let mut names = starter_names();
+        names.sort();
+        let m = std::fs::read_to_string(p.seeded_manifest()).unwrap();
+        assert_eq!(m, names.iter().map(|n| format!("{n}\n")).collect::<String>());
+        // Deleting one starter afterwards still sticks.
+        std::fs::remove_file(p.rules().join("night_shift.toml")).unwrap();
+        p.ensure().unwrap();
+        assert!(!p.rules().join("night_shift.toml").exists());
     }
 
     #[test]
