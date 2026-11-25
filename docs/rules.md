@@ -25,7 +25,7 @@ Unknown fields are a load error, so a typo is reported rather than silently igno
 
 | Field | Type | Required | Meaning |
 | --- | --- | --- | --- |
-| `id` | string | yes | Unique id. It is the stored unlock key, so don't rename it after unlocking. Don't put a `.` in it: `.` separates ladder steps (see [Step ids](#step-ids)). |
+| `id` | string | yes | Unique id: letters, digits, `_` and `-` only (no `.`, which separates ladder steps; see [Step ids](#step-ids)). Anything else is a load error. It is the stored unlock key, so don't rename it after unlocking. |
 | `name` | string | yes | Shown in banners, toasts and on the character sheet. |
 | `fallback` | string | yes | The announcement text. Used as is, or as the base of the LLM text when `flavor` is `llm`. |
 | `trigger` | list of event kinds | yes | Which events the rule looks at (see [Event kinds](#event-kinds)). |

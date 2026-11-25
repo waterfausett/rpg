@@ -289,6 +289,10 @@ fn check_counter(c: &Counter, trigger: &[EventKind]) -> Result<(), String> {
 
 pub fn parse_rule(text: &str) -> Result<Rule, String> {
     let mut r: RawRule = toml::from_str(text).map_err(|e| e.to_string())?;
+    // `.` separates ladder and skill steps in stored unlock ids, so ids can't contain it.
+    if r.id.is_empty() || !r.id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+        return Err(format!("bad `id` `{}`: use only letters, digits, `_` and `-`", r.id));
+    }
     let steps = steps(&mut r)?;
     check_counter(&r.counter, &r.trigger)?;
     let filter = Filter::try_from(r.filter.unwrap_or_default()).map_err(|e| format!("`filter`: {e}"))?;
@@ -656,6 +660,18 @@ counter={type=\"combo\",kinds=[\"push\",\"commit\"],within_minutes=5}")).is_ok()
         let (rules, _) = load_dir(d.path());
         assert_eq!(rules.for_kind(EventKind::Commit).count(), 1);
         assert_eq!(rules.for_kind(EventKind::Push).count(), 0);
+    }
+
+    #[test]
+    fn rule_id_without_dot_required() {
+        let with_id = |id: &str| parse_rule(&format!("id=\"{id}\"\nname=\"X\"\ntier=\"bronze\"\ntrigger=[\"commit\"]\nfallback=\"f\""));
+        for bad in ["a.b", "", "has space", "é"] {
+            let e = with_id(bad).unwrap_err();
+            assert!(e.contains("`id`"), "{bad}: {e}");
+        }
+        for ok in ["a", "night_shift", "x-2", "ABC9"] {
+            assert!(with_id(ok).is_ok(), "{ok}");
+        }
     }
 
     #[test]
