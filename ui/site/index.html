@@ -8,17 +8,23 @@
 </head>
 <body>
   <header class="bar">
-    <div class="who">Crawler: <b>you</b></div>
-    <div class="lvl">Level <span id="level">1</span></div>
-    <div class="xpbar" role="progressbar" aria-label="Experience">
-      <div class="xpfill" id="xpfill"></div>
+    <div class="crest" id="crest" aria-label="Level">
+      <b id="level">1</b>
+      <small>Level</small>
     </div>
-    <div class="xptext"><span id="xptext">0 / 100 exp</span></div>
+    <div class="who">
+      <div class="cls">Crawler</div>
+      <div class="nm">you</div>
+      <div class="xpbar" role="progressbar" aria-label="Experience">
+        <div class="xpfill" id="xpfill"></div>
+      </div>
+      <div class="xpline"><span id="xptext">0 / 100 exp to level 2</span><span id="xptotal">0 total</span></div>
+    </div>
   </header>
 
   <nav class="tabs" role="tablist">
     <button role="tab" data-tab="character" class="active">Character</button>
-    <button role="tab" data-tab="achievements">Achievements <span id="achcount"></span></button>
+    <button role="tab" data-tab="achievements">Achievements <span class="pill" id="achcount"></span></button>
     <button role="tab" data-tab="events">Event log</button>
   </nav>
 

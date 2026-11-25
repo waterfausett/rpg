@@ -686,6 +686,15 @@ fallback = "A skill, levelled."
     }
 
     #[test]
+    fn sheet_has_crest_header_and_no_inline_styles() {
+        let html = include_str!("../../../ui/site/index.html");
+        for needle in ["class=\"crest\"", "id=\"xptotal\"", "class=\"pill\""] {
+            assert!(html.contains(needle), "index.html lacks {needle}");
+        }
+        assert!(!html.contains("style="), "inline style attributes are blocked by the CSP");
+    }
+
+    #[test]
     fn tier_palette_matches_between_overlay_and_site() {
         for tier in ["bronze", "silver", "gold", "platinum", "legendary", "celestial"] {
             let (o, s) = (css_var(OVERLAY_CSS, tier), css_var(SITE_CSS, tier));

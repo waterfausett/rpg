@@ -73,10 +73,12 @@
   async function loadCharacter() {
     const c = await api("/api/character");
     $("level").textContent = c.level;
+    $("crest").classList.toggle("wide", String(c.level).length >= 3);
     const pct = c.level_span ? Math.min(100, (c.into_level / c.level_span) * 100) : 0;
     $("xpfill").style.width = pct + "%";
     $("xptext").textContent = c.into_level.toLocaleString() + " / " + c.level_span.toLocaleString() +
-      " exp (" + c.total_xp.toLocaleString() + " total)";
+      " exp to level " + (c.level + 1);
+    $("xptotal").textContent = c.total_xp.toLocaleString() + " total";
     const totals = $("totals");
     totals.replaceChildren();
     TOTAL_LABELS.forEach(([k, label]) => {
@@ -148,7 +150,7 @@
     const list = data.achievements || [];
     const hidden = data.hidden_remaining || 0;
     const got = list.filter((a) => a.unlocked).length;
-    $("achcount").textContent = "(" + got + "/" + (list.length + hidden) + ")";
+    $("achcount").textContent = got + "/" + (list.length + hidden);
     const grid = $("achievements");
     grid.replaceChildren();
     if (!list.length && !hidden) grid.appendChild(el("p", "empty", "No achievement rules loaded."));
