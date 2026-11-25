@@ -232,21 +232,13 @@ fn skill_toasts<'a>(ups: impl Iterator<Item = &'a SkillLevelUp>) -> Vec<Toast> {
         .collect()
 }
 
-fn tier_rank(t: Tier) -> u8 {
-    match t {
-        Tier::Bronze => 0,
-        Tier::Silver => 1,
-        Tier::Gold => 2,
-    }
-}
-
 /// Storm form: the `STORM_CAP` biggest achievements (tier, then xp, then
 /// earliest event; stable), then one summary for the rest plus `carried`
 /// (achievements already summarized earlier), if there are any.
 fn collapse(mut achs: Vec<Banner>, carried: (usize, u64), away: bool) -> Vec<Banner> {
     let key = |b: &Banner| {
         let src = b.flavor.as_ref().expect("achievement banners carry their unlock");
-        (tier_rank(src.unlock.tier), src.unlock.xp, src.event.ts)
+        (src.unlock.tier.rank(), src.unlock.xp, src.event.ts)
     };
     achs.sort_by(|a, b| {
         let (ta, xa, sa) = key(a);

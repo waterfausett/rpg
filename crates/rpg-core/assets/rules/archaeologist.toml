@@ -3,7 +3,7 @@ name = "Archaeologist"
 tier = "bronze"
 xp = 500
 trigger = ["commit"]
-detector = { type = "file_age", min_years = 5 }
+counter = { type = "file_age", min_years = 5 }
 repeatable = true
 cooldown_hours = 168
 hint = "Some files have not seen daylight in a very long time."

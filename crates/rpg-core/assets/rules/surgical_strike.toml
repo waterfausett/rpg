@@ -2,7 +2,7 @@ id = "surgical_strike"
 name = "Surgical Strike"
 tier = "silver"
 trigger = ["commit"]
-detector = { type = "diff_size", min_lines = 1, max_lines = 2 }
+filter = { lines = { min = 1, max = 2 } }
 repeatable = true
 cooldown_hours = 24
 hint = "Sometimes the smallest change is the whole point."

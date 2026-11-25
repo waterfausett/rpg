@@ -1,11 +1,12 @@
-//! Detectors decide whether a rule fires for an event.
+//! Detectors decide whether a rule fires for an event. Interim adapter over `Counter`:
+//! evaluates the counters v0 had; the rest never fire yet (Tasks 6-7 replace this file).
 use crate::enrich::FileAge;
-use crate::event::{Event, EventKind};
+use crate::event::Event;
 use crate::records::{count_today, RecordBroken};
-use crate::rules::{Detector, FirstScope, Window};
+use crate::rules::{Counter, FirstScope};
 use crate::store::Store;
 use anyhow::Result;
-use chrono::{FixedOffset, Timelike};
+use chrono::FixedOffset;
 use serde_json::{json, Value};
 
 pub struct EvalCtx<'a> {
@@ -16,63 +17,39 @@ pub struct EvalCtx<'a> {
     pub tz: FixedOffset,
 }
 
-/// `Some(findings)` means the rule fired; findings become the LLM context.
-pub fn evaluate(det: &Detector, ctx: &EvalCtx) -> Result<Option<Value>> {
+/// `Some(findings)` means the rule fired; findings become the LLM context. The caller has
+/// already checked the rule's filter.
+pub fn evaluate(counter: &Counter, ctx: &EvalCtx) -> Result<Option<Value>> {
     let ev = ctx.ev;
-    Ok(match det {
-        Detector::CountInWindow { count, window } => {
-            let Window::Day = window;
+    Ok(match counter {
+        Counter::Each => Some(json!({})),
+        Counter::PerDay { at } => {
             let n = count_today(ctx.store, ev, ctx.tz)?;
-            (n == *count).then(|| json!({ "count": n }))
+            (n == *at).then(|| json!({ "count": n }))
         }
-        Detector::PersonalRecord { metric } => ctx
+        Counter::PersonalRecord { metric } => ctx
             .broken
             .iter()
             .find(|b| b.metric == *metric)
             .map(|b| json!({ "metric": crate::records::metric_key(b.metric), "old": b.old, "new": b.new })),
-        Detector::FileAge { min_years } => ctx
+        Counter::FileAge { min_years } => ctx
             .file_ages
             .iter()
             .filter(|f| f.years >= *min_years)
             .max_by(|a, b| a.years.total_cmp(&b.years))
             .map(|f| json!({ "path": f.path, "years": f.years, "last_author": f.last_author })),
-        Detector::TimeOfDay { start_hour, end_hour } => {
-            let hour = ev.ts.with_timezone(&ctx.tz).hour();
-            let inside = if start_hour <= end_hour {
-                hour >= *start_hour && hour < *end_hour
-            } else {
-                hour >= *start_hour || hour < *end_hour // window wraps midnight
-            };
-            inside.then(|| json!({ "hour": hour }))
-        }
-        Detector::DiffSize { min_lines, max_lines, min_delete_ratio } => {
-            let (a_key, r_key) = match ev.kind {
-                EventKind::Commit => ("lines_added", "lines_removed"),
-                EventKind::PrOpened | EventKind::PrMerged => ("additions", "deletions"),
-                _ => return Ok(None),
-            };
-            let added = ev.data[a_key].as_u64().unwrap_or(0);
-            let removed = ev.data[r_key].as_u64().unwrap_or(0);
-            let total = added + removed;
-            let ok = min_lines.is_none_or(|m| total >= m)
-                && max_lines.is_none_or(|m| total <= m)
-                && min_delete_ratio.is_none_or(|m| total > 0 && removed as f64 / total as f64 >= m);
-            ok.then(|| json!({ "added": added, "removed": removed }))
-        }
-        Detector::First { scope } => {
-            let repo = match scope {
-                FirstScope::Repo => ev.repo.as_deref(),
-                FirstScope::Ever => None,
-            };
+        Counter::First { scope: scope @ (FirstScope::Ever | FirstScope::Repo) } => {
+            let repo = if *scope == FirstScope::Repo { ev.repo.as_deref() } else { None };
             (!ctx.store.has_prior_event(ev.kind, repo, &ev.id)?).then(|| json!({ "repo": ev.repo }))
         }
+        _ => None,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event::Source;
+    use crate::event::{EventKind, Source};
     use crate::records;
     use crate::rules::Metric;
     use chrono::{DateTime, Utc};
@@ -91,7 +68,7 @@ mod tests {
         e
     }
 
-    fn eval(det: &Detector, store: &Store, ev: &Event, broken: &[RecordBroken], ages: &[FileAge]) -> Option<Value> {
+    fn eval(det: &Counter, store: &Store, ev: &Event, broken: &[RecordBroken], ages: &[FileAge]) -> Option<Value> {
         let ctx = EvalCtx { ev, store, broken, file_ages: ages, tz: tz() };
         evaluate(det, &ctx).unwrap()
     }
@@ -99,7 +76,7 @@ mod tests {
     #[test]
     fn count_fires_exactly_once_per_day() {
         let store = Store::open_in_memory().unwrap();
-        let det = Detector::CountInWindow { count: 3, window: Window::Day };
+        let det = Counter::PerDay { at: 3 };
         let mut results = vec![];
         for h in 1..=4 {
             let e = mk(EventKind::PrMerged, &format!("2026-03-01T0{h}:00:00Z"), "r", json!({}));
@@ -128,7 +105,7 @@ mod tests {
     #[test]
     fn record_seed_does_not_break_then_beat_does() {
         let store = Store::open_in_memory().unwrap();
-        let det = Detector::PersonalRecord { metric: Metric::PrDeletions };
+        let det = Counter::PersonalRecord { metric: Metric::PrDeletions };
         let e1 = mk(EventKind::PrMerged, "2026-03-01T01:00:00Z", "r", json!({ "deletions": 100 }));
         store.insert_event(&e1).unwrap();
         let b1 = records::update(&store, &e1, tz()).unwrap();
@@ -157,37 +134,11 @@ mod tests {
             FileAge { path: "mid.rs".into(), years: 6.0, last_author: "b".into() },
             FileAge { path: "old.rs".into(), years: 9.5, last_author: "c".into() },
         ];
-        let det = Detector::FileAge { min_years: 5.0 };
+        let det = Counter::FileAge { min_years: 5.0 };
         let f = eval(&det, &store, &e, &[], &ages).unwrap();
         assert_eq!(f["path"], "old.rs");
         assert_eq!(f["last_author"], "c");
-        assert_eq!(eval(&Detector::FileAge { min_years: 10.0 }, &store, &e, &[], &ages), None);
-    }
-
-    #[test]
-    fn time_of_day_end_exclusive() {
-        let store = Store::open_in_memory().unwrap();
-        let det = Detector::TimeOfDay { start_hour: 0, end_hour: 4 };
-        let a = mk(EventKind::Commit, "2026-03-01T03:59:00Z", "r", json!({}));
-        let b = mk(EventKind::Commit, "2026-03-01T04:00:00Z", "r", json!({}));
-        assert_eq!(eval(&det, &store, &a, &[], &[]), Some(json!({ "hour": 3 })));
-        assert_eq!(eval(&det, &store, &b, &[], &[]), None);
-    }
-
-    #[test]
-    fn diff_size_delete_ratio() {
-        let store = Store::open_in_memory().unwrap();
-        let det = Detector::DiffSize { min_lines: Some(100), max_lines: None, min_delete_ratio: Some(0.8) };
-        let pr = |a: u64, d: u64| mk(EventKind::PrMerged, "2026-03-01T01:00:00Z", "r", json!({ "additions": a, "deletions": d }));
-        assert_eq!(eval(&det, &store, &pr(20, 400), &[], &[]), Some(json!({ "added": 20, "removed": 400 })));
-        assert_eq!(eval(&det, &store, &pr(300, 300), &[], &[]), None);
-        assert_eq!(eval(&det, &store, &pr(1, 20), &[], &[]), None);
-        let commit = mk(EventKind::Commit, "2026-03-01T01:00:00Z", "r", json!({ "lines_added": 0, "lines_removed": 500 }));
-        assert!(eval(&det, &store, &commit, &[], &[]).is_some());
-        let max = Detector::DiffSize { min_lines: None, max_lines: Some(5), min_delete_ratio: None };
-        let tiny = mk(EventKind::Commit, "2026-03-01T01:00:00Z", "r", json!({ "lines_added": 2, "lines_removed": 1 }));
-        assert!(eval(&max, &store, &tiny, &[], &[]).is_some());
-        assert_eq!(eval(&max, &store, &commit, &[], &[]), None);
+        assert_eq!(eval(&Counter::FileAge { min_years: 10.0 }, &store, &e, &[], &ages), None);
     }
 
     #[test]
@@ -196,11 +147,24 @@ mod tests {
         let (rules, _) = crate::rules::load_dir(&dir);
         let rule = rules.list.iter().find(|r| r.id == "surgical_strike").unwrap();
         let store = Store::open_in_memory().unwrap();
-        let commit = |a: u64, r: u64| mk(EventKind::Commit, "2026-03-01T01:00:00Z", "r", json!({ "lines_added": a, "lines_removed": r }));
-        assert_eq!(eval(&rule.detector, &store, &commit(0, 0), &[], &[]), None, "binary-only/rename commit");
-        assert!(eval(&rule.detector, &store, &commit(1, 0), &[], &[]).is_some());
-        assert!(eval(&rule.detector, &store, &commit(1, 1), &[], &[]).is_some());
-        assert_eq!(eval(&rule.detector, &store, &commit(2, 1), &[], &[]), None);
+        let fires = |a: u64, r: u64| {
+            let e = mk(EventKind::Commit, "2026-03-01T01:00:00Z", "r", json!({ "lines_added": a, "lines_removed": r }));
+            rule.filter.matches(&e, tz()) && eval(&rule.counter, &store, &e, &[], &[]).is_some()
+        };
+        assert!(!fires(0, 0), "binary-only/rename commit");
+        assert!(fires(1, 0));
+        assert!(fires(1, 1));
+        assert!(!fires(2, 1));
+    }
+
+    #[test]
+    fn unimplemented_counters_never_fire() {
+        let store = Store::open_in_memory().unwrap();
+        let e = mk(EventKind::Commit, "2026-03-01T01:00:00Z", "r", json!({}));
+        store.insert_event(&e).unwrap();
+        for c in [Counter::First { scope: FirstScope::Year }, Counter::StreakDays, Counter::Run { at: 1 }] {
+            assert_eq!(eval(&c, &store, &e, &[], &[]), None, "{c:?}");
+        }
     }
 
     #[test]
@@ -208,8 +172,8 @@ mod tests {
         let store = Store::open_in_memory().unwrap();
         let a1 = mk(EventKind::Commit, "2026-03-01T01:00:00Z", "A", json!({}));
         store.insert_event(&a1).unwrap();
-        let repo = Detector::First { scope: FirstScope::Repo };
-        let ever = Detector::First { scope: FirstScope::Ever };
+        let repo = Counter::First { scope: FirstScope::Repo };
+        let ever = Counter::First { scope: FirstScope::Ever };
         assert_eq!(eval(&repo, &store, &a1, &[], &[]), Some(json!({ "repo": "A" })));
         let a2 = mk(EventKind::Commit, "2026-03-01T02:00:00Z", "A", json!({}));
         store.insert_event(&a2).unwrap();

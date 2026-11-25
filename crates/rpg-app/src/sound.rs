@@ -1,7 +1,6 @@
 //! Banner sounds: pick a file from `sounds/` per config and play it with rodio.
 use crate::presenter::SoundKey;
 use rpg_core::config::SoundConfig;
-use rpg_core::rules::Tier;
 use std::path::{Path, PathBuf};
 
 /// Pick the sound for `key` among `files` (the contents of `sounds/`):
@@ -10,7 +9,7 @@ use std::path::{Path, PathBuf};
 pub fn resolve_sound(key: &SoundKey, cfg: &SoundConfig, files: &[PathBuf]) -> Option<PathBuf> {
     let configured: Vec<Option<&String>> = match key {
         SoundKey::Achievement { rule_id, tier } => {
-            vec![cfg.by_rule.get(rule_id), cfg.by_tier.get(tier_key(*tier)), cfg.achievement.as_ref()]
+            vec![cfg.by_rule.get(rule_id), cfg.by_tier.get(tier.as_str()), cfg.achievement.as_ref()]
         }
         SoundKey::LevelUp => vec![cfg.level_up.as_ref()],
         SoundKey::Summary => vec![cfg.achievement.as_ref()],
@@ -22,14 +21,6 @@ pub fn resolve_sound(key: &SoundKey, cfg: &SoundConfig, files: &[PathBuf]) -> Op
     }
     let audio: Vec<&PathBuf> = files.iter().filter(|f| is_audio(f)).collect();
     (!audio.is_empty()).then(|| audio[fastrand::usize(..audio.len())].clone())
-}
-
-fn tier_key(t: Tier) -> &'static str {
-    match t {
-        Tier::Bronze => "bronze",
-        Tier::Silver => "silver",
-        Tier::Gold => "gold",
-    }
 }
 
 fn is_audio(p: &Path) -> bool {

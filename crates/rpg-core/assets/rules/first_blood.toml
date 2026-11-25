@@ -2,7 +2,7 @@ id = "first_blood"
 name = "First Blood"
 tier = "bronze"
 trigger = ["commit"]
-detector = { type = "first", scope = "ever" }
+counter = { type = "first", scope = "ever" }
 repeatable = false
 hint = "Everything starts somewhere. Usually with a mistake."
 fallback = "Your first tracked commit. The system has noted your existence and filed it under 'optimistic'."

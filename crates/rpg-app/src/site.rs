@@ -85,15 +85,6 @@ fn event_json(r: &EventRow) -> Value {
     })
 }
 
-fn tier_str(t: rpg_core::rules::Tier) -> &'static str {
-    use rpg_core::rules::Tier;
-    match t {
-        Tier::Bronze => "bronze",
-        Tier::Silver => "silver",
-        Tier::Gold => "gold",
-    }
-}
-
 async fn character(State(st): State<SiteState>) -> Result<Json<Value>, ApiError> {
     let cfg = st.cfg.read().unwrap_or_else(|p| p.into_inner()).clone();
     let total = st.store.total_xp().map_err(internal)?;
@@ -145,7 +136,7 @@ async fn achievements(State(st): State<SiteState>) -> Result<Json<Value>, ApiErr
         out.push(json!({
             "id": r.id,
             "name": if unlocked { r.name.as_str() } else { MASK },
-            "tier": tier_str(r.tier),
+            "tier": r.top().tier.as_str(),
             "unlocked": unlocked,
             "count": count,
             "last_at": st.store.last_unlock_at(&r.id).map_err(internal)?,
@@ -254,7 +245,7 @@ tier = "bronze"
 fallback = "You merged."
 hint = "Merge something."
 trigger = ["pr_merged"]
-detector = { type = "first", scope = "ever" }
+counter = { type = "first", scope = "ever" }
 "#;
 
     #[tokio::test]

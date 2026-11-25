@@ -7,7 +7,7 @@ use regex::{Regex, RegexBuilder};
 use serde::Deserialize;
 use std::collections::HashSet;
 
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct RawLines {
     pub min: Option<u64>,
@@ -22,7 +22,7 @@ pub struct RawHours {
     pub end: u32,
 }
 
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct RawRange {
     pub min: Option<f64>,
@@ -61,7 +61,7 @@ pub struct RawFilter {
 }
 
 /// Compiled filter. The default matches everything.
-#[derive(Default)]
+#[derive(Debug, Clone, Default)]
 pub struct Filter {
     message: Option<Regex>,
     title: Option<Regex>,

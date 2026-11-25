@@ -2,7 +2,7 @@ id = "peer_pressure"
 name = "Peer Pressure"
 tier = "silver"
 trigger = ["review_submitted"]
-detector = { type = "count_in_window", count = 5, window = "day" }
+counter = { type = "per_day", at = 5 }
 repeatable = true
 hint = "Other people's code will not read itself."
 fallback = "Five reviews submitted in one day. You have read more of your colleagues' code than they have, and it shows."

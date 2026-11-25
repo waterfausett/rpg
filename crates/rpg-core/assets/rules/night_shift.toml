@@ -2,7 +2,7 @@ id = "night_shift"
 name = "Night Shift"
 tier = "bronze"
 trigger = ["commit"]
-detector = { type = "time_of_day", start_hour = 0, end_hour = 4 }
+filter = { hours = { start = 0, end = 4 } }
 repeatable = true
 cooldown_hours = 168
 hint = "The code does not care what time it is. Neither, apparently, do you."

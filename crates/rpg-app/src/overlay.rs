@@ -329,7 +329,7 @@ fn payload(id: u64, b: &Banner) -> BannerPayload {
         name: b.name.clone(),
         text: b.text.clone(),
         reward: b.reward.clone(),
-        tier: b.tier.map(tier_name),
+        tier: b.tier.map(Tier::label),
     }
 }
 
@@ -347,14 +347,6 @@ fn finish_banner(inner: &Arc<Inner>, id: u64) {
         }
     }
     pump(inner);
-}
-
-fn tier_name(t: Tier) -> &'static str {
-    match t {
-        Tier::Bronze => "Bronze",
-        Tier::Silver => "Silver",
-        Tier::Gold => "Gold",
-    }
 }
 
 /// The announcement line for an unlock that is about to get a banner: LLM text
@@ -410,7 +402,7 @@ id = "first_push"
 name = "First Push"
 tier = "bronze"
 trigger = ["push"]
-detector = {{ type = "first", scope = "ever" }}
+counter = {{ type = "first", scope = "ever" }}
 repeatable = false
 fallback = "STATIC"
 flavor = {flavor}

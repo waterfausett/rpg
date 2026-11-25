@@ -127,7 +127,7 @@ fn strip_repo_paths(v: &mut serde_json::Value, source: Source) {
 }
 
 /// Privacy-limited context for the prompt: event type, repo name (never a local path),
-/// branch, local time, detector findings and unlock history. No other event data.
+/// branch, local time, counter findings and unlock history. No other event data.
 pub fn build_context(_rule: &Rule, unlock: &Unlock, ev: &Event, tz: FixedOffset) -> serde_json::Value {
     let mut findings = unlock.findings.clone();
     strip_repo_paths(&mut findings, ev.source);
@@ -175,7 +175,7 @@ pub fn render(
 mod tests {
     use super::*;
     use crate::event::{EventKind, Source};
-    use crate::rules::{Detector, Tier};
+    use crate::rules::{parse_rule, Tier};
     use std::sync::Mutex;
 
     struct Fake {
@@ -199,19 +199,20 @@ mod tests {
     }
 
     fn rule(flavor: Flavor) -> Rule {
-        Rule {
-            id: "r".into(),
-            name: "Night Owl".into(),
-            tier: Tier::Bronze,
-            xp: 5,
-            fallback: "FALLBACK LINE".into(),
-            hint: None,
-            trigger: vec![EventKind::Commit],
-            detector: Detector::TimeOfDay { start_hour: 0, end_hour: 24 },
-            repeatable: true,
-            cooldown_hours: None,
-            flavor,
-        }
+        let mut r = parse_rule(
+            r#"
+id = "r"
+name = "Night Owl"
+tier = "bronze"
+xp = 5
+fallback = "FALLBACK LINE"
+trigger = ["commit"]
+repeatable = true
+"#,
+        )
+        .unwrap();
+        r.flavor = flavor;
+        r
     }
 
     fn llm() -> Flavor {
