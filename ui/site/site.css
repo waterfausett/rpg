@@ -72,7 +72,7 @@ h2:first-child { margin-top: 0; }
 .ach:is(.t-legendary, .t-celestial)::after { content: ""; position: absolute; inset: 0; pointer-events: none;
   background: linear-gradient(105deg, transparent 35%, rgba(255, 255, 255, .14) 50%, transparent 65%);
   transform: translateX(-100%); animation: card-sweep 6s ease-in-out infinite; }
-.ach .tier:is(.legendary, .celestial)::before { content: "°5  "; }
+.ach .tier:is(.legendary, .celestial)::before { content: "\2605  "; }
 @keyframes card-sweep { 0%, 60% { transform: translateX(-100%); } 100% { transform: translateX(100%); } }
 @media (prefers-reduced-motion: reduce) { .ach:is(.t-legendary, .t-celestial)::after { animation: none; opacity: 0; } }
 .ach.locked { opacity: .65; }
