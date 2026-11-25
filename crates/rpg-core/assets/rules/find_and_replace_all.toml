@@ -1,0 +1,10 @@
+id = "find_and_replace_all"
+name = "Find and Replace All"
+tier = "silver"
+trigger = ["commit"]
+filter = { min_files = 100 }
+counter = { type = "each" }
+repeatable = true
+hint = "Change a hundred files in one go."
+fallback = "A hundred files in one commit. Somewhere a regex is smiling and a reviewer is weeping."
+flavor = { type = "llm", prompt = "Rewrite this achievement announcement for this specific unlock, in the same voice: \"{fallback}\". Use the concrete details. Context: {context}" }

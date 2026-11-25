@@ -1,0 +1,10 @@
+id = "self_inflicted"
+name = "Self-Inflicted"
+tier = "bronze"
+trigger = ["push"]
+filter = { branch = ['main', 'master'] }
+counter = { type = "each" }
+repeatable = true
+cooldown_hours = 168
+hint = "Push straight to the main branch."
+fallback = "A push straight to main. No pull request, no review, no safety net. Bold."

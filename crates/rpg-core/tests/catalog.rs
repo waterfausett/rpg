@@ -59,6 +59,25 @@ const COVERED: &[&str] = &[
     "marathon",
     "speed_date",
     "pair_programming",
+    // messages, files, branches, hashes
+    "wip_wip_wip",
+    "famous_last_words",
+    "always_dns",
+    "profanity_filter_disabled",
+    "eloquent",
+    "the_novelist",
+    "emotional_support_emoji",
+    "polyglot",
+    "tiny_violence",
+    "find_and_replace_all",
+    "documentation_gremlin",
+    "lawyered",
+    "dependency_hell",
+    "naming_things_is_hard",
+    "self_inflicted",
+    "palindrome",
+    "hash_brown",
+    "lucky_sevens",
 ];
 
 fn starter() -> Rules {
@@ -638,4 +657,177 @@ fn pair_programming() {
     let h = [start("a", "2026-11-24T08:00:00Z"), start("b", "2026-11-24T08:10:00Z")];
     assert!(fires(&r, &h, start("c", "2026-11-24T08:20:00Z"), "pair_programming"));
     assert!(!fires(&r, &h[..1], start("c", "2026-11-24T08:20:00Z"), "pair_programming"));
+}
+
+// ---- messages, files, branches, hashes ----
+
+const T: &str = "2026-11-24T10:00:00Z";
+
+fn msg(m: &str) -> Event {
+    commit_data(T, json!({"message": m}))
+}
+
+fn with_files(paths: &[&str]) -> Event {
+    let files: Vec<Value> = paths.iter().map(|p| json!({"path": p, "added": 1, "removed": 0})).collect();
+    commit_data(T, json!({"files": files}))
+}
+
+fn on_branch(kind: EventKind, branch: &str) -> Event {
+    ev(kind, T, json!({"branch": branch}))
+}
+
+fn with_hash(h: &str) -> Event {
+    commit_data(T, json!({"hash": h}))
+}
+
+#[test]
+fn wip_wip_wip() {
+    let r = starter();
+    // Runs are per repo: the last three commits matched and the one before them did not.
+    let at_min = |m: u32, text: &str| commit_data(&format!("2026-11-24T10:{m:02}:00Z"), json!({"message": text}));
+    let h = [at_min(0, "add parser"), at_min(1, "wip"), at_min(2, "WIP again")];
+    assert!(fires(&r, &h, at_min(3, "wip: still going"), "wip_wip_wip"));
+    // A run of two so far does not.
+    assert!(!fires(&r, &h[..2], at_min(3, "wip"), "wip_wip_wip"));
+    // "wiper" is not the word.
+    assert!(!fires(&r, &h, at_min(3, "wiper blades"), "wip_wip_wip"));
+}
+
+#[test]
+fn famous_last_words() {
+    let r = starter();
+    assert!(fires(&r, &[], msg("Final fix, should work now"), "famous_last_words"));
+    assert!(fires(&r, &[], msg("fixed for real"), "famous_last_words"));
+    assert!(!fires(&r, &[], msg("finalize the parser"), "famous_last_words"));
+    // Seventy-two hour cooldown.
+    let h = [msg("last fix")];
+    assert!(!fires(&r, &h, commit_data("2026-11-24T12:00:00Z", json!({"message": "last fix"})), "famous_last_words"));
+    assert!(fires(&r, &h, commit_data("2026-11-27T11:00:00Z", json!({"message": "last fix"})), "famous_last_words"));
+}
+
+#[test]
+fn always_dns() {
+    let r = starter();
+    let pr = |t: &str| ev(EventKind::PrOpened, T, json!({"title": t}));
+    assert!(fires(&r, &[], pr("Fix DNS resolution"), "always_dns"));
+    assert!(!fires(&r, &[], pr("Fix dnsmasq config"), "always_dns"));
+}
+
+#[test]
+fn profanity_filter_disabled() {
+    let r = starter();
+    assert!(fires(&r, &[], msg("well damn, that was the wrong branch"), "profanity_filter_disabled"));
+    // A word that merely contains a listed one (the Scunthorpe problem) is clean.
+    assert!(!fires(&r, &[], msg("fix the damnation of the build"), "profanity_filter_disabled"));
+}
+
+#[test]
+fn eloquent() {
+    let r = starter();
+    assert!(fires(&r, &[], msg("fix"), "eloquent"));
+    assert!(fires(&r, &[], msg("  stuff \n"), "eloquent"));
+    assert!(!fires(&r, &[], msg("fix stuff"), "eloquent"));
+}
+
+#[test]
+fn the_novelist() {
+    let r = starter();
+    assert!(fires(&r, &[], msg(&"a".repeat(500)), "the_novelist"));
+    assert!(!fires(&r, &[], msg(&"a".repeat(499)), "the_novelist"));
+    // Length counts characters, not bytes: 499 two-byte chars stay under.
+    assert!(!fires(&r, &[], msg(&"é".repeat(499)), "the_novelist"));
+}
+
+#[test]
+fn emotional_support_emoji() {
+    let r = starter();
+    assert!(fires(&r, &[], msg("ship it \u{1F680}"), "emotional_support_emoji"));
+    assert!(!fires(&r, &[], msg("ship it"), "emotional_support_emoji"));
+}
+
+#[test]
+fn polyglot() {
+    let r = starter();
+    assert!(fires(&r, &[], with_files(&["a.rs", "b.ts", "c.py", "d.md"]), "polyglot"));
+    assert!(!fires(&r, &[], with_files(&["a.rs", "b.ts", "c.py", "d.py"]), "polyglot"));
+}
+
+#[test]
+fn tiny_violence() {
+    let r = starter();
+    let pr = |a: u64, d: u64| ev(EventKind::PrMerged, T, json!({"additions": a, "deletions": d}));
+    assert!(fires(&r, &[], pr(2, 2), "tiny_violence"));
+    assert!(fires(&r, &[], pr(1, 0), "tiny_violence"));
+    assert!(!fires(&r, &[], pr(3, 2), "tiny_violence"));
+    assert!(!fires(&r, &[], pr(0, 0), "tiny_violence"));
+}
+
+#[test]
+fn find_and_replace_all() {
+    let r = starter();
+    let paths = |n: usize| (0..n).map(|i| format!("f{i}.rs")).collect::<Vec<_>>();
+    let ev_n = |n: usize| {
+        let p = paths(n);
+        with_files(&p.iter().map(String::as_str).collect::<Vec<_>>())
+    };
+    assert!(fires(&r, &[], ev_n(100), "find_and_replace_all"));
+    assert!(!fires(&r, &[], ev_n(99), "find_and_replace_all"));
+}
+
+#[test]
+fn documentation_gremlin() {
+    let r = starter();
+    assert!(fires(&r, &[], with_files(&["README.md", "docs/guide.mdx"]), "documentation_gremlin"));
+    assert!(!fires(&r, &[], with_files(&["README.md", "src/main.rs"]), "documentation_gremlin"));
+}
+
+#[test]
+fn lawyered() {
+    let r = starter();
+    assert!(fires(&r, &[], with_files(&["src/a.rs", "LICENSE"]), "lawyered"));
+    assert!(fires(&r, &[], with_files(&["vendor/x/COPYING.txt"]), "lawyered"));
+    assert!(!fires(&r, &[], with_files(&["src/relicense.rs"]), "lawyered"));
+}
+
+#[test]
+fn dependency_hell() {
+    let r = starter();
+    assert!(fires(&r, &[], with_files(&["Cargo.lock", "package-lock.json"]), "dependency_hell"));
+    assert!(!fires(&r, &[], with_files(&["Cargo.lock", "Cargo.toml"]), "dependency_hell"));
+}
+
+#[test]
+fn naming_things_is_hard() {
+    let r = starter();
+    assert!(fires(&r, &[], on_branch(EventKind::Commit, "asdf"), "naming_things_is_hard"));
+    assert!(!fires(&r, &[], on_branch(EventKind::Commit, "feature/tests"), "naming_things_is_hard"));
+}
+
+#[test]
+fn self_inflicted() {
+    let r = starter();
+    assert!(fires(&r, &[], on_branch(EventKind::Push, "main"), "self_inflicted"));
+    assert!(!fires(&r, &[], on_branch(EventKind::Push, "feature/x"), "self_inflicted"));
+}
+
+#[test]
+fn palindrome() {
+    let r = starter();
+    assert!(fires(&r, &[], with_hash("abcdcba123"), "palindrome"));
+    assert!(!fires(&r, &[], with_hash("abcdcbx123"), "palindrome"));
+}
+
+#[test]
+fn hash_brown() {
+    let r = starter();
+    assert!(fires(&r, &[], with_hash("deadbeef01"), "hash_brown"));
+    assert!(fires(&r, &[], with_hash("f00d123456"), "hash_brown"));
+    assert!(!fires(&r, &[], with_hash("1deadbeef0"), "hash_brown"));
+}
+
+#[test]
+fn lucky_sevens() {
+    let r = starter();
+    assert!(fires(&r, &[], with_hash("ab777c1234"), "lucky_sevens"));
+    assert!(!fires(&r, &[], with_hash("ab77c71234"), "lucky_sevens"));
 }

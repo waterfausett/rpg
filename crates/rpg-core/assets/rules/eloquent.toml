@@ -1,0 +1,10 @@
+id = "eloquent"
+name = "Eloquent"
+tier = "bronze"
+trigger = ["commit"]
+filter = { message = '^\s*\S+\s*$' }
+counter = { type = "each" }
+repeatable = true
+cooldown_hours = 168
+hint = "One word. It says everything."
+fallback = "A one-word commit message. Poetry. Brevity. Zero information."

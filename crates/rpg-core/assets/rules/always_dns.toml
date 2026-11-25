@@ -1,0 +1,11 @@
+id = "always_dns"
+name = "It's Always DNS"
+tier = "silver"
+trigger = ["pr_opened"]
+filter = { title = '\bdns\b' }
+counter = { type = "each" }
+repeatable = true
+announce = "banner"
+hint = "Open a pull request about the thing that is always the problem."
+fallback = "A pull request about DNS. It was DNS. It is always DNS, and you knew it three hours ago."
+flavor = { type = "llm", prompt = "Rewrite this achievement announcement for this specific unlock, in the same voice: \"{fallback}\". Use the concrete details. Context: {context}" }

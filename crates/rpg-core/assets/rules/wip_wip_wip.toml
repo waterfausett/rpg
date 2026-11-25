@@ -1,0 +1,9 @@
+id = "wip_wip_wip"
+name = "WIP WIP WIP"
+tier = "bronze"
+trigger = ["commit"]
+filter = { message = '\bwip\b' }
+counter = { type = "run", at = 3 }
+repeatable = true
+hint = "Three commits in a row. One word. The word is wip."
+fallback = "Three WIP commits in a row. The work is in progress. It has been in progress for a while now."

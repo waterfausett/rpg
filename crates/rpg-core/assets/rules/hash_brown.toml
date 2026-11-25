@@ -1,0 +1,11 @@
+id = "hash_brown"
+name = "Hash Brown"
+tier = "silver"
+trigger = ["commit"]
+filter = { hash = '^(dead|beef|cafe|f00d)' }
+counter = { type = "each" }
+repeatable = true
+announce = "banner"
+hint = "A commit hash can spell something, if it feels like it."
+fallback = "A commit hash that starts with dead, beef, cafe or f00d. Git has a sense of humor and no sense of timing."
+flavor = { type = "llm", prompt = "Rewrite this achievement announcement for this specific unlock, in the same voice: \"{fallback}\". Use the concrete details. Context: {context}" }

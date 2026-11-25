@@ -1,0 +1,10 @@
+id = "emotional_support_emoji"
+name = "Emotional Support Emoji"
+tier = "bronze"
+trigger = ["commit"]
+filter = { message = '\p{Extended_Pictographic}' }
+counter = { type = "each" }
+repeatable = true
+cooldown_hours = 168
+hint = "Decorate a commit message with a tiny picture."
+fallback = "An emoji in a commit message. The rocket is not helping the deploy, but it is helping you."
