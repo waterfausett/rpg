@@ -1,0 +1,9 @@
+id = "rubber_stamp"
+name = "Rubber Stamp"
+tier = "silver"
+trigger = ["review_submitted"]
+counter = { type = "per_day", at = 10 }
+repeatable = true
+hint = "Looks good to you, apparently. Repeatedly."
+fallback = "Ten reviews submitted in one day. At this pace, \"LGTM\" is less an opinion and more a reflex."
+flavor = { type = "llm", prompt = "Rewrite this achievement announcement for this specific unlock, in the same voice: \"{fallback}\". Use the concrete details. Context: {context}" }

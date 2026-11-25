@@ -708,8 +708,17 @@ counter={type=\"combo\",kinds=[\"push\",\"commit\"],within_minutes=5}")).is_ok()
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/rules");
         let (rules, errors) = load_dir(&dir);
         assert!(errors.is_empty(), "{errors:?}");
-        assert_eq!(rules.list.len(), 10);
-        assert!(rules.list.iter().all(|r| !r.fallback.is_empty() && !r.ladder && r.steps.len() == 1));
+        // The catalog grows; the v0 starters are the ones checked here.
+        const V0: [&str; 10] = [
+            "archaeologist", "demolitions_expert", "first_blood", "hat_trick", "leviathan",
+            "new_territory", "night_shift", "peer_pressure", "personal_best", "surgical_strike",
+        ];
+        assert!(V0.iter().all(|id| rules.list.iter().any(|r| r.id == *id)));
+        assert!(rules
+            .list
+            .iter()
+            .filter(|r| V0.contains(&r.id.as_str()))
+            .all(|r| !r.fallback.is_empty() && !r.ladder && r.steps.len() == 1));
         for r in rules.list.iter().filter(|r| matches!(r.flavor, Flavor::Llm { .. })) {
             if let Flavor::Llm { prompt } = &r.flavor {
                 assert!(prompt.contains("{fallback}") && prompt.contains("{context}"), "{}", r.id);

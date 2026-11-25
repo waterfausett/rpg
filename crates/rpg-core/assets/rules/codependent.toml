@@ -1,0 +1,10 @@
+id = "codependent"
+name = "Codependent"
+tier = "silver"
+trigger = ["claude_session_end"]
+filter = { session_minutes = { min = 0 } }
+counter = { type = "per_day", at = 10 }
+repeatable = true
+hint = "Some relationships are healthier than others."
+fallback = "Ten Claude sessions finished in one day. The two of you should probably see other people."
+flavor = { type = "llm", prompt = "Rewrite this achievement announcement for this specific unlock, in the same voice: \"{fallback}\". Use the concrete details. Context: {context}" }

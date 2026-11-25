@@ -1,0 +1,9 @@
+id = "speed_run"
+name = "Speed Run"
+tier = "silver"
+trigger = ["commit"]
+counter = { type = "per_day", at = 10 }
+repeatable = true
+hint = "Quantity has a quality all its own."
+fallback = "Ten commits in a single day. Whether they were any good is a question for the reviewers, who are already crying."
+flavor = { type = "llm", prompt = "Rewrite this achievement announcement for this specific unlock, in the same voice: \"{fallback}\". Use the concrete details. Context: {context}" }

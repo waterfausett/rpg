@@ -1,0 +1,9 @@
+id = "dawn_patrol"
+name = "Dawn Patrol"
+tier = "bronze"
+trigger = ["commit"]
+filter = { hours = { start = 5, end = 7 } }
+repeatable = true
+cooldown_hours = 168
+hint = "The early bird gets the merge conflict."
+fallback = "A commit between five and seven in the morning. The birds are confused, and so is your sleep schedule."
