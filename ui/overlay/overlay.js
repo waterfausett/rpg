@@ -7,6 +7,19 @@
   const BANNER_MS = 8000;
   const FADE_MS = 400;
 
+  // Shrink a faded pill to nothing so the stack above eases down, then drop it.
+  function collapse(pill) {
+    pill.style.boxSizing = "border-box";
+    pill.style.height = pill.offsetHeight + "px";
+    void pill.offsetHeight; // commit the pinned height so the change below animates
+    pill.classList.add("gone");
+    pill.style.height = "0px";
+    let done = false;
+    const remove = () => { if (!done) { done = true; pill.remove(); } };
+    pill.addEventListener("transitionend", (e) => { if (e.propertyName === "height") remove(); });
+    setTimeout(remove, 400); // in case transitionend never fires
+  }
+
   function addToast(t) {
     const pill = document.createElement("div");
     pill.className = t.skill ? "xp skill" : t.tier ? "xp ach" : "xp";
@@ -21,7 +34,7 @@
       label.textContent = t.label || "";
       pill.appendChild(label);
     }
-    pill.addEventListener("animationend", () => pill.remove());
+    pill.addEventListener("animationend", () => collapse(pill));
     document.getElementById("toasts").appendChild(pill);
   }
 

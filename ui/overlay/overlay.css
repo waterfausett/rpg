@@ -28,6 +28,13 @@ body { user-select: none; -webkit-user-select: none; }
   65%  { opacity: 1; animation-timing-function: ease-in; }
   100% { opacity: 0; transform: translate3d(0, 0, 0); }
 }
+/* After the fade, collapse the (invisible) pill so the toasts above ease down
+   instead of snapping. The -8px margin swallows the flex gap it leaves.
+   overlay.js pins the height first, then animates it to 0. */
+.xp.gone { box-sizing: border-box; overflow: hidden; padding-top: 0; padding-bottom: 0;
+           border-width: 0; margin-top: -8px;
+           transition: height .25s ease-out, padding .25s ease-out, border-width .25s ease-out,
+                       margin .25s ease-out; }
 
 /* ---- Gold Banner (style B) ---- */
 .ach-b { position: fixed; inset: 10px; box-sizing: border-box; display: flex; flex-direction: column;
