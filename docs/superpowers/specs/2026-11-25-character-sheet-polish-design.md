@@ -21,6 +21,11 @@ a video-game "Dungeon HUD"), then approved it carried through all three tabs.
 - **Achievement cards:** a thinner tier border, a glow from the top and an inset highlight. Ladder bars
   fill in the card's tier color. Locked cards are dashed and dimmed. The `off` tag sits top-right.
   "N hidden achievements remain" is centered with small ✦ ornaments.
+- **Six tiers everywhere:** bronze, silver, gold, platinum, legendary, celestial (#45). Every tier-colored
+  piece above (cards, ladder bars, event-row tint, badges) works for all six. The top-tier flourishes
+  from #45 carry over in the new card style: Platinum and up glow stronger; Legendary and Celestial
+  cards keep their slow `card-sweep` light pass and the ★ on the tier label, both off under
+  `prefers-reduced-motion`.
 - **Event log filter:** a row of chips (all, commit, push, pr_opened, pr_merged, review, session start,
   session end) replaces the `<select>`. One click filters, and the active chip is solid gold.
 
@@ -47,8 +52,9 @@ A CSS framework or a build step was dropped: the site has no build, and a restyl
 
 ## How (decided)
 
-- `ui/site/site.css`: rewritten in the Refined Gold style. Keeps the `:root` tier palette exactly
-  (the `tier_palette_matches_between_overlay_and_site` test reads it).
+- `ui/site/site.css`: rewritten in the Refined Gold style. It must keep what the `site.rs` tests read:
+  the six-color `:root` tier palette exactly as in `overlay.css`, a `.ach.t-<tier>` rule for each of
+  the six tiers, the `card-sweep` animation, and a `prefers-reduced-motion` block.
 - `ui/site/index.html`: crest header markup, tab pill, chip row in place of the `<select>`.
 - `ui/site/site.js`: renders the new header text, sets `--tier` on achievement event rows, badges and
   ladder bars, and drives the chips (same `/api/events?kind=` query as today).
