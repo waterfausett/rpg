@@ -8,6 +8,7 @@
   --dim: rgba(255, 243, 207, 0.62);
   --bronze: #cd7f32;
   --silver: #c0c8d0;
+  --platinum: #cfe8ff;
 }
 * { box-sizing: border-box; }
 body {
@@ -62,6 +63,12 @@ h2:first-child { margin-top: 0; }
 .ach.locked { opacity: .65; }
 .ach .tier { font-size: 11px; letter-spacing: .25em; text-transform: uppercase; }
 .ach .tier.bronze { color: var(--bronze); } .ach .tier.silver { color: var(--silver); } .ach .tier.gold { color: var(--gold); }
+.ach .tier.platinum { color: var(--platinum); text-shadow: 0 0 8px var(--platinum); }
+.ach .aprog { margin-top: 10px; }
+.ach .abar { height: 8px; border: 1px solid var(--glow); border-radius: 5px; background: #0b0700; overflow: hidden; }
+.ach .afill { height: 100%; width: 0; background: linear-gradient(90deg, #b8860b, var(--gold)); }
+.ach .atext { margin-top: 4px; font-size: 12px; color: var(--dim); }
+.hiddenleft { margin-top: 14px; color: var(--dim); font-style: italic; }
 .ach .name { font: 700 18px Georgia, serif; margin: 4px 0; }
 .ach.unlocked .name { text-shadow: 0 0 10px var(--gold); }
 .ach .desc { font: italic 13px Georgia, serif; color: var(--dim); }

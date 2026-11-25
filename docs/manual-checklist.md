@@ -22,6 +22,11 @@ The automated and scripted checks cannot see these. Do them once on your machine
 - [ ] Open rules folder opens `rules/` in Explorer.
 - [ ] Install hooks, Uninstall hooks and Quit all work (see below).
 
+## Character sheet
+- [ ] Achievements tab: a ladder card (e.g. a `lifetime` rule with `tiers`) shows its current tier and a progress bar toward the next step, labelled like `Silver · 412 / 1,000`; hovering the bar lists the steps, with `???` past the next one.
+- [ ] With a `hidden = true` rule not yet earned, the tab shows no card for it and a line `1 hidden achievement remains` (plural for more) below the grid; the line is gone when none remain.
+- [ ] A platinum card shows its tier label in pale blue (`#cfe8ff`).
+
 ## Real install
 - [ ] First note `git config --global --get core.hooksPath` (probably unset) and keep a copy of `~/.claude/settings.json`.
 - [ ] Tray **Install hooks** (a "Hooks installed" pop-up appears; or `rpg install-hooks` from a terminal). Check that `git config --global core.hooksPath` points at `...\rpg\data\git-hooks` and that `~/.claude/settings.json` has the rpg `SessionStart`/`SessionEnd` entries with your other settings intact.

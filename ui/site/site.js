@@ -114,24 +114,59 @@
     });
   }
 
+  const cap = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : "");
+  const num = (n) => (typeof n === "number" ? n.toLocaleString() : String(n));
+
+  // A ladder's bar runs toward its next locked step: "Silver · 412 / 1,000".
+  function ladderProgress(a) {
+    const steps = a.steps || [];
+    const next = steps.find((s) => !s.unlocked);
+    const have = typeof a.progress === "number" ? a.progress : null;
+    const wrap = el("div", "aprog");
+    const bar = el("div", "abar");
+    bar.setAttribute("role", "progressbar");
+    bar.setAttribute("aria-label", a.name);
+    const fillEl = el("div", "afill");
+    let label;
+    if (!next) {
+      fillEl.style.width = "100%";
+      label = cap(a.tier) + " · complete";
+    } else {
+      const at = typeof next.at === "number" ? next.at : null;
+      fillEl.style.width = (at && have !== null ? Math.min(100, (have / at) * 100) : 0) + "%";
+      label = cap(next.tier) + " · " + (have !== null ? num(have) : "?") + " / " + num(next.at);
+    }
+    bar.appendChild(fillEl);
+    bar.title = steps.map((s) => cap(s.tier) + " " + num(s.at) + (s.unlocked ? " ✓" : "")).join(" · ");
+    wrap.appendChild(bar);
+    wrap.appendChild(el("div", "atext", label));
+    return wrap;
+  }
+
   async function loadAchievements() {
-    const list = await api("/api/achievements");
+    const data = await api("/api/achievements");
+    const list = data.achievements || [];
+    const hidden = data.hidden_remaining || 0;
     const got = list.filter((a) => a.unlocked).length;
-    $("achcount").textContent = "(" + got + "/" + list.length + ")";
+    $("achcount").textContent = "(" + got + "/" + (list.length + hidden) + ")";
     const grid = $("achievements");
     grid.replaceChildren();
-    if (!list.length) grid.appendChild(el("p", "empty", "No achievement rules loaded."));
+    if (!list.length && !hidden) grid.appendChild(el("p", "empty", "No achievement rules loaded."));
     list.forEach((a) => {
-      const card = el("div", "ach " + (a.unlocked ? "unlocked" : "locked"));
+      const card = el("div", "ach " + (a.unlocked ? "unlocked" : "locked") + (a.ladder ? " ladder" : ""));
       card.appendChild(el("div", "tier " + a.tier, a.tier));
       card.appendChild(el("div", "name", a.name));
       const text = a.unlocked ? a.flavor_text_latest : a.hint;
       if (text) card.appendChild(el("div", "desc", text));
+      if (a.ladder) card.appendChild(ladderProgress(a));
       if (a.unlocked) {
         card.appendChild(el("div", "meta", "Unlocked " + a.count + "x" + (a.last_at ? " · last " + ago(a.last_at) : "")));
       }
       grid.appendChild(card);
     });
+    const left = $("hiddenleft");
+    left.hidden = hidden <= 0;
+    left.textContent = hidden === 1 ? "1 hidden achievement remains" : hidden + " hidden achievements remain";
   }
 
   async function loadEvents() {
