@@ -6,7 +6,7 @@ use rpg_core::engine;
 use rpg_core::enrich::FileAge;
 use rpg_core::event::{Event, EventKind, Source};
 use rpg_core::rules::{self, Rules};
-use rpg_core::store::Store;
+use rpg_core::store::{NewUnlock, Store};
 use serde_json::{json, Value};
 use std::path::Path;
 
@@ -35,6 +35,19 @@ const COVERED: &[&str] = &[
     "speed_run",
     "rubber_stamp",
     "codependent",
+    // ladders
+    "committed",
+    "merge_conflict_of_interest",
+    "professional_critic",
+    "lumberjack",
+    "frequent_flyer",
+    "claudes_favorite",
+    "spellcheck_paladin",
+    "ticket_machine",
+    "test_believer",
+    "on_a_roll",
+    "achievement_hunter",
+    "skill_master",
 ];
 
 fn starter() -> Rules {
@@ -81,6 +94,36 @@ fn fires_with_ages(rules: &Rules, history: &[Event], event: Event, ages: &[FileA
     }
     let out = engine::process(&store, rules, &cfg, &event, ages, tz).unwrap();
     out.unlocks.iter().any(|u| u.rule_id == expect)
+}
+
+/// As `fires`, but `history` is stored directly (no rule evaluation) and `unlocks` are
+/// pre-existing unlocks with those rule ids. Threshold counters count stored events, so this is
+/// enough for large ladder histories.
+fn fires_seeded(rules: &Rules, history: &[Event], unlocks: &[String], event: Event, expect: &str) -> bool {
+    let store = Store::open_in_memory().unwrap();
+    for h in history {
+        store.insert_event(h).unwrap();
+    }
+    for id in unlocks {
+        store
+            .insert_unlock(&NewUnlock {
+                rule_id: id.clone(),
+                name: id.clone(),
+                tier: "bronze".into(),
+                xp: 0,
+                context: json!({}),
+                ts: at("2026-11-01T00:00:00Z"),
+            })
+            .unwrap();
+    }
+    let tz = FixedOffset::east_opt(0).unwrap();
+    let out = engine::process(&store, rules, &Config::default(), &event, &[], tz).unwrap();
+    out.unlocks.iter().any(|u| u.rule_id == expect)
+}
+
+/// `n` events built by `make(i)`, for ladder histories.
+fn many(n: usize, make: impl Fn(usize) -> Event) -> Vec<Event> {
+    (0..n).map(make).collect()
 }
 
 /// `n` events of one kind on 2026-11-24 (a Tuesday), one minute apart from 09:00.
@@ -310,4 +353,154 @@ fn codependent() {
     let mut short = history[..16].to_vec();
     short.push(s8);
     assert!(!fires(&r, &short, e8, "codependent"));
+}
+
+// ---- ladders ----
+
+fn commit_data(ts: &str, data: Value) -> Event {
+    ev(EventKind::Commit, ts, data)
+}
+
+#[test]
+fn committed() {
+    let r = starter();
+    let h = many(99, |_| commit("2026-11-23T10:00:00Z"));
+    assert!(fires_seeded(&r, &h, &[], commit("2026-11-24T10:00:00Z"), "committed.bronze"));
+    assert!(!fires_seeded(&r, &h[..98], &[], commit("2026-11-24T10:00:00Z"), "committed.bronze"));
+}
+
+#[test]
+fn merge_conflict_of_interest() {
+    let r = starter();
+    let h = many(9, |_| ev(EventKind::PrMerged, "2026-11-23T10:00:00Z", json!({})));
+    let next = ev(EventKind::PrMerged, "2026-11-24T10:00:00Z", json!({}));
+    assert!(fires_seeded(&r, &h, &[], next.clone(), "merge_conflict_of_interest.bronze"));
+    assert!(!fires_seeded(&r, &h[..8], &[], next, "merge_conflict_of_interest.bronze"));
+}
+
+#[test]
+fn professional_critic() {
+    let r = starter();
+    let h = many(24, |_| ev(EventKind::ReviewSubmitted, "2026-11-23T10:00:00Z", json!({})));
+    let next = ev(EventKind::ReviewSubmitted, "2026-11-24T10:00:00Z", json!({}));
+    assert!(fires_seeded(&r, &h, &[], next.clone(), "professional_critic.bronze"));
+    assert!(!fires_seeded(&r, &h[..23], &[], next, "professional_critic.bronze"));
+}
+
+#[test]
+fn lumberjack() {
+    let r = starter();
+    let removed = |n: u64| commit_data("2026-11-24T10:00:00Z", json!({"lines_removed": n}));
+    assert!(fires_seeded(&r, &[removed(999)], &[], removed(1), "lumberjack.bronze"));
+    assert!(!fires_seeded(&r, &[removed(998)], &[], removed(1), "lumberjack.bronze"));
+}
+
+#[test]
+fn frequent_flyer() {
+    let r = starter();
+    let in_repo = |name: &str| {
+        let mut e = commit("2026-11-23T10:00:00Z");
+        e.repo = Some(name.into());
+        e
+    };
+    let h: Vec<Event> = ["a", "b", "c", "d"].iter().map(|n| in_repo(n)).collect();
+    // A fifth distinct repo reaches bronze; a repeat of a known one does not.
+    assert!(fires_seeded(&r, &h, &[], in_repo("e"), "frequent_flyer.bronze"));
+    assert!(!fires_seeded(&r, &h[..3], &[], in_repo("e"), "frequent_flyer.bronze"));
+    assert!(!fires_seeded(&r, &h, &[], in_repo("a"), "frequent_flyer.bronze"));
+}
+
+#[test]
+fn claudes_favorite() {
+    let r = starter();
+    let end = |ts: &str| ev(EventKind::ClaudeSessionEnd, ts, json!({"session_minutes": 7}));
+    let h = many(49, |_| end("2026-11-23T10:00:00Z"));
+    assert!(fires_seeded(&r, &h, &[], end("2026-11-24T10:00:00Z"), "claudes_favorite.bronze"));
+    assert!(!fires_seeded(&r, &h[..48], &[], end("2026-11-24T10:00:00Z"), "claudes_favorite.bronze"));
+    // An end without a known start (no session_minutes) is not counted.
+    let unknown = ev(EventKind::ClaudeSessionEnd, "2026-11-24T10:00:00Z", json!({}));
+    assert!(!fires_seeded(&r, &h, &[], unknown, "claudes_favorite.bronze"));
+}
+
+#[test]
+fn spellcheck_paladin() {
+    let r = starter();
+    let msg = |m: &str| commit_data("2026-11-24T10:00:00Z", json!({"message": m}));
+    let h = many(4, |_| msg("fix typo in readme"));
+    assert!(fires_seeded(&r, &h, &[], msg("Fix typos"), "spellcheck_paladin.bronze"));
+    assert!(!fires_seeded(&r, &h[..3], &[], msg("Fix typos"), "spellcheck_paladin.bronze"));
+    assert!(!fires_seeded(&r, &h, &[], msg("typography tweaks"), "spellcheck_paladin.bronze"));
+}
+
+#[test]
+fn ticket_machine() {
+    let r = starter();
+    let msg = |m: &str| commit_data("2026-11-24T10:00:00Z", json!({"message": m}));
+    let h = many(9, |_| msg("fix login (#123)"));
+    assert!(fires_seeded(&r, &h, &[], msg("closes #7"), "ticket_machine.bronze"));
+    assert!(!fires_seeded(&r, &h[..8], &[], msg("closes #7"), "ticket_machine.bronze"));
+    assert!(!fires_seeded(&r, &h, &[], msg("no ticket here"), "ticket_machine.bronze"));
+}
+
+#[test]
+fn test_believer() {
+    let r = starter();
+    let touching = |path: &str| {
+        commit_data("2026-11-24T10:00:00Z", json!({"files": [{"path": path, "added": 1, "removed": 0}]}))
+    };
+    let h = many(9, |_| touching("tests/a.rs"));
+    assert!(fires_seeded(&r, &h, &[], touching("src/foo_test.go"), "test_believer.bronze"));
+    assert!(fires_seeded(&r, &h, &[], touching("web/app.spec.ts"), "test_believer.bronze"));
+    assert!(!fires_seeded(&r, &h[..8], &[], touching("tests/b.rs"), "test_believer.bronze"));
+    assert!(!fires_seeded(&r, &h, &[], touching("src/main.rs"), "test_believer.bronze"));
+}
+
+#[test]
+fn on_a_roll() {
+    let r = starter();
+    let days = |n: usize| many(n, |i| commit(&format!("2026-11-{:02}T10:00:00Z", 23 - i)));
+    // Four earlier days plus today is five in a row.
+    assert!(fires_seeded(&r, &days(4), &[], commit("2026-11-24T10:00:00Z"), "on_a_roll.bronze"));
+    assert!(!fires_seeded(&r, &days(3), &[], commit("2026-11-24T10:00:00Z"), "on_a_roll.bronze"));
+    // A gap breaks the streak.
+    let mut gap = days(4);
+    gap[1].ts = at("2026-11-10T10:00:00Z");
+    assert!(!fires_seeded(&r, &gap, &[], commit("2026-11-24T10:00:00Z"), "on_a_roll.bronze"));
+}
+
+#[test]
+fn achievement_hunter() {
+    let r = starter();
+    let ids = |n: usize| -> Vec<String> { (0..n).map(|i| format!("seed_{i}")).collect() };
+    // The commit is not the first and falls at a plain time, so it unlocks nothing else:
+    // only the seeded unlock count moves the meta ladder.
+    let earlier = [commit("2026-11-23T10:00:00Z")];
+    let event = || commit("2026-11-24T10:00:00Z");
+    assert!(fires_seeded(&r, &earlier, &ids(10), event(), "achievement_hunter.bronze"));
+    assert!(!fires_seeded(&r, &earlier, &ids(9), event(), "achievement_hunter.bronze"));
+}
+
+#[test]
+fn skill_master() {
+    use rpg_core::xp::{level_for, threshold};
+    let mut r = starter();
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/skills");
+    let (skills, errs) = rpg_core::skills::load_dir(&dir);
+    assert!(errs.is_empty(), "{errs:?}");
+    r.skills = skills;
+    let rust_xp = r.skills.iter().find(|s| s.id == "rust").expect("rust skill").xp;
+    let curve = Config::default().skill_levels.curve();
+    // Commits touching *.rs needed for Rust level 5, computed from the curve.
+    let need = threshold(5, &curve).div_ceil(rust_xp) as usize;
+    assert_eq!(level_for(need as u64 * rust_xp, &curve), 5);
+    assert!(level_for((need as u64 - 1) * rust_xp, &curve) < 5);
+    let rs_commit = |i: usize| {
+        commit_data(
+            &format!("2026-11-24T09:{:02}:{:02}Z", i / 60 % 60, i % 60),
+            json!({"files": [{"path": "src/lib.rs", "added": 1, "removed": 0}]}),
+        )
+    };
+    let history: Vec<Event> = (0..need - 1).map(rs_commit).collect();
+    assert!(fires(&r, &history, rs_commit(need), "skill_master.rust.bronze"));
+    assert!(!fires(&r, &history[..need - 2], rs_commit(need), "skill_master.rust.bronze"));
 }

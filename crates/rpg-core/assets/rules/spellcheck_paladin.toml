@@ -1,0 +1,13 @@
+id = "spellcheck_paladin"
+name = "Spellcheck Paladin"
+trigger = ["commit"]
+filter = { message = '\btypos?\b' }
+counter = { type = "lifetime" }
+tiers = [
+  { tier = "bronze", at = 5 },
+  { tier = "silver", at = 25 },
+  { tier = "gold", at = 100 },
+]
+hint = "Fix a typo. Mention it in the commit message, loudly."
+fallback = "Another milestone of typo-fix commits. You are the last line of defense against the word 'recieve'."
+flavor = { type = "llm", prompt = "Rewrite this achievement announcement for this specific unlock, in the same voice: \"{fallback}\". Use the concrete details. Context: {context}" }

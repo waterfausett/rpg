@@ -167,7 +167,7 @@ mod tests {
                 e.as_ref().unwrap().path().extension().and_then(|x| x.to_str()) == Some("toml")
             })
             .count();
-        assert!(n >= 10);
+        assert_eq!(n, STARTER_RULES.files().count());
         let skills = std::fs::read_dir(p.skills()).unwrap().count();
         assert_eq!(skills, STARTER_SKILLS.files().count());
         assert!(skills >= 10);

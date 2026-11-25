@@ -1,0 +1,12 @@
+id = "achievement_hunter"
+name = "Achievement Hunter"
+trigger = ["commit", "push", "pr_opened", "pr_merged", "review_submitted", "claude_session_end"]
+counter = { type = "meta", of = "distinct_unlocks" }
+tiers = [
+  { tier = "bronze", at = 10 },
+  { tier = "silver", at = 25 },
+  { tier = "gold", at = 50 },
+]
+hint = "Unlock a lot of different achievements."
+fallback = "Another milestone of different achievements unlocked. You are now collecting the collecting itself."
+flavor = { type = "llm", prompt = "Rewrite this achievement announcement for this specific unlock, in the same voice: \"{fallback}\". Use the concrete details. Context: {context}" }

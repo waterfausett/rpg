@@ -1,0 +1,13 @@
+id = "test_believer"
+name = "Test Believer"
+trigger = ["commit"]
+filter = { files_any = ["tests/**", "test/**", "**/tests/**", "*_test.*", "*.test.*", "*.spec.*", "test_*"] }
+counter = { type = "lifetime" }
+tiers = [
+  { tier = "bronze", at = 10 },
+  { tier = "silver", at = 100 },
+  { tier = "gold", at = 500 },
+]
+hint = "Commit changes to the tests."
+fallback = "Another milestone of commits that touch the tests. You write tests, which makes you either diligent or recently burned."
+flavor = { type = "llm", prompt = "Rewrite this achievement announcement for this specific unlock, in the same voice: \"{fallback}\". Use the concrete details. Context: {context}" }
