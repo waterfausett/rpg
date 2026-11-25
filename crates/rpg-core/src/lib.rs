@@ -10,7 +10,7 @@ pub mod skills;
 pub mod filters;
 pub mod store;
 pub mod xp;
-pub mod detectors;
+pub mod counters;
 pub mod enrich;
 pub mod records;
 pub mod derive;

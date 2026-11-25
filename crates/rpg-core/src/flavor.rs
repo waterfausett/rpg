@@ -223,6 +223,7 @@ repeatable = true
         Unlock {
             unlock_id: 1,
             rule_id: "r".into(),
+            base_rule_id: "r".into(),
             name: "Night Owl".into(),
             tier: Tier::Bronze,
             xp: 5,

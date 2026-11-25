@@ -1,6 +1,6 @@
 //! The engine: one event in, XP gains / unlocks / level-ups out.
 use crate::config::Config;
-use crate::detectors::{evaluate, EvalCtx};
+use crate::counters::{evaluate, EvalCtx};
 use crate::enrich::FileAge;
 use crate::event::{Event, EventKind};
 use crate::records;
@@ -19,7 +19,10 @@ pub struct XpGain {
 #[derive(Debug, Clone)]
 pub struct Unlock {
     pub unlock_id: i64,
+    /// The stored unlock key: the rule id, or `id.tier` for a ladder step.
     pub rule_id: String,
+    /// The id of the rule that fired.
+    pub base_rule_id: String,
     pub name: String,
     pub tier: Tier,
     pub xp: u64,
@@ -163,46 +166,50 @@ fn process_inner(
         award_skills(store, rules, cfg, ev, &mut out)?;
     }
 
+    let skill_level_ups = out.skill_level_ups.clone();
     for rule in rules.for_kind(ev.kind) {
-        let count = store.unlock_count(&rule.id)?;
-        if !rule.repeatable && count > 0 {
-            continue;
-        }
-        let last = store.last_unlock_at(&rule.id)?;
-        if let (Some(hours), Some(last)) = (rule.cooldown_hours, last) {
-            if ev.ts < last + Duration::hours(hours as i64) {
-                continue;
-            }
-        }
         if !rule.filter.matches(ev, tz) {
             continue;
         }
-        let ctx = EvalCtx { ev, store, broken: &broken, file_ages, tz };
-        let Some(findings) = evaluate(&rule.counter, &ctx)? else { continue };
-        // Single rules only for now; ladders unlock per step in Task 7.
-        let step = rule.top();
-        let unlock_id = store.insert_unlock(&NewUnlock {
-            rule_id: rule.id.clone(),
-            name: rule.name.clone(),
-            tier: step.tier.as_str().to_string(),
-            xp: step.xp,
-            context: findings.clone(),
-            ts: ev.ts,
-        })?;
-        if step.xp > 0 {
-            store.add_xp(&ev.id, step.xp, &rule.name, ev.ts)?;
-            out.xp_gains.push(XpGain { amount: step.xp, label: rule.name.clone() });
+        // Ladder steps each unlock once (Task 7); single rules keep repeatable/cooldown.
+        if !rule.ladder {
+            if !rule.repeatable && store.unlock_count(&rule.id)? > 0 {
+                continue;
+            }
+            if let (Some(hours), Some(last)) = (rule.cooldown_hours, store.last_unlock_at(&rule.id)?) {
+                if ev.ts < last + Duration::hours(hours as i64) {
+                    continue;
+                }
+            }
         }
-        out.unlocks.push(Unlock {
-            unlock_id,
-            rule_id: rule.id.clone(),
-            name: rule.name.clone(),
-            tier: step.tier,
-            xp: step.xp,
-            findings,
-            unlock_count: count + 1,
-            last_unlocked_at: last,
-        });
+        let ctx = EvalCtx { ev, store, broken: &broken, file_ages, tz, skill_level_ups: &skill_level_ups };
+        for f in evaluate(rule, &ctx)? {
+            let count = store.unlock_count(&f.unlock_key)?;
+            let last = store.last_unlock_at(&f.unlock_key)?;
+            let unlock_id = store.insert_unlock(&NewUnlock {
+                rule_id: f.unlock_key.clone(),
+                name: f.name.clone(),
+                tier: f.step.tier.as_str().to_string(),
+                xp: f.step.xp,
+                context: f.findings.clone(),
+                ts: ev.ts,
+            })?;
+            if f.step.xp > 0 {
+                store.add_xp(&ev.id, f.step.xp, &f.name, ev.ts)?;
+                out.xp_gains.push(XpGain { amount: f.step.xp, label: f.name.clone() });
+            }
+            out.unlocks.push(Unlock {
+                unlock_id,
+                rule_id: f.unlock_key,
+                base_rule_id: rule.id.clone(),
+                name: f.name,
+                tier: f.step.tier,
+                xp: f.step.xp,
+                findings: f.findings,
+                unlock_count: count + 1,
+                last_unlocked_at: last,
+            });
+        }
     }
 
     out.total_xp = store.total_xp()?;

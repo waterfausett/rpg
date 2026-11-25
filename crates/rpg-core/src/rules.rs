@@ -266,7 +266,16 @@ fn steps(r: &mut RawRule) -> Result<Vec<Step>, String> {
     Ok(steps)
 }
 
-fn check_counter(c: &Counter) -> Result<(), String> {
+fn check_counter(c: &Counter, trigger: &[EventKind]) -> Result<(), String> {
+    if let Counter::Combo { kinds, .. } = c {
+        match kinds.last() {
+            None => return Err("`counter.kinds` is empty".into()),
+            Some(k) if !trigger.contains(k) => {
+                return Err(format!("`counter.kinds`: the last kind `{}` must be one of the rule's `trigger` kinds", k.as_str()))
+            }
+            Some(_) => {}
+        }
+    }
     if let Counter::Lifetime { sum, distinct } = c {
         if sum.is_some() && distinct.is_some() {
             return Err("counter `lifetime`: set `sum` or `distinct`, not both".into());
@@ -281,7 +290,7 @@ fn check_counter(c: &Counter) -> Result<(), String> {
 pub fn parse_rule(text: &str) -> Result<Rule, String> {
     let mut r: RawRule = toml::from_str(text).map_err(|e| e.to_string())?;
     let steps = steps(&mut r)?;
-    check_counter(&r.counter)?;
+    check_counter(&r.counter, &r.trigger)?;
     let filter = Filter::try_from(r.filter.unwrap_or_default()).map_err(|e| format!("`filter`: {e}"))?;
     filter.kinds_ok(&r.trigger).map_err(|e| format!("`filter`: {e}"))?;
     Ok(Rule {
@@ -516,8 +525,8 @@ fallback = "f"
         let c = |src: &str| parse_rule(&base(&format!("tier=\"bronze\"\ncounter={src}"))).unwrap().counter;
         assert_eq!(c("{type=\"run\",at=3}"), Counter::Run { at: 3 });
         assert_eq!(
-            c("{type=\"combo\",kinds=[\"commit\",\"push\"],within_minutes=15}"),
-            Counter::Combo { kinds: vec![EventKind::Commit, EventKind::Push], within_minutes: 15 }
+            c("{type=\"combo\",kinds=[\"push\",\"commit\"],within_minutes=15}"),
+            Counter::Combo { kinds: vec![EventKind::Push, EventKind::Commit], within_minutes: 15 }
         );
         assert_eq!(c("{type=\"gap_days\",min=30,scope=\"repo\"}"), Counter::GapDays { min: 30, scope: Scope::Repo });
         assert_eq!(c("{type=\"first\",scope=\"year\"}"), Counter::First { scope: FirstScope::Year });
@@ -528,6 +537,18 @@ fallback = "f"
         assert_eq!(l.counter, Counter::Lifetime { sum: Some("deletions".into()), distinct: None });
         assert!(err("tier=\"bronze\"\ncounter={type=\"run\",at=3,within=2}").contains("within"));
         assert!(err("tier=\"bronze\"\ncounter={type=\"time_of_day\"}").contains("time_of_day"));
+    }
+
+    #[test]
+    fn combo_kinds_must_end_in_a_trigger_kind() {
+        let empty = err("tier=\"bronze\"
+counter={type=\"combo\",kinds=[],within_minutes=5}");
+        assert!(empty.contains("counter.kinds"), "{empty}");
+        let wrong = err("tier=\"bronze\"
+counter={type=\"combo\",kinds=[\"commit\",\"push\"],within_minutes=5}");
+        assert!(wrong.contains("counter.kinds") && wrong.contains("push"), "{wrong}");
+        assert!(parse_rule(&base("tier=\"bronze\"
+counter={type=\"combo\",kinds=[\"push\",\"commit\"],within_minutes=5}")).is_ok());
     }
 
     #[test]

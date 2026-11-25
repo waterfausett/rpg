@@ -312,6 +312,7 @@ mod tests {
         Unlock {
             unlock_id: id,
             rule_id: format!("rule{id}"),
+            base_rule_id: format!("rule{id}"),
             name: format!("Ach {id}"),
             tier,
             xp,
