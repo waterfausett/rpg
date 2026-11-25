@@ -16,7 +16,7 @@ Every rule normalizes to a list of `Step`s, with one step for a single achieveme
 
 ## Global Constraints
 
-- The old `detector = {...}` rule format keeps loading unchanged. Having both `detector` and `filter`/`counter` in one file is a load error.
+- No compatibility with the v0 rule format: `detector` is removed, and the 10 v0 starter files are rewritten in the new format (Task 5). The user resets `rules/` after upgrading. The database (events, XP, unlocks) must survive.
 - Tier defaults: bronze 250, silver 500, gold 1000, platinum 2000 exp. Platinum ranks above gold.
 - `[announce]` defaults: bronze `toast`; silver, gold and platinum `banner`.
 - Step unlock id is `<rule_id>.<tier>` (e.g. `committed.silver`); skill ladders use `<rule_id>.<skill_id>.<tier>`. Each tier appears at most once per ladder; a repeat is a load error.
@@ -30,7 +30,7 @@ Every rule normalizes to a list of `Step`s, with one step for a single achieveme
 
 ## Review Focus
 
-1. **Upgrading an existing install:** user rule files in the old format, a DB with months of events, and no seeding manifest. Expected: everything loads, and the first matching events afterwards unlock ladder steps that history already earned, collapsing as a storm when there are many. Pinned in Task 7 (`ladder_catches_up_on_next_event`) and Task 13 (`manifest_created_from_existing_files`).
+1. **Upgrading an existing install:** a DB with months of events and no seeding manifest. Expected: the first matching events afterwards unlock ladder steps that history already earned, collapsing as a storm when there are many. Pinned in Task 7 (`ladder_catches_up_on_next_event`) and Task 13 (`manifest_created_from_existing_files`).
 2. **Events stored before this change** lack `message`, `github_repo`, `created_at` and session fields. Expected: no panic, and the filter doesn't match. Pinned in Task 4 (`missing_field_never_matches`).
 3. **A bad regex or glob in a user's rule file.** Expected: that file is reported in `RuleError` and the others still load, as today. Pinned in Task 5 (`bad_regex_is_a_rule_error`).
 4. **One event crossing several ladder steps, or many ladders at once.** Expected: every crossed step unlocks once, never twice. Pinned in Task 7 (`one_event_unlocks_all_crossed_steps_once`).
@@ -47,7 +47,7 @@ Every rule normalizes to a list of `Step`s, with one step for a single achieveme
 | `crates/rpg-core/src/derive.rs` (create) | session fields computed at processing and persisted into `ev.data` |
 | `crates/rpg-core/src/filters.rs` (create) | `RawFilter`, `Filter`, parsing, `Filter::matches` |
 | `crates/rpg-core/src/counters.rs` (create, replaces `detectors.rs`) | `EvalCtx`, `Fired`, `evaluate`, `progress` |
-| `crates/rpg-core/src/rules.rs` (modify) | `Tier` (+Platinum), `Announce`, `Step`, `Counter`, `Rule`, legacy mapping, validation, `enabled` |
+| `crates/rpg-core/src/rules.rs` (modify) | `Tier` (+Platinum), `Announce`, `Step`, `Counter`, `Rule`, validation, `enabled` |
 | `crates/rpg-core/src/store.rs` (modify) | `events_of`, `unlock_counts` |
 | `crates/rpg-core/src/engine.rs` (modify) | derive, filter, counters, steps, announce, meta ordering |
 | `crates/rpg-core/src/config.rs` + `assets/config.default.toml` (modify) | `[announce]` |
@@ -191,9 +191,10 @@ Add a third test in which `temp_repo` sets `origin` to `https://github.com/acme/
 - [ ] **Step 4: Run them and check they pass.** Same command. Expected: PASS.
 - [ ] **Step 5: Commit** `Rules: event filters (#2)`
 
-### Task 5: Rule schema: counters, steps, Platinum, legacy detectors
+### Task 5: Rule schema: counters, steps, Platinum
 
 **Files:**
+- Modify: the 10 files in `crates/rpg-core/assets/rules/`, rewritten from `detector` to `filter`/`counter` with the same behavior; `README.md` (an upgrade note: "after upgrading to this version, empty your `rules/` folder; the app reseeds it")
 - Modify: `crates/rpg-core/src/rules.rs`; every compile fallout of the changed `Rule`/`Tier` (`engine.rs`, `flavor.rs` tests, `site.rs`, `overlay.rs`, `presenter.rs`)
 - Test: `crates/rpg-core/src/rules.rs` tests
 
@@ -240,16 +241,15 @@ Add a third test in which `temp_repo` sets `origin` to `https://github.com/acme/
     - `share_text: bool`
     
     `tier` and `xp` are removed as fields. Add `pub fn top(&self) -> &Step` (last step) and `pub fn step_id(&self, tier: Tier) -> String`, which returns `id` for a single-step non-ladder rule and `format!("{id}.{}", tier.as_str())` for a ladder. Drop `PartialEq` from `Rule` if `Filter` can't derive it.
-  - TOML (`RawRule`, `deny_unknown_fields`) accepts `tier` | `tiers = [{tier, at, xp?, announce?}]`, an optional top-level `at`, `xp`, `announce`, `hidden`, `share_text`, `filter`, `counter` (default `each`), or legacy `detector`.
+  - TOML (`RawRule`, `deny_unknown_fields`) accepts `tier` | `tiers = [{tier, at, xp?, announce?}]`, an optional top-level `at`, `xp`, `announce`, `hidden`, `share_text`, `filter`, `counter` (default `each`). Anything else, including `detector`, is an unknown-field error.
 - Validation, each failure a load error with a message naming the field:
   - exactly one of `tier`/`tiers`
   - threshold counters need `at` (single) or `tiers` with `at` on every step, strictly increasing
   - moment counters accept neither `tiers` nor `at`
   - no repeated tier in `tiers`
   - `repeatable`/`cooldown_hours` are not allowed with `tiers`
-  - `detector` cannot be combined with `filter`/`counter`
   - `filter.kinds_ok(&trigger)`
-- Legacy mapping for `detector`:
+- How to rewrite the v0 starter files (same behavior):
   - `count_in_window{count}` → `PerDay{at: count}`
   - `personal_record` → `PersonalRecord`
   - `file_age` → `FileAge`
@@ -258,7 +258,7 @@ Add a third test in which `temp_repo` sets `origin` to `https://github.com/acme/
   - `first{scope}` → `First{scope}`
 
 - [ ] **Step 1: Write the failing tests:**
-  - `legacy_detector_still_parses` (all 10 files in `assets/rules` load with zero errors; `night_shift` has `Counter::Each` and an `hours` filter)
+  - `v0_starters_parse_in_new_format` (all 10 files in `assets/rules` load with zero errors; `night_shift` has `Counter::Each` and an `hours` filter)
   - `ladder_parses` (a 3-step `lifetime` ladder: `steps.len() == 3`, `ladder`, step xp defaults by tier)
   - `platinum_default_xp_is_2000`
   - `step_ids`: `committed.silver`, and a single rule's id unchanged
@@ -266,11 +266,11 @@ Add a third test in which `temp_repo` sets `origin` to `https://github.com/acme/
   - `repeated_tier_rejected`
   - `threshold_counter_needs_at`
   - `moment_counter_rejects_tiers`
-  - `detector_and_counter_rejected`
+  - `detector_field_rejected` (the error message names `detector`)
 - [ ] **Step 2: Run them and check they fail.** Run `cargo test -p rpg-core rules::`. Expected: compile errors.
 - [ ] **Step 3: Implement** `rules.rs`. Fix the compile fallout everywhere with `Tier::as_str/label/rank`, `rule.top().tier` and `rule.top().xp`. In tests that build `Rule` literals (`engine.rs`, `flavor.rs`), build rules with `parse_rule(toml)` instead.
 - [ ] **Step 4: Run the whole workspace and check it compiles.** Run `cargo test --workspace`. Expected: rules tests PASS. Engine tests may fail until Task 6 replaces `detectors.rs`; leave them failing until then.
-- [ ] **Step 5: Commit** `Rules: counters, ladder steps, Platinum, legacy detector mapping (#2)`
+- [ ] **Step 5: Commit** `Rules: counters, ladder steps, Platinum; v0 rules in the new format (#2)`
 
 ### Task 6: Moment counters (replace detectors.rs)
 

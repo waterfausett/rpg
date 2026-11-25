@@ -25,7 +25,9 @@ v0 ships 10 achievements, which isn't enough to keep the game interesting. Grow 
 
 - **No banner spam.** If a normal workday produces more than one or two banners, the defaults are wrong.
 - **Commit messages and PR titles never leave the machine by default.** They are kept out of the LLM flavor context unless a rule opts in.
-- **No breaking existing rule files.** Users' rule folders hold copies of the v0 rules in the old `detector` format, and those keep loading unchanged.
+- **Losing earned history.** Events, XP and unlocks in the database survive the upgrade.
+
+**Decided: no compatibility for v0 rule files.** There's one user, and they're fine with resetting their install. The `detector` field is removed and the 10 v0 starter rules are rewritten in the new format. After upgrading, the user empties their `rules/` folder (the README's upgrade note says so) and the app reseeds it.
 
 ## Constraints (from the code today)
 
@@ -64,7 +66,7 @@ fallback = "..."
 - A rule has either `tier` (single achievement) or `tiers` (series), not both.
 - `filter` is optional (absent means every triggering event matches).
 - `counter` defaults to `each`.
-- The old `detector = {...}` field still parses, mapped onto filter and counter. Both in one file is an error.
+- The old `detector = {...}` field is gone. A file that still has it fails to load with a clear error.
 - New optional fields: `announce` (`"banner"` / `"toast"`), `hidden` (bool), `share_text` (bool, see Privacy). `enabled` comes from #26.
 - Existing fields (`repeatable`, `cooldown_hours`, `xp`, `flavor`, `hint`, `fallback`) keep their meaning.
 
@@ -152,7 +154,7 @@ Commit messages and PR titles are stored only in the local SQLite database. They
 ### Build order (one PR each)
 
 1. Event data: commit message, PR timestamps, Claude session duration and concurrency.
-2. Filters and counters, with the old `detector` format mapped onto them; the 10 v0 rules keep passing their tests.
+2. Filters and counters. The 10 v0 rules are rewritten in the new format and keep passing their tests.
 3. Tiers, progress on the character sheet, `announce` and the achievement toast, `hidden`.
 4. Seeding manifest and `enabled` (#26).
 5. The catalog, in batches.
