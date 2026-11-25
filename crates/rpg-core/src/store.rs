@@ -239,6 +239,26 @@ impl Store {
             .optional()?)
     }
 
+    /// Events of the given kinds with `ts >= since`, oldest first (`ts ASC, id ASC`), backfill
+    /// included. An empty `kinds` slice yields no events.
+    pub fn events_of(&self, kinds: &[EventKind], since: Option<DateTime<Utc>>) -> Result<Vec<Event>> {
+        if kinds.is_empty() {
+            return Ok(Vec::new());
+        }
+        let marks = vec!["?"; kinds.len()].join(",");
+        let mut args: Vec<String> = kinds.iter().map(|k| k.as_str().to_string()).collect();
+        let mut sql = format!("SELECT {EVENT_COLS} FROM events e WHERE e.kind IN ({marks})");
+        if let Some(t) = since {
+            sql.push_str(" AND e.ts >= ?");
+            args.push(ts_str(t));
+        }
+        sql.push_str(" ORDER BY e.ts ASC, e.id ASC");
+        let conn = self.conn();
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(args.iter()), event_from_row)?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
     pub fn add_xp(&self, event_id: &str, amount: u64, reason: &str, ts: DateTime<Utc>) -> Result<()> {
         self.conn().execute(
             "INSERT INTO xp_ledger(event_id, amount, reason, ts) VALUES(?1,?2,?3,?4)",
@@ -487,6 +507,21 @@ mod tests {
         s.set_record("m", 3.5, Utc::now()).unwrap();
         s.set_record("m", 7.0, Utc::now()).unwrap();
         assert_eq!(s.record("m").unwrap(), Some(7.0));
+    }
+
+    #[test]
+    fn events_of_filters_and_orders() {
+        let s = Store::open_in_memory().unwrap();
+        let now = Utc::now();
+        s.insert_event(&ev("b", EventKind::Commit, now)).unwrap();
+        s.insert_event(&ev("a", EventKind::Commit, now)).unwrap();
+        s.insert_event(&ev("old", EventKind::Commit, now - chrono::Duration::days(2))).unwrap();
+        s.insert_event(&ev("s", EventKind::ClaudeSessionStart, now)).unwrap();
+        let all = s.events_of(&[EventKind::Commit], None).unwrap();
+        assert_eq!(all.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(), ["old", "a", "b"]);
+        let recent = s.events_of(&[EventKind::Commit], Some(now)).unwrap();
+        assert_eq!(recent.len(), 2);
+        assert!(s.events_of(&[], None).unwrap().is_empty());
     }
 
     #[test]

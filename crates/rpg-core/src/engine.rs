@@ -140,6 +140,11 @@ fn process_inner(
     if !cfg.paths.allows(ev.repo.as_deref()) {
         return Ok(out);
     }
+    // Derived fields (session length, concurrency) are persisted with the event so later
+    // history scans and this event's own rules can filter on them.
+    let mut derived = ev.clone();
+    crate::derive::derive(store, &mut derived)?;
+    let ev = &derived;
     if !store.insert_event(ev)? {
         return Ok(out);
     }

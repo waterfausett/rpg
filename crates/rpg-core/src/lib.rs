@@ -12,6 +12,7 @@ pub mod xp;
 pub mod detectors;
 pub mod enrich;
 pub mod records;
+pub mod derive;
 pub mod engine;
 pub mod flavor;
 pub mod github;
