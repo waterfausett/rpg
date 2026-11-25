@@ -167,7 +167,7 @@ fn process_inner(
     // session ends with no start).
     if let Some((amount, label)) = base_xp(store, cfg, ev)? {
         if amount > 0 {
-            store.add_xp(&ev.id, amount, label, ev.ts)?;
+            store.add_xp(&ev.id, amount, label, None, ev.ts)?;
             out.xp_gains.push(XpGain { amount, label: label.to_string(), achievement: None });
         }
         award_skills(store, rules, cfg, ev, &mut out)?;
@@ -212,7 +212,7 @@ fn process_inner(
                 None => f.step.announce.or(rule.announce).unwrap_or(cfg.announce.for_tier(f.step.tier)),
             };
             if f.step.xp > 0 {
-                store.add_xp(&ev.id, f.step.xp, &f.name, ev.ts)?;
+                store.add_xp(&ev.id, f.step.xp, &f.name, Some(unlock_id), ev.ts)?;
                 out.xp_gains.push(XpGain { amount: f.step.xp, label: f.title.clone(), achievement: Some((f.step.tier, announce)) });
             }
             out.unlocks.push(Unlock {

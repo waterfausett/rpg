@@ -434,7 +434,7 @@ mod tests {
         let process = move |s: &Store, r: &Rules, cfg: &Config, ev: &Event, fa: &[FileAge], tz: FixedOffset| {
             if ev.id == fail_id {
                 s.begin_tx().unwrap();
-                s.add_xp(&ev.id, 1000, "leaked", ev.ts).unwrap();
+                s.add_xp(&ev.id, 1000, "leaked", None, ev.ts).unwrap();
                 panic!("engine panicked");
             }
             engine::process(s, r, cfg, ev, fa, tz)
