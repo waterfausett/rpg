@@ -126,11 +126,28 @@ fn strip_repo_paths(v: &mut serde_json::Value, source: Source) {
     }
 }
 
+/// Remove every `message` and `title` key (commit messages, PR titles), at any depth.
+fn strip_text_keys(v: &mut serde_json::Value) {
+    match v {
+        serde_json::Value::Object(m) => {
+            m.remove("message");
+            m.remove("title");
+            m.values_mut().for_each(strip_text_keys);
+        }
+        serde_json::Value::Array(a) => a.iter_mut().for_each(strip_text_keys),
+        _ => {}
+    }
+}
+
 /// Privacy-limited context for the prompt: event type, repo name (never a local path),
 /// branch, local time, counter findings and unlock history. No other event data.
-pub fn build_context(_rule: &Rule, unlock: &Unlock, ev: &Event, tz: FixedOffset) -> serde_json::Value {
+/// Commit messages and PR titles are dropped from findings unless `rule.share_text`.
+pub fn build_context(rule: &Rule, unlock: &Unlock, ev: &Event, tz: FixedOffset) -> serde_json::Value {
     let mut findings = unlock.findings.clone();
     strip_repo_paths(&mut findings, ev.source);
+    if !rule.share_text {
+        strip_text_keys(&mut findings);
+    }
     serde_json::json!({
         "event": {
             "kind": ev.kind.as_str(),
@@ -241,6 +258,38 @@ repeatable = true
             Some("myrepo".into()),
             serde_json::json!({"branch": "main", "hash": "deadbeef", "files": ["secret.rs"]}),
         )
+    }
+
+    fn nested_findings() -> serde_json::Value {
+        serde_json::json!({
+            "msg_hit": {"message": "fix secret bug", "n": 1},
+            "items": [{"title": "Add private feature", "k": 2}],
+            "age_days": 400
+        })
+    }
+
+    #[test]
+    fn message_stripped_by_default() {
+        let mut u = unlock();
+        u.findings = nested_findings();
+        let ctx = build_context(&rule(llm()), &u, &event(), tz());
+        let s = ctx.to_string();
+        assert!(!s.contains("fix secret bug"), "{s}");
+        assert!(!s.contains("Add private feature"), "{s}");
+        assert_eq!(ctx["findings"]["msg_hit"]["n"], 1);
+        assert_eq!(ctx["findings"]["items"][0]["k"], 2);
+        assert_eq!(ctx["findings"]["age_days"], 400);
+    }
+
+    #[test]
+    fn message_kept_with_share_text() {
+        let mut u = unlock();
+        u.findings = nested_findings();
+        let mut r = rule(llm());
+        r.share_text = true;
+        let ctx = build_context(&r, &u, &event(), tz());
+        assert_eq!(ctx["findings"]["msg_hit"]["message"], "fix secret bug");
+        assert_eq!(ctx["findings"]["items"][0]["title"], "Add private feature");
     }
 
     #[test]
