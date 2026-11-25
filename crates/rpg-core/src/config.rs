@@ -22,11 +22,13 @@ pub struct Config {
 }
 
 /// How an unlock of each tier is announced when its rule doesn't say: a banner or just a toast.
-/// `all`, when set, overrides every rule, step and tier setting.
+/// `all`, when set, overrides every rule, step and tier setting (and `first_banner`).
+/// `first_banner` makes an achievement's first-ever unlock a banner.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct AnnounceConfig {
     pub all: Option<Announce>,
+    pub first_banner: bool,
     pub bronze: Announce,
     pub silver: Announce,
     pub gold: Announce,
@@ -35,7 +37,7 @@ pub struct AnnounceConfig {
 
 impl Default for AnnounceConfig {
     fn default() -> Self {
-        Self { all: None, bronze: Announce::Toast, silver: Announce::Banner, gold: Announce::Banner, platinum: Announce::Banner }
+        Self { all: None, first_banner: true, bronze: Announce::Toast, silver: Announce::Banner, gold: Announce::Banner, platinum: Announce::Banner }
     }
 }
 
@@ -281,6 +283,11 @@ mod tests {
         let c: Config = toml::from_str("[announce]\nbronze = \"banner\"\ngold = \"toast\"\n").unwrap();
         assert_eq!((c.announce.bronze, c.announce.silver, c.announce.gold), (Announce::Banner, Announce::Banner, Announce::Toast));
         assert_eq!(c.announce.all, None);
+        assert!(c.announce.first_banner);
+        let c: Config = toml::from_str("[announce]
+first_banner = false
+").unwrap();
+        assert!(!c.announce.first_banner);
         let c: Config = toml::from_str("[announce]\nall = \"toast\"\n").unwrap();
         assert_eq!((c.announce.all, c.announce.gold), (Some(Announce::Toast), Announce::Banner));
     }

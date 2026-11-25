@@ -193,6 +193,8 @@ fn process_inner(
         for f in evaluate(rule, &ctx)? {
             let count = store.unlock_count(&f.unlock_key)?;
             let last = store.last_unlock_at(&f.unlock_key)?;
+            // The first unlock of the achievement (for a ladder, of any of its steps) is news.
+            let first = cfg.announce.first_banner && !store.rule_ever_unlocked(&rule.id)?;
             let unlock_id = store.insert_unlock(&NewUnlock {
                 rule_id: f.unlock_key.clone(),
                 name: f.name.clone(),
@@ -201,7 +203,11 @@ fn process_inner(
                 context: f.findings.clone(),
                 ts: ev.ts,
             })?;
-            let announce = cfg.announce.all.or(f.step.announce).or(rule.announce).unwrap_or(cfg.announce.for_tier(f.step.tier));
+            let announce = match cfg.announce.all {
+                Some(all) => all,
+                None if first => Announce::Banner,
+                None => f.step.announce.or(rule.announce).unwrap_or(cfg.announce.for_tier(f.step.tier)),
+            };
             if f.step.xp > 0 {
                 store.add_xp(&ev.id, f.step.xp, &f.name, ev.ts)?;
                 out.xp_gains.push(XpGain { amount: f.step.xp, label: f.name.clone(), achievement: Some((f.step.tier, announce)) });
@@ -675,7 +681,8 @@ tiers=[{tier=\"bronze\",at=100,xp=5},{tier=\"silver\",at=1000,xp=50,announce=\"t
             (unlocks, gains)
         };
         // Step over rule over config: the rule's banner beats the config, the silver step's toast beats the rule.
-        let (unlocks, gains) = go(&Config::default());
+        // These are all first unlocks, so `first_banner` is off to see the usual order.
+        let (unlocks, gains) = go(&toml::from_str("[announce]\nfirst_banner = false\n").unwrap());
         assert_eq!(
             unlocks,
             vec![
@@ -694,7 +701,7 @@ tiers=[{tier=\"bronze\",at=100,xp=5},{tier=\"silver\",at=1000,xp=50,announce=\"t
             ]
         );
         // With neither set, the config decides by tier.
-        let cfg: Config = toml::from_str("[announce]\nbronze = \"banner\"\n").unwrap();
+        let cfg: Config = toml::from_str("[announce]\nfirst_banner = false\nbronze = \"banner\"\n").unwrap();
         assert_eq!(go(&cfg).0[2], ("plain".to_string(), Announce::Banner));
     }
 
@@ -730,10 +737,54 @@ tiers=[{tier=\"bronze\",at=100,xp=5},{tier=\"silver\",at=1000,xp=50,announce=\"t
             assert_eq!(unlocks, ids.iter().map(|id| (id.to_string(), want)).collect::<Vec<_>>(), "all = {name}");
             assert_eq!(gains, vec![want; 4], "all = {name}");
         }
-        // Unset: the step, rule and tier settings decide as usual.
-        let (unlocks, _) = go("");
+        // Unset: the step, rule and tier settings decide as usual (first unlocks aside).
+        let (unlocks, _) = go("[announce]\nfirst_banner = false\n");
         let got: Vec<Announce> = unlocks.into_iter().map(|(_, a)| a).collect();
         assert_eq!(got, vec![Announce::Toast, Announce::Toast, Announce::Banner, Announce::Banner]);
+    }
+
+    #[test]
+    fn first_unlock_is_a_banner_then_the_usual_setting() {
+        let rules = Rules { list: vec![rule("poly", EventKind::Commit, "repeatable = true\nannounce = \"toast\"", 5)], ..Default::default() };
+        let go = |toml_text: &str| {
+            let cfg: Config = toml::from_str(toml_text).unwrap();
+            let store = Store::open_in_memory().unwrap();
+            ["2026-01-01T10:00:00Z", "2026-01-01T11:00:00Z"]
+                .iter()
+                .map(|ts| {
+                    let o = process(&store, &rules, &cfg, &mk(EventKind::Commit, ts, serde_json::json!({})), &[], tz()).unwrap();
+                    let gain = o.xp_gains.iter().find_map(|g| g.achievement.map(|(_, a)| a));
+                    assert_eq!(gain, Some(o.unlocks[0].announce), "the exp toast agrees with the unlock");
+                    o.unlocks[0].announce
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(go(""), vec![Announce::Banner, Announce::Toast]);
+        assert_eq!(go("[announce]\nfirst_banner = false\n"), vec![Announce::Toast, Announce::Toast]);
+        // An explicit `all` wins over the first-time banner.
+        assert_eq!(go("[announce]\nall = \"toast\"\n"), vec![Announce::Toast, Announce::Toast]);
+    }
+
+    #[test]
+    fn only_a_ladders_first_step_gets_the_first_time_banner() {
+        let ladder = parse_rule(
+            "id=\"lad\"
+name=\"Lad\"
+fallback=\"f\"
+trigger=[\"commit\"]
+announce=\"toast\"
+counter={type=\"lifetime\"}
+tiers=[{tier=\"bronze\",at=100,xp=5},{tier=\"silver\",at=1000,xp=50},{tier=\"gold\",at=1202,xp=50}]",
+        )
+        .unwrap();
+        let rules = Rules { list: vec![ladder], ..Default::default() };
+        let store = Store::open_in_memory().unwrap();
+        store_commits(&store, 1200, at("2026-01-01T00:00:00Z"), serde_json::json!({}), false);
+        let o = run(&store, &rules, &mk(EventKind::Commit, "2026-01-02T00:00:00Z", serde_json::json!({})));
+        let got: Vec<(String, Announce)> = o.unlocks.into_iter().map(|u| (u.rule_id, u.announce)).collect();
+        assert_eq!(got, vec![("lad.bronze".to_string(), Announce::Banner), ("lad.silver".to_string(), Announce::Toast)]);
+        let o = run(&store, &rules, &mk(EventKind::Commit, "2026-01-02T00:01:00Z", serde_json::json!({})));
+        assert_eq!((o.unlocks[0].rule_id.as_str(), o.unlocks[0].announce), ("lad.gold", Announce::Toast));
     }
 
     #[test]

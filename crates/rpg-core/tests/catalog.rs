@@ -1046,9 +1046,15 @@ fn routine_silvers_are_toasts() {
     }
 }
 
-/// The unlocks (and how each is announced) of a typical workday, after a week of plain
-/// workdays so first-ever and new-repo unlocks are out of the way.
+/// The unlocks (and how each is announced) of a typical workday, after a week of workdays
+/// (the first one busy, the rest plain) so first-ever unlocks, new-repo unlocks and the
+/// specials' first-time banners are out of the way.
 fn typical_day_unlocks(cfg: &Config) -> Vec<(String, rpg_core::rules::Announce)> {
+    day_unlocks(cfg, true)
+}
+
+/// The unlocks of the busy workday, after a week of workdays (the first one busy when `seeded`).
+fn day_unlocks(cfg: &Config, seeded: bool) -> Vec<(String, rpg_core::rules::Announce)> {
     let mut r = starter();
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/skills");
     let (skills, errs) = rpg_core::skills::load_dir(&dir);
@@ -1057,7 +1063,7 @@ fn typical_day_unlocks(cfg: &Config) -> Vec<(String, rpg_core::rules::Announce)>
     let store = Store::open_in_memory().unwrap();
     let tz = FixedOffset::east_opt(0).unwrap();
     for d in 17..=23 {
-        for e in workday(&format!("2026-11-{d}"), false) {
+        for e in workday(&format!("2026-11-{d}"), seeded && d == 17) {
             engine::process(&store, &r, cfg, &e, &[], tz).unwrap();
         }
     }
@@ -1067,6 +1073,23 @@ fn typical_day_unlocks(cfg: &Config) -> Vec<(String, rpg_core::rules::Announce)>
         unlocks.extend(out.unlocks.into_iter().map(|u| (u.rule_id, u.announce)));
     }
     unlocks
+}
+
+/// The first time the specials unlock they are news: banners, though the catalog makes
+/// them toasts. With `first_banner = false` they stay toasts.
+#[test]
+fn specials_first_unlock_is_a_banner() {
+    use rpg_core::rules::Announce;
+    let ids = ["surgical_strike", "polyglot", "the_novelist", "famous_last_words", "marathon"];
+    let unlocks = day_unlocks(&Config::default(), false);
+    for id in ids {
+        assert!(unlocks.iter().any(|(u, a)| u == id && *a == Announce::Banner), "{id} as a banner: {unlocks:?}");
+    }
+    let cfg: Config = toml::from_str("[announce]\nfirst_banner = false\n").unwrap();
+    let unlocks = day_unlocks(&cfg, false);
+    for id in ids {
+        assert!(unlocks.iter().any(|(u, a)| u == id && *a == Announce::Toast), "{id} as a toast: {unlocks:?}");
+    }
 }
 
 /// `[announce] all` overrides the catalog's own settings: Polyglot (`announce = "toast"`)
