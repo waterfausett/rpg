@@ -535,6 +535,61 @@ fn skill_master() {
     assert!(!fires(&r, &history[..need - 2], rs_commit(need), "skill_master.rust.bronze"));
 }
 
+/// The starter rules with the starter skills loaded.
+fn starter_with_skills() -> Rules {
+    let mut r = starter();
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/skills");
+    let (skills, errs) = rpg_core::skills::load_dir(&dir);
+    assert!(errs.is_empty(), "{errs:?}");
+    r.skills = skills;
+    r
+}
+
+/// Skill XP needed for `level` on the default skill curve.
+fn skill_xp_for(level: u32) -> u64 {
+    rpg_core::xp::threshold(level, &Config::default().skill_levels.curve())
+}
+
+/// Every kind a starter skill earns on triggers Skill Master: Shipping levels on merged PRs.
+#[test]
+fn skill_master_triggers_on_every_skill_kind() {
+    let r = starter_with_skills();
+    let rule = r.list.iter().find(|x| x.id == "skill_master").unwrap();
+    for skill in &r.skills {
+        for kind in &skill.events {
+            assert!(rule.trigger.contains(kind), "skill {} earns on {kind:?}", skill.id);
+        }
+    }
+    let store = Store::open_in_memory().unwrap();
+    let shipping = r.skills.iter().find(|s| s.id == "shipping").unwrap();
+    store.add_skill_xp("seed", "shipping", "Shipping", skill_xp_for(5) - shipping.xp, at("2026-11-23T10:00:00Z")).unwrap();
+    let tz = FixedOffset::east_opt(0).unwrap();
+    let out = engine::process(&store, &r, &Config::default(), &ev(EventKind::PrMerged, T, json!({})), &[], tz).unwrap();
+    assert!(out.unlocks.iter().any(|u| u.rule_id == "skill_master.shipping.bronze"), "{:?}", out.unlocks);
+}
+
+/// A skill already past a step (skill XP earned while the rule was off, say) unlocks it on the
+/// next matching event, even one that levels no skill.
+#[test]
+fn skill_master_catches_up() {
+    let r = starter_with_skills();
+    let store = Store::open_in_memory().unwrap();
+    let old = at("2026-11-01T10:00:00Z");
+    store.add_skill_xp("seed", "rust", "Rust", skill_xp_for(11), old).unwrap();
+    store.add_skill_xp("seed", "yaml", "YAML Wrangling", skill_xp_for(5) - 1, old).unwrap();
+    let tz = FixedOffset::east_opt(0).unwrap();
+    let cfg = Config::default();
+    // A commit that earns no skill XP at all.
+    let out = engine::process(&store, &r, &cfg, &commit(T), &[], tz).unwrap();
+    assert!(out.skill_level_ups.is_empty());
+    let keys: Vec<&str> = out.unlocks.iter().map(|u| u.rule_id.as_str()).collect();
+    assert!(keys.contains(&"skill_master.rust.bronze") && keys.contains(&"skill_master.rust.silver"), "{keys:?}");
+    assert!(!keys.iter().any(|k| k.starts_with("skill_master.yaml")), "yaml is one XP short: {keys:?}");
+    // Already unlocked: the next event does not unlock them again.
+    let out = engine::process(&store, &r, &cfg, &commit("2026-11-24T11:00:00Z"), &[], tz).unwrap();
+    assert!(!out.unlocks.iter().any(|u| u.base_rule_id == "skill_master"), "{:?}", out.unlocks);
+}
+
 // ---- streaks, rhythm, Claude sessions ----
 
 #[test]

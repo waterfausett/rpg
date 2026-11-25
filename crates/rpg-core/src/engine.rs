@@ -170,7 +170,6 @@ fn process_inner(
         award_skills(store, rules, cfg, ev, &mut out)?;
     }
 
-    let skill_level_ups = out.skill_level_ups.clone();
     // Meta rules run last so their counts include this event's unlocks.
     let is_meta = |r: &&Rule| matches!(r.counter, Counter::Meta { .. });
     let ordered = rules.for_kind(ev.kind).filter(|r| !is_meta(r)).chain(rules.for_kind(ev.kind).filter(is_meta));
@@ -190,7 +189,7 @@ fn process_inner(
                 }
             }
         }
-        let ctx = EvalCtx { ev, store, broken: &broken, file_ages, tz, skill_level_ups: &skill_level_ups };
+        let ctx = EvalCtx { ev, store, broken: &broken, file_ages, tz, skill_curve: cfg.skill_levels.curve() };
         for f in evaluate(rule, &ctx)? {
             let count = store.unlock_count(&f.unlock_key)?;
             let last = store.last_unlock_at(&f.unlock_key)?;

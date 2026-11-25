@@ -4,8 +4,8 @@
 //! step. Threshold counters compute a running value (`progress`) and unlock each step whose
 //! `at` it has reached. History scans are over events of `ev.kind` unless a counter says otherwise; the
 //! current event is already in the store when counters run. `meta` counts the player's unlocks
-//! and `skill_level` reads this event's skill level-ups.
-use crate::engine::SkillLevelUp;
+//! and `skill_level` reads every skill's stored XP.
+use crate::config::LevelConfig;
 use crate::enrich::FileAge;
 use crate::event::{Event, EventKind};
 use crate::records::{local_day_bounds, metric_key, RecordBroken};
@@ -22,7 +22,8 @@ pub struct EvalCtx<'a> {
     pub broken: &'a [RecordBroken],
     pub file_ages: &'a [FileAge],
     pub tz: FixedOffset,
-    pub skill_level_ups: &'a [SkillLevelUp],
+    /// The skill level curve (`[skill_levels]` in config), for `skill_level`.
+    pub skill_curve: LevelConfig,
 }
 
 /// One step a rule unlocked for this event.
@@ -123,28 +124,26 @@ fn meta(rule: &Rule, store: &Store, of: MetaOf) -> Result<u64> {
     })
 }
 
-/// For each skill that leveled up on this event (its highest new level), every step with
-/// `at <= level` not yet unlocked, in step order. Keys are `{rule.id}.{skill_id}.{tier}`.
+/// For every skill with stored XP (this event's included), at its current level on the skill
+/// curve: every step with `at <= level` not yet unlocked, in step order. So a skill that is
+/// already past a step catches up on the next triggering event, levelled up or not. Keys are
+/// `{rule.id}.{skill_id}.{tier}`.
 fn skill_level(rule: &Rule, ctx: &EvalCtx) -> Result<Vec<Fired>> {
-    let mut levels: Vec<&SkillLevelUp> = Vec::new();
-    for up in ctx.skill_level_ups {
-        match levels.iter_mut().find(|l| l.skill_id == up.skill_id) {
-            Some(l) if l.level < up.level => *l = up,
-            Some(_) => {}
-            None => levels.push(up),
-        }
-    }
     let mut out = Vec::new();
-    for up in levels {
+    for skill in ctx.store.skill_totals()? {
+        let level = crate::xp::level_for(skill.xp, &ctx.skill_curve);
         for step in &rule.steps {
             let Some(at) = step.at else { continue };
-            let key = format!("{}.{}.{}", rule.id, up.skill_id, step.tier.as_str());
-            if u64::from(up.level) >= at && ctx.store.unlock_count(&key)? == 0 {
+            if u64::from(level) < at {
+                break;
+            }
+            let key = format!("{}.{}.{}", rule.id, skill.skill_id, step.tier.as_str());
+            if ctx.store.unlock_count(&key)? == 0 {
                 out.push(Fired {
                     unlock_key: key,
-                    name: format!("{}: {} ({})", rule.name, up.name, step.tier.label()),
+                    name: format!("{}: {} ({})", rule.name, skill.name, step.tier.label()),
                     step: step.clone(),
-                    findings: json!({ "skill_id": up.skill_id, "skill": up.name, "level": up.level, "at": at }),
+                    findings: json!({ "skill_id": skill.skill_id, "skill": skill.name, "level": level, "at": at }),
                 });
             }
         }
@@ -323,7 +322,6 @@ fn combo(ctx: &EvalCtx, kinds: &[EventKind], within_minutes: u32) -> Result<Opti
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::SkillLevelUp;
     use crate::enrich::FileAge;
     use crate::event::{Event, EventKind, Source};
     use crate::records::{self, RecordBroken};
@@ -334,6 +332,11 @@ mod tests {
 
     fn tz() -> FixedOffset {
         FixedOffset::east_opt(0).unwrap()
+    }
+
+    /// The default skill curve: level 5 at 800 XP, 10 at 2700, 20 at 8282.
+    fn curve() -> crate::config::LevelConfig {
+        crate::config::SkillLevelConfig::default().curve()
     }
 
     fn at(s: &str) -> DateTime<Utc> {
@@ -355,7 +358,7 @@ mod tests {
     }
 
     fn eval_with(rule: &Rule, store: &Store, ev: &Event, broken: &[RecordBroken], ages: &[FileAge]) -> Vec<Fired> {
-        let ctx = EvalCtx { ev, store, broken, file_ages: ages, tz: tz(), skill_level_ups: &[] };
+        let ctx = EvalCtx { ev, store, broken, file_ages: ages, tz: tz(), skill_curve: curve() };
         evaluate(rule, &ctx).unwrap()
     }
 
@@ -427,7 +430,7 @@ mod tests {
         assert_eq!(records::count_today(&store, &b, plus2).unwrap(), 2);
         assert_eq!(records::count_today(&store, &b, tz()).unwrap(), 1);
         let r = rule("\"pr_merged\"", "counter = { type = \"per_day\", at = 2 }");
-        let ctx = |tz| EvalCtx { ev: &b, store: &store, broken: &[], file_ages: &[], tz, skill_level_ups: &[] };
+        let ctx = |tz| EvalCtx { ev: &b, store: &store, broken: &[], file_ages: &[], tz, skill_curve: curve() };
         assert_eq!(evaluate(&r, &ctx(plus2)).unwrap().len(), 1);
         assert!(evaluate(&r, &ctx(tz())).unwrap().is_empty());
     }
@@ -540,10 +543,6 @@ counter = { type = \"meta\", of = \"same_unlock\" }");
         assert_eq!(progress(&r, &store, tz()).unwrap(), Some(3));
     }
 
-    fn up(skill_id: &str, name: &str, level: u32) -> SkillLevelUp {
-        SkillLevelUp { skill_id: skill_id.into(), name: name.into(), level }
-    }
-
     #[test]
     fn skill_level_per_skill() {
         let store = Store::open_in_memory().unwrap();
@@ -558,39 +557,36 @@ tiers=[{tier=\"bronze\",at=5},{tier=\"silver\",at=10},{tier=\"gold\",at=20}]",
         .unwrap();
         let e = mk(EventKind::Commit, "2026-03-01T01:00:00Z", "r", json!({}));
         store.insert_event(&e).unwrap();
+        let ts = e.ts;
+        let add = |id: &str, name: &str, xp: u64| store.add_skill_xp("x", id, name, xp, ts).unwrap();
         // Evaluate as the engine does, storing what fired.
-        let fire = |ups: &[SkillLevelUp]| -> Vec<(String, String)> {
-            let ctx = EvalCtx { ev: &e, store: &store, broken: &[], file_ages: &[], tz: tz(), skill_level_ups: ups };
+        let fire = || -> Vec<(String, String)> {
+            let ctx = EvalCtx { ev: &e, store: &store, broken: &[], file_ages: &[], tz: tz(), skill_curve: curve() };
             let f = evaluate(&r, &ctx).unwrap();
             for x in &f {
                 unlock(&store, &x.unlock_key);
             }
             f.into_iter().map(|x| (x.unlock_key, x.name)).collect()
         };
-        assert!(fire(&[]).is_empty(), "no level-ups");
-        assert!(fire(&[up("rust", "Rust", 4)]).is_empty());
-        // Several level-ups for one skill: the highest counts.
+        assert!(fire().is_empty(), "no skill XP");
+        add("rust", "Rust", 799);
+        assert!(fire().is_empty(), "level 4");
+        add("rust", "Rust", 1);
+        assert_eq!(fire(), vec![("skill_master.rust.bronze".to_string(), "Skill Master: Rust (Bronze)".to_string())]);
+        assert!(fire().is_empty(), "already unlocked");
+        add("python", "Python", 800);
+        assert_eq!(fire(), vec![("skill_master.python.bronze".to_string(), "Skill Master: Python (Bronze)".to_string())]);
+        // Catching up: a skill past two steps unlocks both, in order; the name is the latest one credited.
+        add("python", "Pythonista", 8282 - 800);
+        add("docs", "Scribe", 300);
         assert_eq!(
-            fire(&[up("rust", "Rust", 4), up("rust", "Rust", 5)]),
-            vec![("skill_master.rust.bronze".to_string(), "Skill Master: Rust (Bronze)".to_string())]
+            fire(),
+            vec![
+                ("skill_master.python.silver".to_string(), "Skill Master: Pythonista (Silver)".to_string()),
+                ("skill_master.python.gold".to_string(), "Skill Master: Pythonista (Gold)".to_string()),
+            ]
         );
-        assert!(fire(&[up("rust", "Rust", 6)]).is_empty(), "already unlocked");
-        assert_eq!(
-            fire(&[up("python", "Python", 5)]),
-            vec![("skill_master.python.bronze".to_string(), "Skill Master: Python (Bronze)".to_string())]
-        );
-        // Catching up: one level-up crossing two steps unlocks both, in order.
-        assert_eq!(
-            fire(&[up("rust", "Rust", 10), up("docs", "Scribe", 3)])
-                .into_iter()
-                .map(|(k, _)| k)
-                .collect::<Vec<_>>(),
-            vec!["skill_master.rust.silver"]
-        );
-        assert_eq!(
-            fire(&[up("python", "Python", 20)]).into_iter().map(|(k, _)| k).collect::<Vec<_>>(),
-            vec!["skill_master.python.silver", "skill_master.python.gold"]
-        );
+        assert!(fire().is_empty());
         assert_eq!(progress(&r, &store, tz()).unwrap(), None, "per-skill progress is not a single value");
     }
 
@@ -600,12 +596,17 @@ tiers=[{tier=\"bronze\",at=5},{tier=\"silver\",at=10},{tier=\"gold\",at=20}]",
         let r = rule("\"commit\"", "at = 5
 counter = { type = \"skill_level\" }");
         let e = mk(EventKind::Commit, "2026-03-01T01:00:00Z", "r", json!({}));
-        let ups = [up("rust", "Rust", 7)];
-        let ctx = EvalCtx { ev: &e, store: &store, broken: &[], file_ages: &[], tz: tz(), skill_level_ups: &ups };
+        // Level 7 on the default curve: 100 * 6^1.5 = 1470.
+        store.add_skill_xp("x", "rust", "Rust", 1470, e.ts).unwrap();
+        let ctx = EvalCtx { ev: &e, store: &store, broken: &[], file_ages: &[], tz: tz(), skill_curve: curve() };
         let f = evaluate(&r, &ctx).unwrap();
         assert_eq!(f.len(), 1);
         assert_eq!((f[0].unlock_key.as_str(), f[0].name.as_str()), ("r.rust.bronze", "R: Rust (Bronze)"));
         assert_eq!(f[0].findings, json!({ "skill_id": "rust", "skill": "Rust", "level": 7, "at": 5 }));
+        // The curve comes from the context: a steeper one puts the same XP below level 5.
+        let steep = crate::config::LevelConfig { base: 1000.0, exponent: 1.5 };
+        let ctx = EvalCtx { skill_curve: steep, ..ctx };
+        assert!(evaluate(&r, &ctx).unwrap().is_empty());
     }
 
     /// With every step unlocked, `evaluate` skips computing progress: a broken events table
@@ -646,7 +647,7 @@ counter = { type = \"skill_level\" }");
             // Meta reads unlocks, not events: for it this only checks the result.
             store.exec_raw("DROP TABLE events").unwrap();
             unlock(&store, "l.bronze");
-            let ctx = EvalCtx { ev: &e, store: &store, broken: &[], file_ages: &[], tz: tz(), skill_level_ups: &[] };
+            let ctx = EvalCtx { ev: &e, store: &store, broken: &[], file_ages: &[], tz: tz(), skill_curve: curve() };
             if !matches!(r.counter, Counter::Meta { .. }) {
                 assert!(evaluate(r, &ctx).is_err(), "{:?}: silver is left, so progress is computed", r.counter);
             }
@@ -898,7 +899,7 @@ counter = { type = \"run\", at = 3 }");
         assert!(add(&r, &store, &d).is_some());
         // The local year: at +02:00, 2025-12-31T23:30Z is already 2026.
         let plus2 = FixedOffset::east_opt(2 * 3600).unwrap();
-        let ctx = EvalCtx { ev: &b, store: &store, broken: &[], file_ages: &[], tz: plus2, skill_level_ups: &[] };
+        let ctx = EvalCtx { ev: &b, store: &store, broken: &[], file_ages: &[], tz: plus2, skill_curve: curve() };
         assert!(evaluate(&r, &ctx).unwrap().is_empty());
     }
 }

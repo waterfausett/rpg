@@ -215,7 +215,7 @@ fallback = "A commit on every day of the month."
 | `lifetime` | optional `sum = "<data field>"` or `distinct = "repo"` (not both) | the number of matching events; with `sum`, the total of that numeric data field (missing counts as 0, rounded down); with `distinct = "repo"`, the number of distinct repos |
 | `streak_days` | | consecutive local days with a matching event, ending today |
 | `meta` | `of = "distinct_unlocks"` / `"same_unlock"` | counts of your own unlocks, leaving out this rule's own. `distinct_unlocks`: the number of different achievements unlocked, where a ladder (or a skill ladder) counts once whatever its steps. `same_unlock`: the most times any one single (non-ladder) achievement was unlocked. Meta rules run after the other rules for the same event, so they count that event's unlocks. |
-| `skill_level` | | per skill: when a skill reaches a new level, every step with `at` at or below that level unlocks for that skill. Each skill gets its own steps (see [Step ids](#step-ids)), named e.g. "Skill Master: Rust (Bronze)". A new skill file gets its steps automatically. It has no single progress value. |
+| `skill_level` | | per skill: on every triggering event, each skill's current level is worked out from its stored skill exp (on the `[skill_levels]` curve), and every step with `at` at or below that level that isn't unlocked yet unlocks for that skill. So a skill already past a step (say, levelled while the rule was off) catches up on the next triggering event, whether or not that event levels anything. Each skill gets its own steps (see [Step ids](#step-ids)), named e.g. "Skill Master: Rust (Bronze)". A new skill file gets its steps automatically. It has no single progress value. |
 
 ```toml
 # lifetime, with sum
@@ -259,7 +259,7 @@ fallback = "Many achievements, collected."
 # skill_level
 id = "skill_master"
 name = "Skill Master"
-trigger = ["commit", "claude_session_end"]
+trigger = ["commit", "pr_merged", "review_submitted", "claude_session_end"]
 counter = { type = "skill_level" }
 tiers = [
   { tier = "bronze", at = 5 },
@@ -269,7 +269,7 @@ tiers = [
 fallback = "A skill, levelled."
 ```
 
-A threshold rule only runs on its `trigger` kinds, so a `meta` or `skill_level` rule should list every kind that can unlock achievements or level skills.
+A threshold rule only runs on its `trigger` kinds, so a `meta` rule should list every kind that can unlock achievements, and a `skill_level` rule every kind a skill earns exp on (the starter skills earn on `commit`, `pr_merged`, `review_submitted` and `claude_session_end`).
 
 ## Tiers
 

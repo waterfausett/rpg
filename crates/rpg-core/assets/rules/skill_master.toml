@@ -1,6 +1,6 @@
 id = "skill_master"
 name = "Skill Master"
-trigger = ["commit", "review_submitted", "claude_session_end"]
+trigger = ["commit", "pr_merged", "review_submitted", "claude_session_end"]
 counter = { type = "skill_level" }
 tiers = [
   { tier = "bronze", at = 5 },
