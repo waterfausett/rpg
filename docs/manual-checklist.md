@@ -40,7 +40,11 @@ The automated and scripted checks cannot see these. Do them once on your machine
 - [ ] Achievements tab: a ladder card (e.g. a `lifetime` rule with `tiers`) shows its current tier and a progress bar toward the next step, labelled like `Silver · 412 / 1,000`; hovering the bar lists the steps, with `???` past the next one.
 - [ ] Before its first catch-up event, a ladder card may show progress past its next step (e.g. `Bronze · 151 / 100`, for a rule added or turned on with history already behind it); the next matching event unlocks the step and the card moves on.
 - [ ] With a `hidden = true` rule not yet earned, the tab shows no card for it and a line `1 hidden achievement remains` (plural for more) below the grid; the line is gone when none remain.
-- [ ] An unlocked card's border, glow, name glow and tier label take its tier color (bronze, silver, gold, pale-blue platinum with a slightly stronger glow); a ladder card uses its highest unlocked step. Locked cards have no tier color.
+- [ ] An unlocked card's border, glow, name glow, tier label and ladder bar take its tier color (bronze, silver, gold, pale-blue platinum, purple legendary, cyan celestial; platinum and up glow stronger, and legendary and celestial get a ★ and a slow light sweep); a ladder card uses its highest unlocked step. Locked cards are dashed and dimmed, with no tier color.
+- [ ] The header shows the level in a gold crest, with `N / M exp to level L+1` and the total beside the XP bar. A three-digit level stays inside the crest.
+- [ ] Event rows (Recent and Event log) with an achievement have a left edge and a badge in its tier color. A row with mixed tiers uses the highest; older rows without a tier are gold.
+- [ ] The Event log chips filter in one click, and the active chip survives the 5-second refresh.
+- [ ] At about 400px wide, all three tabs fit with no sideways scroll, and long skill, achievement and repo names truncate or wrap.
 
 ## Real install
 - [ ] First note `git config --global --get core.hooksPath` (probably unset) and keep a copy of `~/.claude/settings.json`.
