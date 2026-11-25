@@ -5,6 +5,8 @@
   const ev = window.__TAURI__.event;
   const mode = document.body.dataset.overlay;
   const BANNER_MS = 8000;
+  // The two rarest tiers linger a little longer.
+  const BANNER_MS_BY_TIER = { Legendary: 11000, Celestial: 11000 };
   const FADE_MS = 400;
 
   // Shrink a faded pill to nothing so the stack above eases down, then drop it.
@@ -34,7 +36,8 @@
       label.textContent = t.label || "";
       pill.appendChild(label);
     }
-    pill.addEventListener("animationend", () => collapse(pill));
+    // Only the pill's own life ends it (a tier sweep on ::after also fires animationend).
+    pill.addEventListener("animationend", (e) => { if (e.animationName === "xp-life") collapse(pill); });
     document.getElementById("toasts").appendChild(pill);
   }
 
@@ -72,7 +75,7 @@
     el.className = "ach-b";
     void el.offsetWidth; // restart the animation
     el.className = "ach-b in";
-    timers.push(setTimeout(() => dismiss(b.id), BANNER_MS));
+    timers.push(setTimeout(() => dismiss(b.id), BANNER_MS_BY_TIER[b.tier] || BANNER_MS));
   }
 
   async function init() {

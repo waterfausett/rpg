@@ -728,6 +728,17 @@ fallback = "A skill, levelled."
     }
 
     #[test]
+    fn top_tiers_have_their_extra_flourishes() {
+        for needle in [".ach-b.in[data-tier=\"Legendary\"]", ".ach-b.in[data-tier=\"Celestial\"]", "tier-pulse", "tier-bloom", "name-drift", "twinkle"] {
+            assert!(OVERLAY_CSS.contains(needle), "overlay.css lacks {needle}");
+        }
+        assert!(SITE_CSS.contains("card-sweep"), "site.css lacks the card sweep");
+        let reduced = &OVERLAY_CSS[OVERLAY_CSS.find("prefers-reduced-motion").unwrap()..];
+        assert!(reduced.contains("[data-tier=\"Celestial\"]::before { animation: none; }"), "reduced motion leaves the stars twinkling");
+        assert!(SITE_CSS.contains("prefers-reduced-motion"), "site.css ignores reduced motion");
+    }
+
+    #[test]
     fn banner_reward_line_leaves_the_tier_to_its_color() {
         let js = include_str!("../../../ui/overlay/overlay.js");
         assert!(js.contains("set(\"reward\", b.reward)"), "overlay.js should show the reward without the tier name");
