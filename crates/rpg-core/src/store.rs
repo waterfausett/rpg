@@ -131,6 +131,7 @@ impl Store {
                 tier TEXT NOT NULL, xp INTEGER NOT NULL, context TEXT NOT NULL,
                 flavor_text TEXT, ts TEXT NOT NULL);
              CREATE INDEX IF NOT EXISTS idx_unlocks_rule ON unlocks(rule_id);
+             CREATE INDEX IF NOT EXISTS idx_unlocks_name_ts ON unlocks(name, ts);
              CREATE TABLE IF NOT EXISTS skill_xp(
                 id INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT NOT NULL, skill_id TEXT NOT NULL,
                 name TEXT NOT NULL, amount INTEGER NOT NULL, ts TEXT NOT NULL);
@@ -677,5 +678,19 @@ mod tests {
             xp: 50, context: serde_json::json!({}), ts: now - Duration::days(1) }).unwrap();
         s.add_xp("c1", 50, "Hat Trick", now).unwrap();
         assert_eq!(s.list_events(None, 10).unwrap()[0].gains[0].tier, None);
+    }
+
+    #[test]
+    fn tier_lookup_uses_an_index() {
+        let s = Store::open_in_memory().unwrap();
+        let conn = s.conn();
+        let plan: Vec<String> = conn
+            .prepare("EXPLAIN QUERY PLAN SELECT tier FROM unlocks WHERE name='x' AND ts='y'")
+            .unwrap()
+            .query_map([], |r| r.get::<_, String>(3))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert!(plan.iter().any(|d| d.contains("idx_unlocks_name_ts")), "plan: {plan:?}");
     }
 }
