@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Listener, Manager, PhysicalPosition, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 const TOAST: &str = "toast";
@@ -35,7 +35,9 @@ const MARGIN: f64 = 16.0;
 /// Hide the toast window this long after the last toast (pills fade over 3s).
 const TOAST_HIDE_AFTER: Duration = Duration::from_millis(3600);
 /// If the banner page never reports `banner-done` (it does after ~8s), move on anyway.
+/// While the pointer rests on the banner the deadline keeps sliding forward.
 const BANNER_WATCHDOG: Duration = Duration::from_secs(15);
+const WATCHDOG_POLL: Duration = Duration::from_millis(250);
 
 #[derive(Serialize, Clone)]
 struct BannerPayload {
@@ -64,6 +66,12 @@ struct DonePayload {
 }
 
 #[derive(Deserialize)]
+struct HoverPayload {
+    id: u64,
+    hovering: bool,
+}
+
+#[derive(Deserialize)]
 struct ReadyPayload {
     window: String,
 }
@@ -85,6 +93,8 @@ struct Flow {
     next_id: u64,
     /// Bumped on every toast batch; the hide timer only hides its own batch.
     toast_gen: u64,
+    /// The pointer is on the current banner (it stays up while this is set).
+    banner_hovered: bool,
 }
 
 impl Flow {
@@ -130,6 +140,16 @@ impl OverlaySink {
         app.listen_any("banner-done", move |e| {
             if let Ok(p) = serde_json::from_str::<DonePayload>(e.payload()) {
                 finish_banner(&i, p.id);
+            }
+        });
+
+        let i = inner.clone();
+        app.listen_any("banner-hover", move |e| {
+            if let Ok(p) = serde_json::from_str::<HoverPayload>(e.payload()) {
+                let mut f = i.flow();
+                if f.current_id() == Some(p.id) {
+                    f.banner_hovered = p.hovering;
+                }
             }
         });
 
@@ -322,11 +342,22 @@ fn show_banner(inner: &Arc<Inner>, id: u64, mut b: Banner) {
         if let Err(e) = inner.app.emit_to(BANNER, "banner", payload(id, &b)) {
             log(&inner.state.paths, &format!("emitting banner failed: {e}"));
         }
+        f.banner_hovered = false;
         f.current = Some(Current { id, shown: Some(b) });
     }
     let i = inner.clone();
     let _ = std::thread::Builder::new().name("rpg-banner-clicks".into()).spawn(move || pass_clicks_outside_banner(&i, id));
-    std::thread::sleep(BANNER_WATCHDOG);
+    let mut deadline = Instant::now() + BANNER_WATCHDOG;
+    while Instant::now() < deadline {
+        std::thread::sleep(WATCHDOG_POLL);
+        let f = inner.flow();
+        if f.current_id() != Some(id) {
+            return;
+        }
+        if f.banner_hovered {
+            deadline = Instant::now() + BANNER_WATCHDOG;
+        }
+    }
     finish_banner(inner, id);
 }
 
@@ -381,6 +412,7 @@ fn finish_banner(inner: &Arc<Inner>, id: u64) {
             return;
         }
         f.current = None;
+        f.banner_hovered = false;
         f.presenter.banner_done();
         if let Some(w) = inner.window(BANNER) {
             let _ = w.hide();
