@@ -320,7 +320,7 @@ fn github_key(e: &Event) -> Option<&str> {
 }
 
 /// `kinds[..n-1]` happened in order (non-decreasing `ts`) within `within_minutes` before
-/// `ev`, all in `ev`'s GitHub repo. `kinds`' last element is `ev.kind` (checked at load).
+/// `ev`, all in `ev`'s GitHub repo (compared ignoring ASCII case, as GitHub does). `kinds`' last element is `ev.kind` (checked at load).
 fn combo(ctx: &EvalCtx, kinds: &[EventKind], within_minutes: u32) -> Result<Option<Value>> {
     let ev = ctx.ev;
     let (Some(key), Some((last, before))) = (github_key(ev), kinds.split_last()) else { return Ok(None) };
@@ -332,7 +332,7 @@ fn combo(ctx: &EvalCtx, kinds: &[EventKind], within_minutes: u32) -> Result<Opti
         .store
         .events_of(before, Some(since))?
         .into_iter()
-        .filter(|e| e.ts <= ev.ts && e.id != ev.id && github_key(e) == Some(key))
+        .filter(|e| e.ts <= ev.ts && e.id != ev.id && github_key(e).is_some_and(|k| k.eq_ignore_ascii_case(key)))
         .collect();
     // Greedy: the earliest event of each kind at or after the previous one's position.
     let mut pos = 0;
@@ -890,6 +890,11 @@ counter = { type = \"run\", at = 3 }");
         }
         let pr = gh(EventKind::PrOpened, "2026-03-01T10:12:00Z", "a/b");
         assert_eq!(add(&r, &store, &pr), None, "out of order");
+
+        // GitHub repo names compare case-insensitively.
+        let store = setup("2026-03-01T10:00:00Z");
+        let pr = gh(EventKind::PrOpened, "2026-03-01T10:12:00Z", "A/B");
+        assert!(add(&r, &store, &pr).is_some(), "case differs");
 
         // Git events with no github_repo never match.
         let store = Store::open_in_memory().unwrap();

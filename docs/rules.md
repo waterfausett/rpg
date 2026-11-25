@@ -39,7 +39,7 @@ Unknown fields are a load error, so a typo is reported rather than silently igno
 | `repeatable` | bool | no, default `false` | A single moment achievement can unlock again. Ignored by threshold counters, not allowed with `tiers`. |
 | `cooldown_hours` | integer | no | With `repeatable`: the minimum hours between unlocks. Ignored by threshold counters, not allowed with `tiers`. |
 | `flavor` | table | no, default `{ type = "static" }` | `{ type = "static" }` shows `fallback`. `{ type = "llm", prompt = "..." }` asks the configured LLM to rewrite it; `{fallback}`, `{name}` and `{context}` in the prompt are replaced. Any LLM failure falls back to `fallback`. |
-| `announce` | `"banner"` / `"toast"` | no | How the unlock is announced. Overrides the tier default. A step in `tiers` may set its own. (Banner/toast selection and the `[announce]` tier defaults in config are coming in this release.) |
+| `announce` | `"banner"` / `"toast"` | no | How the unlock is announced. Overrides the tier default. A step in `tiers` may set its own. Without one, the `[announce]` section of the config decides by tier (bronze `toast`, silver, gold and platinum `banner` by default). |
 | `hidden` | bool | no, default `false` | Not listed on the character sheet until earned (no "???" row). |
 | `share_text` | bool | no, default `false` | Allows the commit message or PR title into the LLM flavor context. Otherwise they stay in the local database only. |
 | `enabled` | bool | no, default `true` | `enabled = false` turns a rule off without deleting its file. The rule still loads and is validated, and the site lists it with an "off" badge, but the engine never evaluates it (meta and skill-level rules included). Turn it back on and a threshold ladder catches up on the next matching event. |
@@ -62,7 +62,7 @@ Older events may lack newer fields. A filter on a missing field never matches.
 
 All filters are optional, and every one given must match. Times are local. Regexes are case-insensitive. Globs use the same syntax as skills.
 
-A filter that can never match one of the rule's `trigger` kinds is a load error (for example `message` on `review_submitted`). The "Kinds" column lists where each filter can match; "any" means every kind.
+A filter that can never match one of the rule's `trigger` kinds is a load error (for example `message` on `review_submitted`). Two filters are exempt: `branch` and `lines` load with any trigger kinds and simply never match the kinds they don't apply to. The "Kinds" column lists where each filter can match; "any" means every kind.
 
 | Filter | Type | Kinds | Matches when |
 | --- | --- | --- | --- |
