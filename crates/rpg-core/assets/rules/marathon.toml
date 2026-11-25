@@ -1,0 +1,10 @@
+id = "marathon"
+name = "Marathon"
+tier = "silver"
+trigger = ["claude_session_end"]
+filter = { session_minutes = { min = 180 } }
+counter = { type = "each" }
+repeatable = true
+hint = "Sit down. Stay down."
+fallback = "A Claude session that ran three hours or more. Hydrate. Blink. Consider whether the problem is you."
+flavor = { type = "llm", prompt = "Rewrite this achievement announcement for this specific unlock, in the same voice: \"{fallback}\". Use the concrete details. Context: {context}" }

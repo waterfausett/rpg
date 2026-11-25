@@ -48,6 +48,17 @@ const COVERED: &[&str] = &[
     "on_a_roll",
     "achievement_hunter",
     "skill_master",
+    // streaks, rhythm, Claude sessions
+    "touch_grass_denied",
+    "the_return",
+    "necromancer",
+    "full_combo",
+    "lgtm_speedrun",
+    "thousand_year_branch",
+    "groundhog_day",
+    "marathon",
+    "speed_date",
+    "pair_programming",
 ];
 
 fn starter() -> Rules {
@@ -503,4 +514,128 @@ fn skill_master() {
     let history: Vec<Event> = (0..need - 1).map(rs_commit).collect();
     assert!(fires(&r, &history, rs_commit(need), "skill_master.rust.bronze"));
     assert!(!fires(&r, &history[..need - 2], rs_commit(need), "skill_master.rust.bronze"));
+}
+
+// ---- streaks, rhythm, Claude sessions ----
+
+#[test]
+fn touch_grass_denied() {
+    let r = starter();
+    // A commit on each of 1-29 November; the 30th is the last day and fires.
+    let days = |n: usize| many(n, |i| commit(&format!("2026-11-{:02}T10:00:00Z", i + 1)));
+    assert!(fires(&r, &days(29), commit("2026-11-30T10:00:00Z"), "touch_grass_denied"));
+    // A missed day (the 15th) means the month is not full.
+    let mut gap = days(29);
+    gap.remove(14);
+    assert!(!fires(&r, &gap, commit("2026-11-30T10:00:00Z"), "touch_grass_denied"));
+}
+
+#[test]
+fn the_return() {
+    let r = starter();
+    assert!(fires(&r, &[commit("2026-11-10T10:00:00Z")], commit("2026-11-24T10:00:00Z"), "the_return"));
+    assert!(!fires(&r, &[commit("2026-11-11T10:00:00Z")], commit("2026-11-24T10:00:00Z"), "the_return"));
+    // The very first commit has nothing to return from.
+    assert!(!fires(&r, &[], commit("2026-11-24T10:00:00Z"), "the_return"));
+}
+
+#[test]
+fn necromancer() {
+    let r = starter();
+    // The same repo, 366 days earlier, fires; 364 days does not.
+    assert!(fires(&r, &[commit("2025-11-23T10:00:00Z")], commit("2026-11-24T10:00:00Z"), "necromancer"));
+    assert!(!fires(&r, &[commit("2025-11-25T10:00:00Z")], commit("2026-11-24T10:00:00Z"), "necromancer"));
+    // A year-old commit in another repo does not count for this repo.
+    let mut other = commit("2025-11-23T10:00:00Z");
+    other.repo = Some("elsewhere".into());
+    assert!(!fires(&r, &[other], commit("2026-11-24T10:00:00Z"), "necromancer"));
+}
+
+#[test]
+fn full_combo() {
+    let r = starter();
+    let gh = json!({"github_repo": "a/b"});
+    let c = |ts: &str| ev(EventKind::Commit, ts, gh.clone());
+    let p = |ts: &str| ev(EventKind::Push, ts, gh.clone());
+    let pr = |ts: &str, repo: &str| {
+        let mut e = ev(EventKind::PrOpened, ts, json!({}));
+        e.repo = Some(repo.into());
+        e
+    };
+    let h = [c("2026-11-24T10:00:00Z"), p("2026-11-24T10:05:00Z")];
+    assert!(fires(&r, &h, pr("2026-11-24T10:10:00Z", "a/b"), "full_combo"));
+    // Outside the 15 minute window.
+    assert!(!fires(&r, &h, pr("2026-11-24T10:20:00Z", "a/b"), "full_combo"));
+    // A PR in another GitHub repo.
+    assert!(!fires(&r, &h, pr("2026-11-24T10:10:00Z", "a/other"), "full_combo"));
+    // Missing the push.
+    assert!(!fires(&r, &h[..1], pr("2026-11-24T10:10:00Z", "a/b"), "full_combo"));
+}
+
+fn merged(created: &str, merged_at: &str) -> Event {
+    ev(EventKind::PrMerged, merged_at, json!({"created_at": created, "merged_at": merged_at}))
+}
+
+#[test]
+fn lgtm_speedrun() {
+    let r = starter();
+    assert!(fires(&r, &[], merged("2026-11-24T10:00:00Z", "2026-11-24T10:10:00Z"), "lgtm_speedrun"));
+    assert!(!fires(&r, &[], merged("2026-11-24T10:00:00Z", "2026-11-24T10:11:00Z"), "lgtm_speedrun"));
+}
+
+#[test]
+fn thousand_year_branch() {
+    let r = starter();
+    // 43200 minutes is 30 days.
+    assert!(fires(&r, &[], merged("2026-10-25T10:00:00Z", "2026-11-24T10:00:00Z"), "thousand_year_branch"));
+    assert!(!fires(&r, &[], merged("2026-10-25T10:01:00Z", "2026-11-24T10:00:00Z"), "thousand_year_branch"));
+}
+
+#[test]
+fn groundhog_day() {
+    let r = starter();
+    // A non-first commit at a plain time unlocks nothing else, so only the seeds move the meta.
+    let earlier = [commit("2026-11-23T10:00:00Z")];
+    let event = || commit("2026-11-24T10:00:00Z");
+    let seeds = |n: usize| -> Vec<String> { vec!["some_rule".to_string(); n] };
+    assert!(fires_seeded(&r, &earlier, &seeds(10), event(), "groundhog_day"));
+    assert!(!fires_seeded(&r, &earlier, &seeds(9), event(), "groundhog_day"));
+}
+
+/// A Claude session `minutes` long (seconds precision), started at `start`.
+fn session(id: &str, start: &str, seconds: i64) -> (Event, Event) {
+    let s = ev(EventKind::ClaudeSessionStart, start, json!({"session_id": id}));
+    let mut e = ev(EventKind::ClaudeSessionEnd, start, json!({"session_id": id}));
+    e.ts = s.ts + Duration::seconds(seconds);
+    (s, e)
+}
+
+#[test]
+fn marathon() {
+    let r = starter();
+    let (s, e) = session("a", "2026-11-24T08:00:00Z", 180 * 60);
+    assert!(fires(&r, &[s], e, "marathon"));
+    let (s, e) = session("a", "2026-11-24T08:00:00Z", 179 * 60);
+    assert!(!fires(&r, &[s], e, "marathon"));
+}
+
+#[test]
+fn speed_date() {
+    let r = starter();
+    let (s, e) = session("a", "2026-11-24T08:00:00Z", 30);
+    assert!(fires(&r, &[s], e, "speed_date"));
+    let (s, e) = session("a", "2026-11-24T08:00:00Z", 31);
+    assert!(!fires(&r, &[s], e, "speed_date"));
+    // An end with no known start has no length and is not a speed date.
+    let (_, e) = session("a", "2026-11-24T08:00:00Z", 30);
+    assert!(!fires(&r, &[], e, "speed_date"));
+}
+
+#[test]
+fn pair_programming() {
+    let r = starter();
+    let start = |id: &str, ts: &str| ev(EventKind::ClaudeSessionStart, ts, json!({"session_id": id}));
+    let h = [start("a", "2026-11-24T08:00:00Z"), start("b", "2026-11-24T08:10:00Z")];
+    assert!(fires(&r, &h, start("c", "2026-11-24T08:20:00Z"), "pair_programming"));
+    assert!(!fires(&r, &h[..1], start("c", "2026-11-24T08:20:00Z"), "pair_programming"));
 }

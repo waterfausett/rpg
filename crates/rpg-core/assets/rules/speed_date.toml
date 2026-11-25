@@ -1,0 +1,9 @@
+id = "speed_date"
+name = "Speed Date"
+tier = "bronze"
+trigger = ["claude_session_end"]
+filter = { session_minutes = { max = 0.5 } }
+counter = { type = "each" }
+repeatable = true
+hint = "Brief, and not a match."
+fallback = "A Claude session over in thirty seconds. You asked, it answered, and neither of you wants to talk about it."

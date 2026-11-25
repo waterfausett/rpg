@@ -1,0 +1,9 @@
+id = "lgtm_speedrun"
+name = "LGTM Speedrun"
+tier = "bronze"
+trigger = ["pr_merged"]
+filter = { pr_open_minutes = { max = 10 } }
+counter = { type = "each" }
+repeatable = true
+hint = "Review at the speed of trust."
+fallback = "A pull request merged within ten minutes of opening. Either it was perfect or nobody looked. Probably nobody looked."

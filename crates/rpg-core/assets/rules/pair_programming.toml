@@ -1,0 +1,11 @@
+id = "pair_programming"
+name = "Pair Programming"
+tier = "silver"
+trigger = ["claude_session_start"]
+filter = { open_sessions = { min = 3 } }
+counter = { type = "each" }
+repeatable = true
+cooldown_hours = 24
+hint = "Three is a crowd. You like crowds."
+fallback = "Three Claude sessions open at once. You are not pairing, you are managing a team that never asks for a raise."
+flavor = { type = "llm", prompt = "Rewrite this achievement announcement for this specific unlock, in the same voice: \"{fallback}\". Use the concrete details. Context: {context}" }

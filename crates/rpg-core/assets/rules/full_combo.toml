@@ -1,0 +1,9 @@
+id = "full_combo"
+name = "Full Combo"
+tier = "silver"
+trigger = ["pr_opened"]
+counter = { type = "combo", kinds = ["commit", "push", "pr_opened"], within_minutes = 15 }
+repeatable = true
+hint = "Commit, push, PR. No pauses."
+fallback = "Commit, push and pull request inside fifteen minutes. Efficient, or just terrified of letting the branch cool."
+flavor = { type = "llm", prompt = "Rewrite this achievement announcement for this specific unlock, in the same voice: \"{fallback}\". Use the concrete details. Context: {context}" }

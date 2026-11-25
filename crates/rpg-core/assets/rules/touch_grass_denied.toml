@@ -1,0 +1,10 @@
+id = "touch_grass_denied"
+name = "Touch Grass Denied"
+tier = "gold"
+trigger = ["commit"]
+counter = { type = "month_every_day" }
+repeatable = true
+announce = "banner"
+hint = "A calendar with no blank squares."
+fallback = "A commit on every single day of the month. The grass was right there and you chose the diff."
+flavor = { type = "llm", prompt = "Rewrite this achievement announcement for this specific unlock, in the same voice: \"{fallback}\". Use the concrete details. Context: {context}" }
