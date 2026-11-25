@@ -703,4 +703,27 @@ fallback = "A skill, levelled."
         }
         assert!(include_str!("../../../ui/site/site.js").contains("\"unlocked t-\" + a.tier"), "site.js doesn't tag unlocked cards with their tier");
     }
+
+    /// The `<name> <timing>` animation entry in `css` after `anchor`, e.g. `tier-flash 1s ease-in-out .45s`.
+    fn anim_after<'a>(css: &'a str, anchor: &str, name: &str) -> Option<&'a str> {
+        let rule = &css[css.find(anchor)?..];
+        let rule = &rule[..rule.find('}')?];
+        let at = rule.find(&format!("{name} "))? + name.len() + 1;
+        let rest = &rule[at..];
+        Some(rest[..rest.find([',', ';']).unwrap_or(rest.len())].trim())
+    }
+
+    #[test]
+    fn platinum_banner_flash_and_shimmer_run_together() {
+        let flash = anim_after(OVERLAY_CSS, ".ach-b.in[data-tier=\"Platinum\"]", "tier-flash");
+        let sweep = anim_after(OVERLAY_CSS, ".ach-b[data-tier=\"Platinum\"].in::after", "shimmer");
+        assert!(flash.is_some(), "no Platinum tier-flash");
+        assert_eq!(flash, sweep, "Platinum flash and shimmer timings differ");
+    }
+
+    #[test]
+    fn platinum_toast_pill_shimmers() {
+        let sweep = anim_after(OVERLAY_CSS, ".xp.ach[data-tier=\"Platinum\"]::after", "shimmer");
+        assert!(sweep.is_some(), "Platinum toast pill has no shimmer");
+    }
 }

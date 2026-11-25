@@ -15,12 +15,13 @@ The automated and scripted checks cannot see these. Do them once on your machine
   - [ ] Bronze: copper (`#cd7f32`), soft glow, normal pop.
   - [ ] Silver: grey (`#c0c8d0`), slightly stronger glow, normal pop. Easy to tell apart from platinum.
   - [ ] Gold: gold (`#ffc83d`), strong glow, a bigger pop and one border flash as it lands.
-  - [ ] Platinum: pale blue (`#cfe8ff`) with a blue-tinted background, the strongest glow, the bigger pop and flash, then one light sweep across the banner.
-  - [ ] No banner is clipped at the window edge during the bigger pop.
+  - [ ] Platinum: pale blue (`#cfe8ff`) with a blue-tinted background, the strongest glow and the bigger pop, then the border flash and one light sweep across the banner at the same time.
+  - [ ] No banner or glow is cut off at the window edge, even during the bigger pop and the flash. The banner still sits top-center where it used to.
 - [ ] The "While you were away" summary banner keeps the plain gold look.
 - [ ] Two banners in a row each replay their entrance (and flash or sweep).
 - [ ] With Windows **Animation effects** off (macOS: Reduce motion), a banner only fades in and out: no pop, flash or sweep.
 - [ ] Each tier's toast pill color matches its banner color.
+- [ ] A platinum toast pill runs one light sweep after it slides in (not with reduced motion).
 - [ ] A banner plays a sound (drop a file in `sounds/` first); **Mute sounds** silences it.
 - [ ] With `[sound] by_tier` mapping each tier to a different file, each tier's banner plays its own sound.
 

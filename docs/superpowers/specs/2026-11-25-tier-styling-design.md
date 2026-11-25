@@ -26,7 +26,7 @@ Rarer tiers should *feel* rarer.
 ## Anti-goals
 
 - Tiers that no longer look like one family (the Gold Banner frame, layout and dark edge stay the same).
-- A banner clipped by its 560×220 transparent window.
+- A banner or its glow clipped by its transparent window.
 - Unreadable silver/platinum text on the dark background.
 
 ## Approaches considered
@@ -56,9 +56,12 @@ A Rust test (`include_str!` both files) fails if the four values differ.
 | Bronze | 14px, soft | current pop | — |
 | Silver | 18px | current pop | — |
 | Gold | 28px | from scale .7, stronger overshoot | one border flash |
-| Platinum | 32px, strongest | same as Gold | one shimmer sweep after landing |
+| Platinum | 32px, strongest | same as Gold | border flash and one shimmer sweep together |
 
-Peak scale stays ≤ 1.03 so the banner fits within its 10px inset (verified by hand).
+Peak scale stays ≤ 1.03. The banner window is 620×280 with a 40px inset (frame unchanged at 540×200, same screen position), so the full glow and flash show instead of being cut off at the window edge.
+
+**Toast pill:** the Platinum pill also runs one shimmer sweep after it slides in.
+
 Under `prefers-reduced-motion: reduce`: opacity fade only, no scale, flash or shimmer.
 
 **Cards** (`site.js` adds a tier class to unlocked cards, e.g. `t-gold`): `--tier` drives border, glow and

@@ -19,7 +19,13 @@ use tauri::{AppHandle, Emitter, Listener, Manager, PhysicalPosition, WebviewUrl,
 const TOAST: &str = "toast";
 const BANNER: &str = "banner";
 const TOAST_SIZE: (f64, f64) = (360.0, 400.0);
-const BANNER_SIZE: (f64, f64) = (560.0, 220.0);
+/// The banner frame is 540x200; the window adds BANNER_INSET on every side so the
+/// tier glow (up to 32px, plus the flash) is not cut off at the window edge.
+const BANNER_SIZE: (f64, f64) = (620.0, 280.0);
+/// Must match the `.ach-b` `inset` in `ui/overlay/overlay.css`.
+const BANNER_INSET: f64 = 40.0;
+/// Where the banner frame's top sits below the top of the work area.
+const BANNER_TOP: f64 = 42.0;
 /// Margin from the screen edge, in logical pixels.
 const MARGIN: f64 = 16.0;
 /// Hide the toast window this long after the last toast (pills fade over 3s).
@@ -221,7 +227,7 @@ fn place_windows(app: &AppHandle) {
     }
     if let Some(w) = app.get_webview_window(BANNER) {
         let x = ax + (aw - BANNER_SIZE.0 * s) / 2.0;
-        let y = ay + 2.0 * MARGIN * s;
+        let y = ay + (BANNER_TOP - BANNER_INSET) * s;
         let _ = w.set_position(at(x, y));
     }
 }
@@ -469,5 +475,14 @@ fallback = "LADDER"
         assert_eq!(u.rule_id, "pusher.bronze", "unlock key is the step id");
         assert_eq!(resolve_flavor(&st, &u, &ev), "LADDER");
         assert_eq!(st.store.list_unlocks().unwrap()[0].flavor_text.as_deref(), Some("LADDER"));
+    }
+
+    #[test]
+    fn banner_window_leaves_room_for_the_glow() {
+        let css = include_str!("../../../ui/overlay/overlay.css");
+        assert!(css.contains(&format!("inset: {BANNER_INSET}px")), "overlay.css .ach-b inset != BANNER_INSET");
+        // The banner frame itself stays 540x200, with room for the strongest glow (32px) around it.
+        assert_eq!((BANNER_SIZE.0 - 2.0 * BANNER_INSET, BANNER_SIZE.1 - 2.0 * BANNER_INSET), (540.0, 200.0));
+        assert!(BANNER_INSET >= 32.0);
     }
 }
