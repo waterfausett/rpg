@@ -62,7 +62,18 @@ Set `RPG_INTERNAL=1` to make `rpg emit` a no-op (the app does this for its own `
 
 ## Sounds
 
-Drop `.wav`, `.mp3`, `.ogg` or `.flac` files into the `sounds/` folder. With no mapping, a random file plays on each banner. To choose, name files in `config.toml`. Lookup order is `by_rule`, then `by_tier`, then `achievement` / `level_up`, then a random file:
+Drop `.wav`, `.mp3`, `.ogg` or `.flac` files into the `sounds/` folder. With no mapping, a random file plays on each banner. Subfolders split that bag by type; files directly in `sounds/` are shared by every pool:
+
+```
+sounds/
+  boom.mp3                  # any banner
+  achievements/             # achievement banners
+    gold/                   # only gold achievements (also silver, bronze, ...)
+    night_shift/            # only the rule with this id
+  levels/                   # level-up banners
+```
+
+To choose a file instead, name it in `config.toml`; a pin beats the pool at its own level. Lookup order for an achievement is the `by_rule` pin, `achievements/<rule id>/`, the `by_tier` pin, `achievements/<tier>/`, the `achievement` pin, then a random file from `achievements/` plus `sounds/`. Level-ups go `level_up` pin, then `levels/` plus `sounds/`. A pinned name is looked up in its own folder, then the type's folder, then `sounds/`:
 
 ```toml
 [sound]
