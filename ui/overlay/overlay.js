@@ -5,6 +5,7 @@
   const ev = window.__TAURI__.event;
   const mode = document.body.dataset.overlay;
   const BANNER_MS = 8000;
+  const HOVER_GRACE_MS = 2000; // after the pointer leaves, linger this long
   const FADE_MS = 400;
 
   // Shrink a faded pill to nothing so the stack above eases down, then drop it.
@@ -79,7 +80,18 @@
     if (mode === "toast") {
       await ev.listen("toast", (e) => e.payload.forEach(addToast));
     } else {
-      document.getElementById("banner").addEventListener("click", () => dismiss(current));
+      const banner = document.getElementById("banner");
+      banner.addEventListener("click", () => dismiss(current));
+      // Hovering holds the banner so it can be read; leaving starts a short grace.
+      const hover = (hovering) => {
+        if (current === null) return;
+        const id = current;
+        clearTimers();
+        if (!hovering) timers.push(setTimeout(() => dismiss(id), HOVER_GRACE_MS));
+        ev.emit("banner-hover", { id: id, hovering: hovering });
+      };
+      banner.addEventListener("mouseenter", () => hover(true));
+      banner.addEventListener("mouseleave", () => hover(false));
       await ev.listen("banner", (e) => showBanner(e.payload));
     }
     await ev.emit("overlay-ready", { window: mode });
