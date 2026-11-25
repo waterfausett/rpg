@@ -223,6 +223,9 @@ impl Filter {
             || self.max_files.is_some()
             || self.min_extensions.is_some();
         if wants_files {
+            if !data["files"].is_array() {
+                return false;
+            }
             let paths = file_paths(ev);
             if let Some(g) = &self.files_any {
                 if !paths.iter().any(|p| g.is_match(p)) {
@@ -251,8 +254,9 @@ impl Filter {
                 EventKind::PrOpened | EventKind::PrMerged => ("additions", "deletions"),
                 _ => return false,
             };
-            let added = data[a_key].as_u64().unwrap_or(0);
-            let removed = data[r_key].as_u64().unwrap_or(0);
+            let (Some(added), Some(removed)) = (data[a_key].as_u64(), data[r_key].as_u64()) else {
+                return false;
+            };
             let total = added + removed;
             let ok = l.min.is_none_or(|m| total >= m)
                 && l.max.is_none_or(|m| total <= m)
@@ -455,6 +459,24 @@ mod tests {
         assert!(!filt("branch = ['main']").matches(&e, utc()));
         assert!(filt("repo = ['octo/*']").matches(&e, utc()));
         assert!(filt("message_length = {min = 5, max = 5}").matches(&e, utc()));
+    }
+
+    #[test]
+    fn files_conditions_need_files_field() {
+        let none = commit(json!({}));
+        for src in ["max_files = 5", "min_files = 0", "min_extensions = 0"] {
+            assert!(!filt(src).matches(&none, utc()), "{src}");
+        }
+        assert!(filt("max_files = 5").matches(&commit(json!({"files": []})), utc()));
+    }
+
+    #[test]
+    fn lines_needs_count_fields() {
+        let f = filt("lines = {max = 100}");
+        assert!(!f.matches(&commit(json!({})), utc()));
+        assert!(!f.matches(&commit(json!({"lines_added": 3})), utc()));
+        assert!(!f.matches(&ev(EventKind::PrOpened, "2026-01-05T12:00:00Z", json!({"lines_added": 3, "lines_removed": 1})), utc()));
+        assert!(f.matches(&ev(EventKind::PrOpened, "2026-01-05T12:00:00Z", json!({"additions": 3, "deletions": 1})), utc()));
     }
 
     #[test]
