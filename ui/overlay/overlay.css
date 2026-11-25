@@ -92,10 +92,10 @@ body { user-select: none; -webkit-user-select: none; }
 /* Legendary and Celestial banners: a light bloom on landing, then a slow pulsing glow for as long as it stays up. */
 .ach-b.in[data-tier="Legendary"] {
   animation: banner-in-big .6s cubic-bezier(.2, .9, .3, 1) forwards, tier-flash 1s ease-in-out .45s,
-             tier-bloom 1.3s ease-out .3s, tier-pulse 2.4s ease-in-out 1.6s infinite; }
+             tier-bloom 1.3s ease-out .3s; }
 .ach-b.in[data-tier="Celestial"] {
   animation: banner-in-big .7s cubic-bezier(.2, .9, .3, 1) forwards, tier-flash 1s ease-in-out .45s,
-             tier-bloom 1.5s ease-out .3s, tier-pulse 3.2s ease-in-out 1.8s infinite; }
+             tier-bloom 1.5s ease-out .3s; }
 /* Celestial: drifting aurora name and twinkling stars. */
 .ach-b[data-tier="Celestial"] .name {
   background: linear-gradient(90deg, var(--celestial), #fff, var(--legendary), var(--celestial)); background-size: 200% 100%;
@@ -107,11 +107,19 @@ body { user-select: none; -webkit-user-select: none; }
     radial-gradient(2px 2px at 29% 14%, #cfffff, transparent), radial-gradient(1px 1px at 41% 88%, #fff, transparent),
     radial-gradient(1.5px 1.5px at 63% 12%, #fff, transparent), radial-gradient(2px 2px at 78% 82%, #e8d0ff, transparent),
     radial-gradient(1px 1px at 88% 30%, #fff, transparent), radial-gradient(1.5px 1.5px at 94% 66%, #cfffff, transparent);
-  animation: twinkle 3s ease-in-out infinite; }
+  will-change: opacity; animation: twinkle 3s ease-in-out infinite; }
 @keyframes tier-bloom { 30% { filter: brightness(1.7); } }
-@keyframes tier-pulse {
-  0%, 100% { box-shadow: 0 0 var(--glow) color-mix(in srgb, var(--tier) var(--glow-a), transparent); }
-  50%      { box-shadow: 0 0 calc(var(--glow) * 1.6) var(--tier); } }
+/* The pulsing glow lives on its own layer behind the banner and animates opacity only: animating a big
+   box-shadow's blur on the banner itself repaints every frame and visibly stutters. */
+.ach-pulse { position: fixed; inset: 40px; pointer-events: none; opacity: 0; transition: opacity .4s ease-out; }
+.ach-pulse.on { opacity: 1; }
+.ach-pulse::before { content: ""; position: absolute; inset: 0; border-radius: 12px; opacity: 0; will-change: opacity;
+  box-shadow: 0 0 60px 6px var(--tier); }
+.ach-pulse[data-tier="Legendary"] { --tier: var(--legendary); }
+.ach-pulse[data-tier="Celestial"] { --tier: var(--celestial); }
+.ach-pulse[data-tier="Legendary"]::before { animation: tier-pulse 2.4s ease-in-out 1.6s infinite; }
+.ach-pulse[data-tier="Celestial"]::before { animation: tier-pulse 3.2s ease-in-out 1.8s infinite; }
+@keyframes tier-pulse { 0%, 100% { opacity: 0; } 50% { opacity: .75; } }
 @keyframes name-drift { to { background-position: 200% 0; } }
 @keyframes twinkle { 0%, 100% { opacity: .35; } 50% { opacity: 1; } }
 @keyframes banner-in  { from { opacity: 0; transform: scale(.85); } to { opacity: 1; transform: scale(1); } }
@@ -132,5 +140,6 @@ body { user-select: none; -webkit-user-select: none; }
   .ach-b.in, .ach-b[data-tier].in { animation: banner-fade-in .28s ease-out forwards; }
   .ach-b.out { animation: banner-fade-out .4s ease-in forwards; }
   .ach-b[data-tier].in::after, .xp.ach:is([data-tier="Platinum"], [data-tier="Legendary"], [data-tier="Celestial"])::after { animation: none; }
+  .ach-pulse { display: none; }
   .ach-b[data-tier="Celestial"] .name, .ach-b[data-tier="Celestial"]::before { animation: none; }
 }

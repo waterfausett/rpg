@@ -729,7 +729,7 @@ fallback = "A skill, levelled."
 
     #[test]
     fn top_tiers_have_their_extra_flourishes() {
-        for needle in [".ach-b.in[data-tier=\"Legendary\"]", ".ach-b.in[data-tier=\"Celestial\"]", "tier-pulse", "tier-bloom", "name-drift", "twinkle"] {
+        for needle in [".ach-b.in[data-tier=\"Legendary\"]", ".ach-b.in[data-tier=\"Celestial\"]", "tier-pulse", ".ach-pulse", "tier-bloom", "name-drift", "twinkle"] {
             assert!(OVERLAY_CSS.contains(needle), "overlay.css lacks {needle}");
         }
         assert!(SITE_CSS.contains("card-sweep"), "site.css lacks the card sweep");

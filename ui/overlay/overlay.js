@@ -55,8 +55,10 @@
     clearTimers();
     const el = document.getElementById("banner");
     el.className = "ach-b out";
+    document.getElementById("pulse").classList.remove("on");
     timers.push(setTimeout(() => {
       el.className = "ach-b";
+      document.getElementById("pulse").dataset.tier = "";
       ev.emit("banner-done", { id: id });
     }, FADE_MS));
   }
@@ -75,6 +77,9 @@
     el.className = "ach-b";
     void el.offsetWidth; // restart the animation
     el.className = "ach-b in";
+    const pulse = document.getElementById("pulse"); // glow layer for the rarest tiers
+    pulse.dataset.tier = b.tier || "";
+    pulse.classList.add("on");
     timers.push(setTimeout(() => dismiss(b.id), BANNER_MS_BY_TIER[b.tier] || BANNER_MS));
   }
 
