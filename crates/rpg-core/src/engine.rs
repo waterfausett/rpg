@@ -171,8 +171,9 @@ fn process_inner(
         if !rule.filter.matches(ev, tz) {
             continue;
         }
-        // Ladder steps each unlock once (Task 7); single rules keep repeatable/cooldown.
-        if !rule.ladder {
+        // Threshold rules unlock each step once (checked in `evaluate`); other single rules
+        // keep repeatable/cooldown.
+        if !rule.ladder && !rule.counter.is_threshold() {
             if !rule.repeatable && store.unlock_count(&rule.id)? > 0 {
                 continue;
             }
@@ -493,5 +494,101 @@ events = [\"claude_session_start\", \"claude_session_end\"]
         let o = run(&store, &rules, &mk(EventKind::Commit, "2026-01-01T03:00:00Z", serde_json::json!({})));
         assert_eq!(o.unlocks.len(), 1);
         assert_eq!((o.unlocks[0].tier, o.unlocks[0].xp), (Tier::Bronze, 5));
+    }
+
+    /// `n` commits stored directly (no rule evaluation), one minute apart from `start`.
+    fn store_commits(store: &Store, n: usize, start: DateTime<Utc>, data: serde_json::Value, backfill: bool) {
+        for i in 0..n {
+            let mut e = Event::new(EventKind::Commit, Source::Git, Some("r".into()), data.clone());
+            e.ts = start + Duration::minutes(i as i64);
+            e.backfill = backfill;
+            store.insert_event(&e).unwrap();
+        }
+    }
+
+    fn committed_ladder() -> Rules {
+        let r = parse_rule(
+            "id=\"committed\"
+name=\"Committed\"
+fallback=\"f\"
+trigger=[\"commit\"]
+counter={type=\"lifetime\"}
+tiers=[{tier=\"bronze\",at=100,xp=5},{tier=\"silver\",at=1000,xp=50}]",
+        )
+        .unwrap();
+        Rules { list: vec![r], ..Default::default() }
+    }
+
+    fn keys(o: &Outcome) -> Vec<&str> {
+        o.unlocks.iter().map(|u| u.rule_id.as_str()).collect()
+    }
+
+    #[test]
+    fn lifetime_counts_filtered_history_including_backfill() {
+        let store = Store::open_in_memory().unwrap();
+        let rules = Rules {
+            list: vec![rule("forty_one", EventKind::Commit, "filter = { message = 'fix' }
+at = 41
+counter = { type = \"lifetime\" }", 9)],
+            ..Default::default()
+        };
+        let fix = serde_json::json!({ "message": "fix bug" });
+        store_commits(&store, 10, at("2026-01-01T00:00:00Z"), fix.clone(), true);
+        store_commits(&store, 30, at("2026-01-02T00:00:00Z"), fix.clone(), false);
+        // Non-matching commits don't count.
+        store_commits(&store, 5, at("2026-01-03T00:00:00Z"), serde_json::json!({ "message": "wip" }), false);
+        let wip = mk(EventKind::Commit, "2026-01-04T00:00:00Z", serde_json::json!({ "message": "wip" }));
+        assert!(run(&store, &rules, &wip).unlocks.is_empty());
+        let e = mk(EventKind::Commit, "2026-01-04T01:00:00Z", fix.clone());
+        let o = run(&store, &rules, &e);
+        assert_eq!(keys(&o), vec!["forty_one"]);
+        assert_eq!(o.unlocks[0].findings, serde_json::json!({ "progress": 41, "at": 41 }));
+        // Already unlocked: the next matching commit unlocks nothing.
+        let e = mk(EventKind::Commit, "2026-01-04T02:00:00Z", fix);
+        assert!(run(&store, &rules, &e).unlocks.is_empty());
+    }
+
+    #[test]
+    fn threshold_ignores_repeatable_and_cooldown() {
+        let store = Store::open_in_memory().unwrap();
+        let rules = Rules {
+            list: vec![rule("two", EventKind::Commit, "repeatable = true
+cooldown_hours = 1
+at = 2
+counter = { type = \"lifetime\" }", 1)],
+            ..Default::default()
+        };
+        let mut fired = vec![];
+        for h in 0..5 {
+            let o = run(&store, &rules, &mk(EventKind::Commit, &format!("2026-01-01T0{h}:00:00Z"), serde_json::json!({})));
+            fired.push(o.unlocks.len());
+        }
+        assert_eq!(fired, vec![0, 1, 0, 0, 0]);
+    }
+
+    #[test]
+    fn ladder_catches_up_on_next_event() {
+        let store = Store::open_in_memory().unwrap();
+        let rules = committed_ladder();
+        store_commits(&store, 150, at("2026-01-01T00:00:00Z"), serde_json::json!({}), false);
+        let o = run(&store, &rules, &mk(EventKind::Commit, "2026-01-02T00:00:00Z", serde_json::json!({})));
+        assert_eq!(keys(&o), vec!["committed.bronze"]);
+        let u = &o.unlocks[0];
+        assert_eq!((u.base_rule_id.as_str(), u.name.as_str(), u.tier, u.xp), ("committed", "Committed (Bronze)", Tier::Bronze, 5));
+        assert_eq!(u.findings, serde_json::json!({ "progress": 151, "at": 100 }));
+    }
+
+    #[test]
+    fn one_event_unlocks_all_crossed_steps_once() {
+        let store = Store::open_in_memory().unwrap();
+        let rules = committed_ladder();
+        store_commits(&store, 1200, at("2026-01-01T00:00:00Z"), serde_json::json!({}), false);
+        let o = run(&store, &rules, &mk(EventKind::Commit, "2026-01-02T00:00:00Z", serde_json::json!({})));
+        assert_eq!(keys(&o), vec!["committed.bronze", "committed.silver"]);
+        assert_eq!(store.total_xp().unwrap(), 10 + 5 + 50);
+        let o = run(&store, &rules, &mk(EventKind::Commit, "2026-01-02T00:01:00Z", serde_json::json!({})));
+        assert!(o.unlocks.is_empty());
+        assert_eq!(store.unlock_count("committed.bronze").unwrap(), 1);
+        assert_eq!(store.unlock_count("committed.silver").unwrap(), 1);
     }
 }

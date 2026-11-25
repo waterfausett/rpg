@@ -1,7 +1,8 @@
 //! Counters decide whether a rule fires for an event and which steps it unlocks.
 //!
 //! Moment counters look at the current event (and its history) and fire the rule's single
-//! step. History scans are over events of `ev.kind` unless a counter says otherwise; the
+//! step. Threshold counters compute a running value (`progress`) and unlock each step whose
+//! `at` it has reached. History scans are over events of `ev.kind` unless a counter says otherwise; the
 //! current event is already in the store when counters run.
 use crate::engine::SkillLevelUp;
 use crate::enrich::FileAge;
@@ -10,7 +11,8 @@ use crate::records::{local_day_bounds, metric_key, RecordBroken};
 use crate::rules::{Counter, FirstScope, Rule, Scope, Step};
 use crate::store::Store;
 use anyhow::Result;
-use chrono::{DateTime, Datelike, Duration, FixedOffset, TimeZone, Utc};
+use chrono::{DateTime, Datelike, Duration, FixedOffset, Months, NaiveDate, TimeZone, Utc};
+use std::collections::BTreeSet;
 use serde_json::{json, Value};
 
 pub struct EvalCtx<'a> {
@@ -40,12 +42,97 @@ fn fired(rule: &Rule, step: &Step, findings: Value) -> Fired {
 }
 
 /// The steps `rule` unlocks for `ctx.ev`. The caller has already checked `rule.filter`.
+///
+/// A threshold rule unlocks every step with `progress >= at` that isn't unlocked yet, in
+/// step order, so one event can catch up on several steps. Repeatable/cooldown don't apply.
 pub fn evaluate(rule: &Rule, ctx: &EvalCtx) -> Result<Vec<Fired>> {
-    if rule.counter.is_threshold() {
-        // Threshold counters (lifetime, streak_days, meta, skill_level) arrive in Task 7/8.
-        return Ok(Vec::new());
+    if !rule.counter.is_threshold() {
+        return Ok(moment(rule, ctx)?.map(|f| vec![fired(rule, rule.top(), f)]).unwrap_or_default());
     }
-    Ok(moment(rule, ctx)?.map(|f| vec![fired(rule, rule.top(), f)]).unwrap_or_default())
+    let value = match &rule.counter {
+        Counter::StreakDays => Some(streak_days(rule, ctx.store, ctx.tz, Some(local_date(ctx.ev.ts, ctx.tz)))?),
+        _ => progress(rule, ctx.store, ctx.tz)?,
+    };
+    let Some(value) = value else { return Ok(Vec::new()) };
+    let mut out = Vec::new();
+    for step in &rule.steps {
+        let Some(at) = step.at else { continue };
+        if value >= at && ctx.store.unlock_count(&rule.step_id(step.tier))? == 0 {
+            out.push(fired(rule, step, json!({ "progress": value, "at": at })));
+        }
+    }
+    Ok(out)
+}
+
+/// The current value of a threshold counter, from the stored events of the rule's `trigger`
+/// kinds that match its filter (backfill included). `None` for moment counters and
+/// `skill_level`. `streak_days` is the streak ending on the local day of the most recent
+/// matching event (0 with none).
+pub fn progress(rule: &Rule, store: &Store, tz: FixedOffset) -> Result<Option<u64>> {
+    Ok(match &rule.counter {
+        Counter::Lifetime { sum, distinct } => {
+            let events = matching(rule, store, tz, None)?;
+            Some(if let Some(field) = sum {
+                // A missing or non-numeric field adds 0: the event still matched the filter.
+                let total: f64 = events.iter().map(|e| e.data[field.as_str()].as_f64().unwrap_or(0.0)).sum();
+                total.max(0.0).floor() as u64
+            } else if distinct.is_some() {
+                // `distinct` is validated to be "repo".
+                events.iter().filter_map(|e| e.repo.as_deref()).collect::<BTreeSet<_>>().len() as u64
+            } else {
+                events.len() as u64
+            })
+        }
+        Counter::StreakDays => Some(streak_days(rule, store, tz, None)?),
+        // `meta` arrives in Task 8; `skill_level` and moment counters have no running value.
+        _ => None,
+    })
+}
+
+/// Stored events of the rule's `trigger` kinds since `since` that match its filter, oldest first.
+fn matching(rule: &Rule, store: &Store, tz: FixedOffset, since: Option<DateTime<Utc>>) -> Result<Vec<Event>> {
+    let mut events = store.events_of(&rule.trigger, since)?;
+    events.retain(|e| rule.filter.matches(e, tz));
+    Ok(events)
+}
+
+fn local_date(ts: DateTime<Utc>, tz: FixedOffset) -> NaiveDate {
+    ts.with_timezone(&tz).date_naive()
+}
+
+/// Consecutive local days with a matching event, ending on `end` (default: the day of the
+/// most recent matching event).
+fn streak_days(rule: &Rule, store: &Store, tz: FixedOffset, end: Option<NaiveDate>) -> Result<u64> {
+    let days: BTreeSet<NaiveDate> = matching(rule, store, tz, None)?.iter().map(|e| local_date(e.ts, tz)).collect();
+    let Some(mut day) = end.or_else(|| days.last().copied()) else { return Ok(0) };
+    let mut n = 0;
+    while days.contains(&day) {
+        n += 1;
+        day = day.pred_opt().expect("date in range");
+    }
+    Ok(n)
+}
+
+/// `ev` is the first matching event on the last day of its local month, and every day of
+/// that month has a matching event.
+fn month_every_day(rule: &Rule, ctx: &EvalCtx) -> Result<Option<Value>> {
+    let ev = ctx.ev;
+    let today = local_date(ev.ts, ctx.tz);
+    let first = today.with_day(1).expect("day 1 exists");
+    let next = first.checked_add_months(Months::new(1)).expect("date in range");
+    let last = next.pred_opt().expect("date in range");
+    if today != last {
+        return Ok(None);
+    }
+    let since = local_midnight(first, ctx.tz);
+    let events = matching(rule, ctx.store, ctx.tz, Some(since))?;
+    let events: Vec<&Event> = events.iter().filter(|e| local_date(e.ts, ctx.tz) <= last).collect();
+    if events.iter().find(|e| local_date(e.ts, ctx.tz) == today).map(|e| e.id.as_str()) != Some(ev.id.as_str()) {
+        return Ok(None);
+    }
+    let days: BTreeSet<u32> = events.iter().map(|e| local_date(e.ts, ctx.tz).day()).collect();
+    let n = last.day();
+    Ok((days.len() == n as usize).then(|| json!({ "month": today.format("%Y-%m").to_string(), "days": n })))
 }
 
 /// `Some(findings)` if a moment counter fires.
@@ -101,8 +188,8 @@ fn moment(rule: &Rule, ctx: &EvalCtx) -> Result<Option<Value>> {
             .filter(|f| f.years >= *min_years)
             .max_by(|a, b| a.years.total_cmp(&b.years))
             .map(|f| json!({ "path": f.path, "years": f.years, "last_author": f.last_author })),
-        // Task 7.
-        Counter::MonthEveryDay => None,
+        Counter::MonthEveryDay => month_every_day(rule, ctx)?,
+        // Threshold counters are handled in `evaluate`.
         Counter::Lifetime { .. } | Counter::StreakDays | Counter::Meta { .. } | Counter::SkillLevel => None,
     })
 }
@@ -123,7 +210,12 @@ fn history(ctx: &EvalCtx, keep: impl Fn(&Event) -> bool) -> Result<Vec<Event>> {
 
 /// UTC instant of local midnight on 1 January of `year`.
 fn year_start(year: i32, tz: FixedOffset) -> DateTime<Utc> {
-    let midnight = chrono::NaiveDate::from_ymd_opt(year, 1, 1).expect("valid year").and_hms_opt(0, 0, 0).expect("valid midnight");
+    local_midnight(NaiveDate::from_ymd_opt(year, 1, 1).expect("valid year"), tz)
+}
+
+/// UTC instant of local midnight at the start of `day`.
+fn local_midnight(day: NaiveDate, tz: FixedOffset) -> DateTime<Utc> {
+    let midnight = day.and_hms_opt(0, 0, 0).expect("valid midnight");
     tz.from_local_datetime(&midnight).single().expect("fixed offset is unambiguous").with_timezone(&Utc)
 }
 
@@ -332,21 +424,115 @@ mod tests {
         assert!(!fires(2, 1));
     }
 
-    /// Task 7 implements these; until then they must not fire.
+    /// Task 8 implements these; until then they must not fire.
     #[test]
-    fn threshold_and_month_counters_do_not_fire_yet() {
+    fn meta_and_skill_level_counters_do_not_fire_yet() {
         let store = Store::open_in_memory().unwrap();
         let e = mk(EventKind::Commit, "2026-03-01T01:00:00Z", "r", json!({}));
         store.insert_event(&e).unwrap();
         for extra in [
-            "counter = { type = \"month_every_day\" }",
-            "at = 1\ncounter = { type = \"lifetime\" }",
-            "at = 1\ncounter = { type = \"streak_days\" }",
-            "at = 1\ncounter = { type = \"meta\", of = \"distinct_unlocks\" }",
-            "at = 1\ncounter = { type = \"skill_level\" }",
+            "at = 1
+counter = { type = \"meta\", of = \"distinct_unlocks\" }",
+            "at = 1
+counter = { type = \"skill_level\" }",
         ] {
             assert_eq!(eval(&rule("\"commit\"", extra), &store, &e), None, "{extra}");
         }
+    }
+
+    #[test]
+    fn lifetime_sum_lines_removed() {
+        let store = Store::open_in_memory().unwrap();
+        let r = rule("\"commit\"", "at = 100
+counter = { type = \"lifetime\", sum = \"lines_removed\" }");
+        // 40 + 0 (missing) + 59.5 = 99.5, floored to 99: not yet.
+        for (i, data) in [json!({ "lines_removed": 40 }), json!({}), json!({ "lines_removed": 59.5 })].into_iter().enumerate() {
+            let e = mk(EventKind::Commit, &format!("2026-03-01T0{}:00:00Z", i + 1), "r", data);
+            assert_eq!(add(&r, &store, &e), None, "{i}");
+        }
+        assert_eq!(progress(&r, &store, tz()).unwrap(), Some(99));
+        let e = mk(EventKind::Commit, "2026-03-01T05:00:00Z", "r", json!({ "lines_removed": 1 }));
+        assert_eq!(add(&r, &store, &e), Some(json!({ "progress": 100, "at": 100 })));
+        assert_eq!(progress(&r, &store, tz()).unwrap(), Some(100));
+    }
+
+    #[test]
+    fn lifetime_distinct_repo() {
+        let store = Store::open_in_memory().unwrap();
+        let r = rule("\"commit\"", "at = 3
+counter = { type = \"lifetime\", distinct = \"repo\" }");
+        let mut fired = vec![];
+        for (i, repo) in ["A", "B", "A", "B", "C"].iter().enumerate() {
+            let e = mk(EventKind::Commit, &format!("2026-03-01T0{}:00:00Z", i + 1), repo, json!({}));
+            if add(&r, &store, &e).is_some() {
+                fired.push(i);
+            }
+        }
+        assert_eq!(fired, vec![4], "the third distinct repo");
+        assert_eq!(progress(&r, &store, tz()).unwrap(), Some(3));
+    }
+
+    #[test]
+    fn lifetime_counts_all_trigger_kinds() {
+        let store = Store::open_in_memory().unwrap();
+        let r = rule("\"commit\", \"push\"", "at = 3
+counter = { type = \"lifetime\" }");
+        store.insert_event(&mk(EventKind::Push, "2026-03-01T01:00:00Z", "r", json!({}))).unwrap();
+        store.insert_event(&mk(EventKind::PrMerged, "2026-03-01T02:00:00Z", "r", json!({}))).unwrap();
+        let c = mk(EventKind::Commit, "2026-03-01T03:00:00Z", "r", json!({}));
+        assert_eq!(add(&r, &store, &c), None);
+        assert_eq!(progress(&r, &store, tz()).unwrap(), Some(2));
+        let c = mk(EventKind::Commit, "2026-03-01T04:00:00Z", "r", json!({}));
+        assert!(add(&r, &store, &c).is_some());
+    }
+
+    #[test]
+    fn streak_days_breaks_on_gap() {
+        let store = Store::open_in_memory().unwrap();
+        let r = rule("\"commit\"", "filter = { message = 'wip' }
+at = 3
+counter = { type = \"streak_days\" }");
+        assert_eq!(progress(&r, &store, tz()).unwrap(), Some(0), "no events");
+        let day = |d: u32, h: u32, msg: &str| mk(EventKind::Commit, &format!("2026-03-{d:02}T{h:02}:00:00Z"), "r", json!({ "message": msg }));
+        assert_eq!(add(&r, &store, &day(1, 10, "wip")), None);
+        assert_eq!(add(&r, &store, &day(2, 23, "wip")), None);
+        assert_eq!(add(&r, &store, &day(3, 0, "wip")), Some(json!({ "progress": 3, "at": 3 })));
+        assert_eq!(progress(&r, &store, tz()).unwrap(), Some(3));
+        // Day 4 has only a non-matching commit: the streak breaks.
+        assert_eq!(add(&r, &store, &day(4, 10, "fix")), None);
+        assert_eq!(add(&r, &store, &day(5, 10, "wip")), None);
+        assert_eq!(progress(&r, &store, tz()).unwrap(), Some(1));
+        assert_eq!(add(&r, &store, &day(6, 10, "wip")), None);
+        assert_eq!(add(&r, &store, &day(7, 10, "wip")), Some(json!({ "progress": 3, "at": 3 })));
+        // Local days: at -02:00, 2026-03-08T01:00Z is still the 7th.
+        let minus2 = FixedOffset::west_opt(2 * 3600).unwrap();
+        let late = day(8, 1, "wip");
+        store.insert_event(&late).unwrap();
+        assert_eq!(progress(&r, &store, minus2).unwrap(), Some(3));
+        assert_eq!(progress(&r, &store, tz()).unwrap(), Some(4));
+    }
+
+    #[test]
+    fn month_every_day_fires_once() {
+        let store = Store::open_in_memory().unwrap();
+        let r = rule("\"commit\"", "counter = { type = \"month_every_day\" }");
+        let c = |d: &str| mk(EventKind::Commit, d, "r", json!({}));
+        // January 2027 misses the 15th, so Jan 31 doesn't fire.
+        for d in (1..=31).filter(|d| *d != 15) {
+            assert_eq!(add(&r, &store, &c(&format!("2027-01-{d:02}T12:00:00Z"))), None, "jan {d}");
+        }
+        let mut fired = vec![];
+        for d in 1..=28 {
+            for h in [9, 18] {
+                let e = c(&format!("2027-02-{d:02}T{h:02}:00:00Z"));
+                if let Some(f) = add(&r, &store, &e) {
+                    fired.push((d, h, f));
+                }
+            }
+        }
+        assert_eq!(fired, vec![(28, 9, json!({ "month": "2027-02", "days": 28 }))]);
+        assert_eq!(add(&r, &store, &c("2027-03-01T09:00:00Z")), None);
+        assert_eq!(progress(&r, &store, tz()).unwrap(), None, "a moment counter");
     }
 
     #[test]
