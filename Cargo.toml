@@ -4,4 +4,4 @@ members = ["crates/rpg-core", "crates/rpg-cli", "crates/rpg-app"]
 
 # The one place to bump for a release (the app, installer and updater all read it).
 [workspace.package]
-version = "0.6.0"
+version = "0.7.0"
