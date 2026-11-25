@@ -58,6 +58,7 @@ pub fn parse(json: &Value, backfill: bool) -> Result<Vec<Event>> {
         let data = json!({
             "number": pr["number"], "title": pr["title"], "url": pr["url"],
             "additions": pr["additions"], "deletions": pr["deletions"],
+            "created_at": pr["createdAt"], "merged_at": pr["mergedAt"],
         });
         events.push(gh_event(format!("gh:pr_opened:{id}"), EventKind::PrOpened, ts(pr, "createdAt")?, repo.clone(), backfill, data.clone()));
         if pr["mergedAt"].is_string() {
@@ -118,6 +119,12 @@ mod tests {
         assert_eq!(evs[0].data["additions"], 120);
         assert_eq!(evs[0].data["deletions"], 15);
         assert_eq!(evs[0].data["number"], 12);
+        for i in [0, 1] {
+            assert_eq!(evs[i].data["created_at"], "2026-11-20T10:00:00Z");
+            assert_eq!(evs[i].data["merged_at"], "2026-11-21T09:30:00Z");
+        }
+        assert_eq!(evs[3].data["created_at"], "2026-11-22T08:00:00Z");
+        assert!(evs[3].data["merged_at"].is_null());
         assert_eq!(evs[2].repo.as_deref(), Some("other/thing"));
         assert_eq!(evs[2].data["url"], "https://github.com/other/thing/pull/7");
         assert!(!parse(&v, false).unwrap()[0].backfill);

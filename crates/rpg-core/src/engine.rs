@@ -1,10 +1,10 @@
 //! The engine: one event in, XP gains / unlocks / level-ups out.
 use crate::config::Config;
-use crate::detectors::{evaluate, EvalCtx};
+use crate::counters::{evaluate, EvalCtx};
 use crate::enrich::FileAge;
 use crate::event::{Event, EventKind};
 use crate::records;
-use crate::rules::{Rules, Tier};
+use crate::rules::{Announce, Counter, Rule, Rules, Tier};
 use crate::store::{NewUnlock, Store};
 use crate::xp::level_for;
 use anyhow::Result;
@@ -14,15 +14,22 @@ use chrono::{DateTime, Duration, FixedOffset, Utc};
 pub struct XpGain {
     pub amount: u64,
     pub label: String,
+    /// `Some` for the exp an unlock paid: its tier and how it is announced. `None` for base event exp.
+    pub achievement: Option<(Tier, Announce)>,
 }
 
 #[derive(Debug, Clone)]
 pub struct Unlock {
     pub unlock_id: i64,
+    /// The stored unlock key: the rule id, or `id.tier` for a ladder step.
     pub rule_id: String,
+    /// The id of the rule that fired.
+    pub base_rule_id: String,
     pub name: String,
     pub tier: Tier,
     pub xp: u64,
+    /// Banner or toast: the step's setting, else the rule's, else the config's for its tier.
+    pub announce: Announce,
     pub findings: serde_json::Value,
     /// Includes this unlock.
     pub unlock_count: u32,
@@ -140,6 +147,11 @@ fn process_inner(
     if !cfg.paths.allows(ev.repo.as_deref()) {
         return Ok(out);
     }
+    // Derived fields (session length, concurrency) are persisted with the event so later
+    // history scans and this event's own rules can filter on them.
+    let mut derived = ev.clone();
+    crate::derive::derive(store, &mut derived)?;
+    let ev = &derived;
     if !store.insert_event(ev)? {
         return Ok(out);
     }
@@ -153,46 +165,60 @@ fn process_inner(
     if let Some((amount, label)) = base_xp(store, cfg, ev)? {
         if amount > 0 {
             store.add_xp(&ev.id, amount, label, ev.ts)?;
-            out.xp_gains.push(XpGain { amount, label: label.to_string() });
+            out.xp_gains.push(XpGain { amount, label: label.to_string(), achievement: None });
         }
         award_skills(store, rules, cfg, ev, &mut out)?;
     }
 
-    for rule in rules.for_kind(ev.kind) {
-        let count = store.unlock_count(&rule.id)?;
-        if !rule.repeatable && count > 0 {
+    // Meta rules run last so their counts include this event's unlocks.
+    let is_meta = |r: &&Rule| matches!(r.counter, Counter::Meta { .. });
+    let ordered = rules.for_kind(ev.kind).filter(|r| !is_meta(r)).chain(rules.for_kind(ev.kind).filter(is_meta));
+    for rule in ordered {
+        if !rule.filter.matches(ev, tz) {
             continue;
         }
-        let last = store.last_unlock_at(&rule.id)?;
-        if let (Some(hours), Some(last)) = (rule.cooldown_hours, last) {
-            if ev.ts < last + Duration::hours(hours as i64) {
+        // Threshold rules unlock each step once (checked in `evaluate`); other single rules
+        // keep repeatable/cooldown.
+        if !rule.ladder && !rule.counter.is_threshold() {
+            if !rule.repeatable && store.unlock_count(&rule.id)? > 0 {
                 continue;
             }
+            if let (Some(hours), Some(last)) = (rule.cooldown_hours, store.last_unlock_at(&rule.id)?) {
+                if ev.ts < last + Duration::hours(hours as i64) {
+                    continue;
+                }
+            }
         }
-        let ctx = EvalCtx { ev, store, broken: &broken, file_ages, tz };
-        let Some(findings) = evaluate(&rule.detector, &ctx)? else { continue };
-        let unlock_id = store.insert_unlock(&NewUnlock {
-            rule_id: rule.id.clone(),
-            name: rule.name.clone(),
-            tier: tier_str(rule.tier).to_string(),
-            xp: rule.xp,
-            context: findings.clone(),
-            ts: ev.ts,
-        })?;
-        if rule.xp > 0 {
-            store.add_xp(&ev.id, rule.xp, &rule.name, ev.ts)?;
-            out.xp_gains.push(XpGain { amount: rule.xp, label: rule.name.clone() });
+        let ctx = EvalCtx { ev, store, broken: &broken, file_ages, tz, skill_curve: cfg.skill_levels.curve() };
+        for f in evaluate(rule, &ctx)? {
+            let count = store.unlock_count(&f.unlock_key)?;
+            let last = store.last_unlock_at(&f.unlock_key)?;
+            let unlock_id = store.insert_unlock(&NewUnlock {
+                rule_id: f.unlock_key.clone(),
+                name: f.name.clone(),
+                tier: f.step.tier.as_str().to_string(),
+                xp: f.step.xp,
+                context: f.findings.clone(),
+                ts: ev.ts,
+            })?;
+            let announce = f.step.announce.or(rule.announce).unwrap_or(cfg.announce.for_tier(f.step.tier));
+            if f.step.xp > 0 {
+                store.add_xp(&ev.id, f.step.xp, &f.name, ev.ts)?;
+                out.xp_gains.push(XpGain { amount: f.step.xp, label: f.name.clone(), achievement: Some((f.step.tier, announce)) });
+            }
+            out.unlocks.push(Unlock {
+                unlock_id,
+                rule_id: f.unlock_key,
+                base_rule_id: rule.id.clone(),
+                name: f.name,
+                tier: f.step.tier,
+                xp: f.step.xp,
+                announce,
+                findings: f.findings,
+                unlock_count: count + 1,
+                last_unlocked_at: last,
+            });
         }
-        out.unlocks.push(Unlock {
-            unlock_id,
-            rule_id: rule.id.clone(),
-            name: rule.name.clone(),
-            tier: rule.tier,
-            xp: rule.xp,
-            findings,
-            unlock_count: count + 1,
-            last_unlocked_at: last,
-        });
     }
 
     out.total_xp = store.total_xp()?;
@@ -217,19 +243,11 @@ fn award_skills(store: &Store, rules: &Rules, cfg: &Config, ev: &Event, out: &mu
     Ok(())
 }
 
-fn tier_str(t: Tier) -> &'static str {
-    match t {
-        Tier::Bronze => "bronze",
-        Tier::Silver => "silver",
-        Tier::Gold => "gold",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::event::Source;
-    use crate::rules::{Detector, Flavor, Metric, Window};
+    use crate::rules::{parse_rule, Announce, Rule};
 
     fn tz() -> FixedOffset {
         FixedOffset::east_opt(0).unwrap()
@@ -245,20 +263,21 @@ mod tests {
         e
     }
 
-    fn rule(id: &str, kind: EventKind, det: Detector, xp: u64) -> crate::rules::Rule {
-        crate::rules::Rule {
-            id: id.into(),
-            name: format!("Name {id}"),
-            tier: Tier::Bronze,
-            xp,
-            fallback: "f".into(),
-            hint: None,
-            trigger: vec![kind],
-            detector: det,
-            repeatable: false,
-            cooldown_hours: None,
-            flavor: Flavor::Static,
-        }
+    /// A bronze rule; `extra` holds the counter/filter (and any other) TOML lines.
+    fn rule(id: &str, kind: EventKind, extra: &str, xp: u64) -> Rule {
+        let kind = kind.as_str();
+        parse_rule(&format!(
+            r#"
+id = "{id}"
+name = "Name {id}"
+tier = "bronze"
+xp = {xp}
+fallback = "f"
+trigger = ["{kind}"]
+{extra}
+"#
+        ))
+        .unwrap()
     }
 
     fn run(store: &Store, rules: &Rules, ev: &Event) -> Outcome {
@@ -269,7 +288,7 @@ mod tests {
     fn excluded_repo_counts_for_nothing() {
         let store = Store::open_in_memory().unwrap();
         let rules = Rules {
-            list: vec![rule("fb", EventKind::Commit, Detector::First { scope: crate::rules::FirstScope::Ever }, 5)],
+            list: vec![rule("fb", EventKind::Commit, "counter = { type = \"first\", scope = \"ever\" }", 5)],
             ..Default::default()
         };
         let cfg: Config = toml::from_str("[paths]\nexclude = ['C:/Temp']\n").unwrap();
@@ -301,7 +320,7 @@ mod tests {
     fn backfill_seeds_records_without_xp_or_unlocks() {
         let store = Store::open_in_memory().unwrap();
         let rules = Rules {
-            list: vec![rule("pb", EventKind::PrMerged, Detector::PersonalRecord { metric: Metric::PrsMergedPerDay }, 7)],
+            list: vec![rule("pb", EventKind::PrMerged, "counter = { type = \"personal_record\", metric = \"prs_merged_per_day\" }", 7)],
             ..Default::default()
         };
         for i in 0..2 {
@@ -329,7 +348,7 @@ mod tests {
     #[test]
     fn non_repeatable_unlocks_once() {
         let store = Store::open_in_memory().unwrap();
-        let rules = Rules { list: vec![rule("any", EventKind::Commit, Detector::TimeOfDay { start_hour: 0, end_hour: 24 }, 5)], ..Default::default() };
+        let rules = Rules { list: vec![rule("any", EventKind::Commit, "", 5)], ..Default::default() };
         let a = run(&store, &rules, &mk(EventKind::Commit, "2026-01-01T10:00:00Z", serde_json::json!({})));
         let b = run(&store, &rules, &mk(EventKind::Commit, "2026-01-01T11:00:00Z", serde_json::json!({})));
         assert_eq!(a.unlocks.len(), 1);
@@ -340,7 +359,7 @@ mod tests {
     #[test]
     fn cooldown_respected() {
         let store = Store::open_in_memory().unwrap();
-        let mut r = rule("rep", EventKind::Commit, Detector::TimeOfDay { start_hour: 0, end_hour: 24 }, 5);
+        let mut r = rule("rep", EventKind::Commit, "", 5);
         r.repeatable = true;
         r.cooldown_hours = Some(2);
         let rules = Rules { list: vec![r], ..Default::default() };
@@ -371,7 +390,7 @@ mod tests {
         }
         assert_eq!(ups, vec![2], "level 2 at exactly 1000 exp");
         assert_eq!((last.total_xp, last.level), (1000, 2));
-        assert_eq!(last.xp_gains[0], XpGain { amount: 100, label: "PR merged".into() });
+        assert_eq!(last.xp_gains[0], XpGain { amount: 100, label: "PR merged".into(), achievement: None });
     }
 
     #[test]
@@ -385,7 +404,7 @@ mod tests {
         assert!(run(&store, &rules, &start).xp_gains.is_empty());
         let end2 = mk(EventKind::ClaudeSessionEnd, "2026-01-01T12:00:00Z", serde_json::json!({"session_id": "s2"}));
         let o = run(&store, &rules, &end2);
-        assert_eq!(o.xp_gains, vec![XpGain { amount: 15, label: "Claude session".into() }]);
+        assert_eq!(o.xp_gains, vec![XpGain { amount: 15, label: "Claude session".into(), achievement: None }]);
     }
 
     #[test]
@@ -464,12 +483,232 @@ events = [\"claude_session_start\", \"claude_session_end\"]
     }
 
     #[test]
-    fn count_rule_uses_window_detector() {
+    fn count_rule_uses_per_day_counter() {
         let store = Store::open_in_memory().unwrap();
-        let rules = Rules { list: vec![rule("c2", EventKind::Commit, Detector::CountInWindow { count: 2, window: Window::Day }, 0)], ..Default::default() };
+        let rules = Rules { list: vec![rule("c2", EventKind::Commit, "counter = { type = \"per_day\", at = 2 }", 0)], ..Default::default() };
         let a = run(&store, &rules, &mk(EventKind::Commit, "2026-01-01T10:00:00Z", serde_json::json!({})));
         let b = run(&store, &rules, &mk(EventKind::Commit, "2026-01-01T11:00:00Z", serde_json::json!({})));
         assert!(a.unlocks.is_empty());
         assert_eq!(b.unlocks.len(), 1);
+    }
+
+    #[test]
+    fn filter_gates_rules() {
+        let store = Store::open_in_memory().unwrap();
+        let mut r = rule("night", EventKind::Commit, "filter = { hours = { start = 0, end = 4 } }", 5);
+        r.repeatable = true;
+        let rules = Rules { list: vec![r], ..Default::default() };
+        assert!(run(&store, &rules, &mk(EventKind::Commit, "2026-01-01T10:00:00Z", serde_json::json!({}))).unlocks.is_empty());
+        let o = run(&store, &rules, &mk(EventKind::Commit, "2026-01-01T03:00:00Z", serde_json::json!({})));
+        assert_eq!(o.unlocks.len(), 1);
+        assert_eq!((o.unlocks[0].tier, o.unlocks[0].xp), (Tier::Bronze, 5));
+    }
+
+    /// `n` commits stored directly (no rule evaluation), one minute apart from `start`.
+    fn store_commits(store: &Store, n: usize, start: DateTime<Utc>, data: serde_json::Value, backfill: bool) {
+        for i in 0..n {
+            let mut e = Event::new(EventKind::Commit, Source::Git, Some("r".into()), data.clone());
+            e.ts = start + Duration::minutes(i as i64);
+            e.backfill = backfill;
+            store.insert_event(&e).unwrap();
+        }
+    }
+
+    fn committed_ladder() -> Rules {
+        let r = parse_rule(
+            "id=\"committed\"
+name=\"Committed\"
+fallback=\"f\"
+trigger=[\"commit\"]
+counter={type=\"lifetime\"}
+tiers=[{tier=\"bronze\",at=100,xp=5},{tier=\"silver\",at=1000,xp=50}]",
+        )
+        .unwrap();
+        Rules { list: vec![r], ..Default::default() }
+    }
+
+    fn keys(o: &Outcome) -> Vec<&str> {
+        o.unlocks.iter().map(|u| u.rule_id.as_str()).collect()
+    }
+
+    #[test]
+    fn lifetime_counts_filtered_history_including_backfill() {
+        let store = Store::open_in_memory().unwrap();
+        let rules = Rules {
+            list: vec![rule("forty_one", EventKind::Commit, "filter = { message = 'fix' }
+at = 41
+counter = { type = \"lifetime\" }", 9)],
+            ..Default::default()
+        };
+        let fix = serde_json::json!({ "message": "fix bug" });
+        store_commits(&store, 10, at("2026-01-01T00:00:00Z"), fix.clone(), true);
+        store_commits(&store, 30, at("2026-01-02T00:00:00Z"), fix.clone(), false);
+        // Non-matching commits don't count.
+        store_commits(&store, 5, at("2026-01-03T00:00:00Z"), serde_json::json!({ "message": "wip" }), false);
+        let wip = mk(EventKind::Commit, "2026-01-04T00:00:00Z", serde_json::json!({ "message": "wip" }));
+        assert!(run(&store, &rules, &wip).unlocks.is_empty());
+        let e = mk(EventKind::Commit, "2026-01-04T01:00:00Z", fix.clone());
+        let o = run(&store, &rules, &e);
+        assert_eq!(keys(&o), vec!["forty_one"]);
+        assert_eq!(o.unlocks[0].findings, serde_json::json!({ "progress": 41, "at": 41 }));
+        // Already unlocked: the next matching commit unlocks nothing.
+        let e = mk(EventKind::Commit, "2026-01-04T02:00:00Z", fix);
+        assert!(run(&store, &rules, &e).unlocks.is_empty());
+    }
+
+    #[test]
+    fn threshold_ignores_repeatable_and_cooldown() {
+        let store = Store::open_in_memory().unwrap();
+        let rules = Rules {
+            list: vec![rule("two", EventKind::Commit, "repeatable = true
+cooldown_hours = 1
+at = 2
+counter = { type = \"lifetime\" }", 1)],
+            ..Default::default()
+        };
+        let mut fired = vec![];
+        for h in 0..5 {
+            let o = run(&store, &rules, &mk(EventKind::Commit, &format!("2026-01-01T0{h}:00:00Z"), serde_json::json!({})));
+            fired.push(o.unlocks.len());
+        }
+        assert_eq!(fired, vec![0, 1, 0, 0, 0]);
+    }
+
+    #[test]
+    fn ladder_catches_up_on_next_event() {
+        let store = Store::open_in_memory().unwrap();
+        let rules = committed_ladder();
+        store_commits(&store, 150, at("2026-01-01T00:00:00Z"), serde_json::json!({}), false);
+        let o = run(&store, &rules, &mk(EventKind::Commit, "2026-01-02T00:00:00Z", serde_json::json!({})));
+        assert_eq!(keys(&o), vec!["committed.bronze"]);
+        let u = &o.unlocks[0];
+        assert_eq!((u.base_rule_id.as_str(), u.name.as_str(), u.tier, u.xp), ("committed", "Committed (Bronze)", Tier::Bronze, 5));
+        assert_eq!(u.findings, serde_json::json!({ "progress": 151, "at": 100 }));
+    }
+
+    #[test]
+    fn disabled_rule_loads_but_never_fires() {
+        let store = Store::open_in_memory().unwrap();
+        let rules = Rules {
+            list: vec![
+                rule("off", EventKind::Commit, "enabled = false", 5),
+                rule("m", EventKind::Commit, "enabled = false
+at = 1
+counter = { type = \"meta\", of = \"distinct_unlocks\" }", 5),
+                rule("on", EventKind::Commit, "", 1),
+            ],
+            ..Default::default()
+        };
+        assert_eq!(rules.list.len(), 3, "a disabled rule stays in the list");
+        assert!(!rules.list[0].enabled && rules.list[2].enabled);
+        let o = run(&store, &rules, &mk(EventKind::Commit, "2026-01-01T10:00:00Z", serde_json::json!({})));
+        assert_eq!(keys(&o), vec!["on"]);
+    }
+
+    #[test]
+    fn reenabled_ladder_catches_up() {
+        let store = Store::open_in_memory().unwrap();
+        let mut rules = committed_ladder();
+        rules.list[0].enabled = false;
+        store_commits(&store, 150, at("2026-01-01T00:00:00Z"), serde_json::json!({}), false);
+        let o = run(&store, &rules, &mk(EventKind::Commit, "2026-01-02T00:00:00Z", serde_json::json!({})));
+        assert!(o.unlocks.is_empty());
+        rules.list[0].enabled = true;
+        let o = run(&store, &rules, &mk(EventKind::Commit, "2026-01-02T01:00:00Z", serde_json::json!({})));
+        assert_eq!(keys(&o), vec!["committed.bronze"]);
+    }
+
+    #[test]
+    fn meta_sees_same_event_unlocks() {
+        let store = Store::open_in_memory().unwrap();
+        // The meta rule is listed first; it still runs after the others.
+        let meta = rule("hunter", EventKind::Commit, "at = 2
+counter = { type = \"meta\", of = \"distinct_unlocks\" }", 3);
+        let rules = Rules {
+            list: vec![meta, rule("a", EventKind::Commit, "", 1), rule("b", EventKind::Commit, "", 1)],
+            ..Default::default()
+        };
+        let o = run(&store, &rules, &mk(EventKind::Commit, "2026-01-01T10:00:00Z", serde_json::json!({})));
+        assert_eq!(keys(&o), vec!["a", "b", "hunter"]);
+        assert_eq!(o.unlocks[2].findings, serde_json::json!({ "progress": 2, "at": 2 }));
+        assert_eq!(store.total_xp().unwrap(), 10 + 1 + 1 + 3);
+    }
+
+    #[test]
+    fn skill_level_rule_reads_this_events_level_ups() {
+        let store = Store::open_in_memory().unwrap();
+        let mut rules = skills(&["id = \"rust\"
+name = \"Rust\"
+globs = [\"*.rs\"]
+xp = 100
+"]);
+        rules.list.push(rule("sm", EventKind::Commit, "at = 2
+counter = { type = \"skill_level\" }", 4));
+        // 100 skill xp reaches level 2 (default skill curve).
+        let o = run(&store, &rules, &commit_with("2026-01-01T10:00:00Z", &["a.rs"]));
+        assert_eq!(keys(&o), vec!["sm.rust.bronze"]);
+        assert_eq!((o.unlocks[0].base_rule_id.as_str(), o.unlocks[0].name.as_str()), ("sm", "Name sm: Rust (Bronze)"));
+        assert!(run(&store, &rules, &commit_with("2026-01-01T11:00:00Z", &["b.rs"])).unlocks.is_empty());
+    }
+
+    #[test]
+    fn announce_resolution_order() {
+        let ladder = parse_rule(
+            "id=\"lad\"
+name=\"Lad\"
+fallback=\"f\"
+trigger=[\"commit\"]
+announce=\"banner\"
+counter={type=\"lifetime\"}
+tiers=[{tier=\"bronze\",at=100,xp=5},{tier=\"silver\",at=1000,xp=50,announce=\"toast\"}]",
+        )
+        .unwrap();
+        let plain = rule("plain", EventKind::Commit, "", 7);
+        let rules = Rules { list: vec![ladder, plain], ..Default::default() };
+        let go = |cfg: &Config| {
+            let store = Store::open_in_memory().unwrap();
+            store_commits(&store, 1200, at("2026-01-01T00:00:00Z"), serde_json::json!({}), false);
+            let ev = mk(EventKind::Commit, "2026-01-02T00:00:00Z", serde_json::json!({}));
+            let o = process(&store, &rules, cfg, &ev, &[], tz()).unwrap();
+            let unlocks: Vec<(String, Announce)> = o.unlocks.iter().map(|u| (u.rule_id.clone(), u.announce)).collect();
+            let gains: Vec<Option<(Tier, Announce)>> = o.xp_gains.iter().map(|g| g.achievement).collect();
+            (unlocks, gains)
+        };
+        // Step over rule over config: the rule's banner beats the config, the silver step's toast beats the rule.
+        let (unlocks, gains) = go(&Config::default());
+        assert_eq!(
+            unlocks,
+            vec![
+                ("lad.bronze".to_string(), Announce::Banner),
+                ("lad.silver".to_string(), Announce::Toast),
+                ("plain".to_string(), Announce::Toast),
+            ]
+        );
+        assert_eq!(
+            gains,
+            vec![
+                None,
+                Some((Tier::Bronze, Announce::Banner)),
+                Some((Tier::Silver, Announce::Toast)),
+                Some((Tier::Bronze, Announce::Toast)),
+            ]
+        );
+        // With neither set, the config decides by tier.
+        let cfg: Config = toml::from_str("[announce]\nbronze = \"banner\"\n").unwrap();
+        assert_eq!(go(&cfg).0[2], ("plain".to_string(), Announce::Banner));
+    }
+
+    #[test]
+    fn one_event_unlocks_all_crossed_steps_once() {
+        let store = Store::open_in_memory().unwrap();
+        let rules = committed_ladder();
+        store_commits(&store, 1200, at("2026-01-01T00:00:00Z"), serde_json::json!({}), false);
+        let o = run(&store, &rules, &mk(EventKind::Commit, "2026-01-02T00:00:00Z", serde_json::json!({})));
+        assert_eq!(keys(&o), vec!["committed.bronze", "committed.silver"]);
+        assert_eq!(store.total_xp().unwrap(), 10 + 5 + 50);
+        let o = run(&store, &rules, &mk(EventKind::Commit, "2026-01-02T00:01:00Z", serde_json::json!({})));
+        assert!(o.unlocks.is_empty());
+        assert_eq!(store.unlock_count("committed.bronze").unwrap(), 1);
+        assert_eq!(store.unlock_count("committed.silver").unwrap(), 1);
     }
 }

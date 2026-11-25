@@ -1,0 +1,10 @@
+id = "leet"
+name = "1337"
+tier = "silver"
+trigger = ["commit"]
+filter = { time = "13:37" }
+repeatable = true
+announce = "banner"
+hint = "There is a very particular minute of the afternoon."
+fallback = "A commit at exactly 13:37. You waited for it. We all saw you wait for it."
+flavor = { type = "llm", prompt = "Rewrite this achievement announcement for this specific unlock, in the same voice: \"{fallback}\". Use the concrete details. Context: {context}" }

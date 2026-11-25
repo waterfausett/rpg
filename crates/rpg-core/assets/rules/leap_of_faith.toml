@@ -1,0 +1,11 @@
+id = "leap_of_faith"
+name = "Leap of Faith"
+tier = "gold"
+trigger = ["commit"]
+filter = { dates = ["02-29"] }
+repeatable = true
+cooldown_hours = 24
+announce = "banner"
+hint = "Some days only turn up once in a while."
+fallback = "A commit on February 29th. The calendar gave you a bonus day and you spent it on a diff."
+flavor = { type = "llm", prompt = "Rewrite this achievement announcement for this specific unlock, in the same voice: \"{fallback}\". Use the concrete details. Context: {context}" }

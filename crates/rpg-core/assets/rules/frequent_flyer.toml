@@ -1,0 +1,12 @@
+id = "frequent_flyer"
+name = "Frequent Flyer"
+trigger = ["commit"]
+counter = { type = "lifetime", distinct = "repo" }
+tiers = [
+  { tier = "bronze", at = 5 },
+  { tier = "silver", at = 25 },
+  { tier = "gold", at = 100 },
+]
+hint = "Commit in more than one repo. Then in a lot more."
+fallback = "Another milestone in distinct repos. You have a commit in more places than you have a coherent mental map of."
+flavor = { type = "llm", prompt = "Rewrite this achievement announcement for this specific unlock, in the same voice: \"{fallback}\". Use the concrete details. Context: {context}" }

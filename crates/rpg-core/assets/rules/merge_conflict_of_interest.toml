@@ -1,0 +1,12 @@
+id = "merge_conflict_of_interest"
+name = "Merge Conflict of Interest"
+trigger = ["pr_merged"]
+counter = { type = "lifetime" }
+tiers = [
+  { tier = "bronze", at = 10 },
+  { tier = "silver", at = 100 },
+  { tier = "gold", at = 500 },
+]
+hint = "Merge enough pull requests and someone will start calling you the maintainer."
+fallback = "Another pull request milestone merged. You approved your own taste again, and no one stopped you."
+flavor = { type = "llm", prompt = "Rewrite this achievement announcement for this specific unlock, in the same voice: \"{fallback}\". Use the concrete details. Context: {context}" }

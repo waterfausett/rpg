@@ -1,0 +1,8 @@
+id = "new_year_same_bugs"
+name = "New Year, Same Bugs"
+tier = "bronze"
+trigger = ["commit"]
+counter = { type = "first", scope = "year" }
+repeatable = true
+hint = "A fresh calendar, an old codebase."
+fallback = "The first commit of the new year. New year, new you, same bugs."

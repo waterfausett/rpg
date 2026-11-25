@@ -1,0 +1,12 @@
+id = "professional_critic"
+name = "Professional Critic"
+trigger = ["review_submitted"]
+counter = { type = "lifetime" }
+tiers = [
+  { tier = "bronze", at = 25 },
+  { tier = "silver", at = 250 },
+  { tier = "gold", at = 1000 },
+]
+hint = "Read other people's code. Then say something about it."
+fallback = "A review milestone reached. You have opinions about other people's code, and apparently the stamina to share them."
+flavor = { type = "llm", prompt = "Rewrite this achievement announcement for this specific unlock, in the same voice: \"{fallback}\". Use the concrete details. Context: {context}" }

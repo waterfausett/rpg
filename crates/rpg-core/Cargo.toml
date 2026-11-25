@@ -17,6 +17,7 @@ which = "6"
 wait-timeout = "0.2"
 clap = { version = "4", features = ["derive"] }
 globset = "0.4"
+regex = "1"
 
 [dev-dependencies]
 tempfile = "3"

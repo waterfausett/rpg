@@ -1,0 +1,12 @@
+id = "polyglot"
+name = "Polyglot"
+tier = "silver"
+trigger = ["commit"]
+filter = { min_extensions = 4 }
+counter = { type = "each" }
+repeatable = true
+cooldown_hours = 72
+announce = "toast"
+hint = "Touch four kinds of file in one commit."
+fallback = "Four different file extensions in one commit. A rust file, a script, a config and some docs walk into a diff."
+flavor = { type = "llm", prompt = "Rewrite this achievement announcement for this specific unlock, in the same voice: \"{fallback}\". Use the concrete details. Context: {context}" }

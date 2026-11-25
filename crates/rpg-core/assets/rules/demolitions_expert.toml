@@ -2,7 +2,7 @@ id = "demolitions_expert"
 name = "Demolitions Expert"
 tier = "silver"
 trigger = ["pr_merged"]
-detector = { type = "diff_size", min_lines = 100, min_delete_ratio = 0.8 }
+filter = { lines = { min = 100, min_delete_ratio = 0.8 } }
 repeatable = true
 cooldown_hours = 72
 hint = "Deleting code is the most productive thing you can do. Allegedly."

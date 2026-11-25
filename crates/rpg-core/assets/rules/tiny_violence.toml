@@ -1,0 +1,9 @@
+id = "tiny_violence"
+name = "Tiny Violence"
+tier = "bronze"
+trigger = ["pr_merged"]
+filter = { lines = { min = 1, max = 4 } }
+counter = { type = "each" }
+repeatable = true
+hint = "Merge a pull request with almost nothing in it."
+fallback = "A merged pull request of four changed lines or fewer. Three days of review for a one-character fix."

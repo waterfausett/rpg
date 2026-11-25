@@ -1,0 +1,9 @@
+id = "read_only_friday"
+name = "Read-Only Friday"
+tier = "bronze"
+trigger = ["push"]
+filter = { branch = ["main", "master"], weekdays = ["fri"], hours = { start = 16, end = 24 } }
+repeatable = true
+cooldown_hours = 168
+hint = "There is a reason people say never to do this on a Friday."
+fallback = "A push to main on a Friday evening. Bold. The on-call engineer has been warned."

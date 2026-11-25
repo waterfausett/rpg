@@ -1,0 +1,12 @@
+id = "committed"
+name = "Committed"
+trigger = ["commit"]
+counter = { type = "lifetime" }
+tiers = [
+  { tier = "bronze", at = 100 },
+  { tier = "silver", at = 1000 },
+  { tier = "gold", at = 5000 },
+]
+hint = "Keep showing up. The git log is keeping count."
+fallback = "Another milestone of commits. Somewhere a version-control system is quietly sobbing."
+flavor = { type = "llm", prompt = "Rewrite this achievement announcement for this specific unlock, in the same voice: \"{fallback}\". Use the concrete details. Context: {context}" }

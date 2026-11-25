@@ -1,0 +1,9 @@
+id = "groundhog_day"
+name = "Groundhog Day"
+tier = "silver"
+trigger = ["commit", "push", "pr_opened", "pr_merged", "review_submitted", "claude_session_end"]
+counter = { type = "meta", of = "same_unlock" }
+at = 10
+hint = "Same achievement. Again. And again."
+fallback = "The same achievement unlocked ten times. You have found a loop and you are committed to it."
+flavor = { type = "llm", prompt = "Rewrite this achievement announcement for this specific unlock, in the same voice: \"{fallback}\". Use the concrete details. Context: {context}" }

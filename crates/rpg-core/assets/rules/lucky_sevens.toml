@@ -1,0 +1,9 @@
+id = "lucky_sevens"
+name = "Lucky Sevens"
+tier = "bronze"
+trigger = ["commit"]
+filter = { hash = '777' }
+counter = { type = "each" }
+repeatable = true
+hint = "Three of a kind, hexadecimal edition."
+fallback = "Three sevens in a commit hash. Go buy a lottery ticket. Do not commit it."

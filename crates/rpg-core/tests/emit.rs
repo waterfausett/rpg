@@ -1,4 +1,4 @@
-use rpg_core::emit::commit_event;
+use rpg_core::emit::{commit_event, push_event};
 use rpg_core::event::{Event, EventKind, Source};
 use rpg_core::inbox;
 use std::path::Path;
@@ -110,4 +110,38 @@ fn commit_event_records_new_path_for_renames_and_unquoted_unicode() {
     assert!(paths.contains(&"dir/new/f.txt".to_string()), "{paths:?}");
     assert!(paths.contains(&"r\u{e9}nomm\u{e9}.txt".to_string()), "{paths:?}");
     assert!(paths.iter().all(|p| !p.contains("=>") && !p.contains('"')), "{paths:?}");
+}
+
+#[test]
+fn commit_event_has_message() {
+    let d = temp_repo();
+    let e = commit_event(d.path(), "HEAD").unwrap();
+    assert_eq!(e.data["message"], "init");
+    assert!(e.data["github_repo"].is_null()); // no origin
+}
+
+#[test]
+fn push_event_without_origin_has_null_repo() {
+    let d = temp_repo();
+    let e = push_event(d.path(), "origin").unwrap();
+    assert!(e.data["github_repo"].is_null());
+}
+
+#[test]
+fn github_repo_parsing() {
+    use rpg_core::emit::github_repo_from_url as p;
+    assert_eq!(p("https://github.com/acme/app.git").as_deref(), Some("acme/app"));
+    assert_eq!(p("git@github.com:acme/app.git").as_deref(), Some("acme/app"));
+    assert_eq!(p("https://github.com/acme/app").as_deref(), Some("acme/app"));
+    assert_eq!(p("https://gitlab.com/acme/app.git"), None);
+}
+
+#[test]
+fn events_record_github_origin() {
+    let d = temp_repo();
+    git(d.path(), &["remote", "add", "origin", "https://github.com/acme/app.git"]);
+    let c = commit_event(d.path(), "HEAD").unwrap();
+    assert_eq!(c.data["github_repo"], "acme/app");
+    let p = push_event(d.path(), "origin").unwrap();
+    assert_eq!(p.data["github_repo"], "acme/app");
 }

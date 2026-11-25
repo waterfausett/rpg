@@ -24,7 +24,7 @@ Output: `target/release/rpg-app.exe` plus installers in `target/release/bundle/{
    - `rpg install-hooks` (hooks then call `rpg.exe` instead of the app)
 
    This sets a global git `core.hooksPath` to rpg's shim folder and adds `SessionStart`/`SessionEnd` entries to `~/.claude/settings.json` (a backup is written next to it as `settings.json.rpg-backup`, and your other settings are kept). Every standard git hook except `reference-transaction` and `post-index-change` (see Known limitations) gets a pass-through shim, so a repo's own `.git/hooks/*` keep working.
-3. Commit something. A `+10 exp · commit` pop-up appears bottom-right; unlocks show a gold banner top-center.
+3. Commit something. A `+10 exp · commit` pop-up appears bottom-right; unlocks show a gold banner top-center. To write your own achievements, see the [rule format reference](docs/rules.md).
 
 Tray menu: Open character sheet, Mute sounds, Do not disturb, Open rules folder, Install hooks, Uninstall hooks, Check for updates, Quit. Only one app instance runs at a time. Hooks never fail a git command; errors go to `rpg.log`.
 
@@ -82,13 +82,14 @@ Rules are TOML files in `rules/` (hot-reloaded; a broken file is skipped with a 
 ```toml
 id = "my_rule"                 # unique; first file wins on duplicates
 name = "Midnight Oil"          # shown once unlocked ("???" before)
-tier = "silver"                # bronze | silver | gold (default xp 250 / 500 / 1000)
+tier = "silver"                # bronze | silver | gold | platinum (default xp 250 / 500 / 1000 / 2000)
 xp = 600                       # optional; overrides the tier default
 fallback = "Static text shown when there is no LLM flavor."
 hint = "Shown while still locked."          # optional
 trigger = ["commit"]           # commit, push, pr_opened, pr_merged,
                                # review_submitted, claude_session_start, claude_session_end
-detector = { type = "time_of_day", start_hour = 0, end_hour = 4 }
+filter = { hours = { start = 0, end = 4 } }   # optional; which events count
+counter = { type = "each" }    # optional, default "each"; what to do with them
 repeatable = true              # default false (unlock once ever)
 cooldown_hours = 24            # optional; min hours between repeat unlocks
 flavor = { type = "llm", prompt = "Rewrite \"{fallback}\" for the {name} achievement. Context: {context}" }
@@ -96,18 +97,21 @@ flavor = { type = "llm", prompt = "Rewrite \"{fallback}\" for the {name} achieve
 
 `flavor` is optional and defaults to `{ type = "static" }` (always show `fallback`). With `type = "llm"`, `{fallback}`, `{name}` and `{context}` in `prompt` are substituted. If the LLM is off, unavailable or slower than `llm.timeout_secs`, `fallback` is used.
 
-Detectors (set `type` plus the params):
+Filters used by the starter rules: `hours = { start, end }` (local, end exclusive, may wrap midnight) and `lines = { min, max, min_delete_ratio }` (commit or PR size and deletion share).
+
+Counters (set `type` plus the params):
 
 | type | params | fires when |
 | --- | --- | --- |
+| `each` | | every matching event |
 | `first` | `scope = "ever"` or `"repo"` | first event ever / first commit in this repo |
-| `count_in_window` | `count`, `window = "day"` | N matching events in the local day |
+| `per_day` | `at` | the `at`-th event in the local day |
 | `personal_record` | `metric = "prs_merged_per_day"`, `"commits_per_day"` or `"pr_deletions"` | a new personal best |
 | `file_age` | `min_years` | a commit touches a file untouched for that long |
-| `time_of_day` | `start_hour`, `end_hour` (local, end exclusive) | event falls in that window |
-| `diff_size` | any of `min_lines`, `max_lines`, `min_delete_ratio` | commit size / deletion share matches |
 
-The starter rules in `rules/` (copied from `crates/rpg-core/assets/rules/` on first run) are working examples.
+**Upgrading from 0.2:** the old `detector = {...}` field is gone, and a rule file that still has it fails to load. After upgrading to this version, empty your `rules/` folder, `skills/` included; the app reseeds it on the next start (move custom rules or skills aside first and copy them back after).
+
+The starter rules in `rules/` (copied from `crates/rpg-core/assets/rules/` on first run; starters added by later versions are copied on upgrade, and one you delete stays deleted; a `rules/` folder with no rule files left in it is reseeded in full on the next start) are working examples.
 
 ## Skills
 
@@ -192,7 +196,7 @@ include = ['C:/work', 'octo/*']                # optional: only these count
 
 - Everything is stored locally. The character sheet listens on `127.0.0.1` only and rejects requests with any other `Host` header.
 - Update checks download `latest.json` (and, when you install, the installer) from this repo's GitHub releases. They send nothing about you beyond the request itself. Set `updates.check_hours = 0` to stop background checks.
-- The only data that leaves your machine is the optional flavor call (`claude -p --model haiku`), and only for rules with `flavor = { type = "llm" }`. It sends your rule's prompt plus: event type, repo name (never the local path), branch, local time, the detector's findings (e.g. file path, file age, line counts) and unlock counts. Never code or diffs. It runs in an empty directory with no tools, MCP servers or settings. Set `llm.enabled = false` to turn it off.
+- The only data that leaves your machine is the optional flavor call (`claude -p --model haiku`), and only for rules with `flavor = { type = "llm" }`. It sends your rule's prompt plus: event type, repo name (never the local path), branch, local time, the counter's findings (e.g. file path, file age, line counts) and unlock counts. Never code or diffs. It runs in an empty directory with no tools, MCP servers or settings. Set `llm.enabled = false` to turn it off.
 - GitHub data comes from your own logged-in `gh` CLI (read-only queries). Backfilled history seeds records only: it grants no XP or achievements.
 
 ## Known limitations

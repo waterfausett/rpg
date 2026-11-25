@@ -1,0 +1,9 @@
+id = "necromancer"
+name = "Necromancer"
+tier = "silver"
+trigger = ["commit"]
+counter = { type = "gap_days", min = 365, scope = "repo" }
+repeatable = true
+hint = "Some repos are only sleeping."
+fallback = "A commit to a repo that sat untouched for a year. You dug it up, and now it is your problem again."
+flavor = { type = "llm", prompt = "Rewrite this achievement announcement for this specific unlock, in the same voice: \"{fallback}\". Use the concrete details. Context: {context}" }

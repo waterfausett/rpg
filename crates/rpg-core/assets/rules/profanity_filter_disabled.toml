@@ -1,0 +1,11 @@
+id = "profanity_filter_disabled"
+name = "Profanity Filter Disabled"
+tier = "bronze"
+trigger = ["commit"]
+filter = { message = '\b(damn|crap|shit|fuck|bitch|ass|bastard|piss)\b' }
+counter = { type = "each" }
+repeatable = true
+cooldown_hours = 168
+hidden = true
+hint = "Say what you really think. In the commit log."
+fallback = "Colorful language in a commit message. The log is permanent. HR can read the log."

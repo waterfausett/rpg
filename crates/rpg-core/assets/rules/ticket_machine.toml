@@ -1,0 +1,13 @@
+id = "ticket_machine"
+name = "Ticket Machine"
+trigger = ["commit"]
+filter = { message = '#\d+' }
+counter = { type = "lifetime" }
+tiers = [
+  { tier = "bronze", at = 10 },
+  { tier = "silver", at = 100 },
+  { tier = "gold", at = 500 },
+]
+hint = "Reference an issue number in your commit message."
+fallback = "Another milestone of commits that cite a ticket. Someone in project management is quietly proud of you."
+flavor = { type = "llm", prompt = "Rewrite this achievement announcement for this specific unlock, in the same voice: \"{fallback}\". Use the concrete details. Context: {context}" }

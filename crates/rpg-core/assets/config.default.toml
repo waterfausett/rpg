@@ -26,6 +26,13 @@ model = "haiku"
 [sound]
 volume = 0.8
 
+# How an unlock is announced when its rule doesn't say: "banner" or "toast" (a small pop-up, no sound).
+[announce]
+bronze = "toast"
+silver = "banner"
+gold = "banner"
+platinum = "banner"
+
 [site]
 port = 47474
 

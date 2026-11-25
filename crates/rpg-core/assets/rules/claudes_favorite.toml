@@ -1,0 +1,13 @@
+id = "claudes_favorite"
+name = "Claude's Favorite"
+trigger = ["claude_session_end"]
+filter = { session_minutes = { min = 0 } }
+counter = { type = "lifetime" }
+tiers = [
+  { tier = "bronze", at = 50 },
+  { tier = "silver", at = 500 },
+  { tier = "gold", at = 2000 },
+]
+hint = "Spend enough sessions with Claude and it will start to feel mutual."
+fallback = "Another milestone of finished Claude sessions. Claude would say it is flattered, but it has no memory of you."
+flavor = { type = "llm", prompt = "Rewrite this achievement announcement for this specific unlock, in the same voice: \"{fallback}\". Use the concrete details. Context: {context}" }

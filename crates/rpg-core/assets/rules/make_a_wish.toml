@@ -1,0 +1,9 @@
+id = "make_a_wish"
+name = "Make a Wish"
+tier = "bronze"
+trigger = ["commit"]
+filter = { time = "11:11" }
+repeatable = true
+cooldown_hours = 168
+hint = "Some minutes are worth a wish."
+fallback = "A commit at 11:11. Whatever you wished for, the build is still red."

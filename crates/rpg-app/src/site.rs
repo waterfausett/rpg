@@ -8,8 +8,10 @@ use axum::routing::get;
 use axum::{Json, Router};
 use rpg_core::config::Config;
 use rpg_core::event::EventKind;
-use rpg_core::rules::Rules;
-use rpg_core::store::{EventRow, Store};
+use chrono::Utc;
+use rpg_core::counters;
+use rpg_core::rules::{Counter, Rule, Rules, Tier};
+use rpg_core::store::{EventRow, Store, UnlockRow};
 use rpg_core::xp;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -85,15 +87,6 @@ fn event_json(r: &EventRow) -> Value {
     })
 }
 
-fn tier_str(t: rpg_core::rules::Tier) -> &'static str {
-    use rpg_core::rules::Tier;
-    match t {
-        Tier::Bronze => "bronze",
-        Tier::Silver => "silver",
-        Tier::Gold => "gold",
-    }
-}
-
 async fn character(State(st): State<SiteState>) -> Result<Json<Value>, ApiError> {
     let cfg = st.cfg.read().unwrap_or_else(|p| p.into_inner()).clone();
     let total = st.store.total_xp().map_err(internal)?;
@@ -134,38 +127,98 @@ fn skills_json(st: &SiteState, cfg: &Config) -> Result<Vec<Value>, ApiError> {
         .collect())
 }
 
+/// An unlock key belongs to a rule: the rule's own id, or one of its step ids (`id.…`).
+fn owns(rule: &Rule, unlock_key: &str) -> bool {
+    unlock_key == rule.id || unlock_key.strip_prefix(rule.id.as_str()).is_some_and(|rest| rest.starts_with('.'))
+}
+
+/// One achievements entry. `key` maps a step's tier to its unlock key; `name` is shown once
+/// any step is unlocked. Ladders list their steps; locked steps past the next one hide `at`.
+fn achievement_json(
+    r: &Rule,
+    id: &str,
+    key: impl Fn(Tier) -> String,
+    name: &str,
+    progress: Option<u64>,
+    unlocks: &[UnlockRow],
+) -> Value {
+    let mut steps = Vec::new();
+    let (mut count, mut tier, mut next_shown) = (0, r.steps[0].tier, false);
+    for step in &r.steps {
+        let k = key(step.tier);
+        let rows: Vec<&UnlockRow> = unlocks.iter().filter(|u| u.rule_id == k).collect(); // newest first
+        let unlocked = !rows.is_empty();
+        count += rows.len();
+        let at = if unlocked || !next_shown { json!(step.at) } else { json!(MASK) };
+        if unlocked {
+            tier = step.tier;
+        } else {
+            next_shown = true;
+        }
+        steps.push(json!({ "tier": step.tier.as_str(), "at": at, "unlocked": unlocked, "last_at": rows.first().map(|u| u.ts) }));
+    }
+    let keys: Vec<String> = r.steps.iter().map(|s| key(s.tier)).collect();
+    let latest = unlocks.iter().find(|u| keys.contains(&u.rule_id));
+    let unlocked = count > 0;
+    let mut v = json!({
+        "id": id,
+        "name": if unlocked { name } else { MASK },
+        "tier": tier.as_str(),
+        "unlocked": unlocked,
+        "count": count,
+        "last_at": latest.map(|u| u.ts),
+        "flavor_text_latest": latest.map(|u| u.flavor_text.clone().unwrap_or_else(|| r.fallback.clone())),
+        "hint": if unlocked { r.hint.clone() } else { Some(r.hint.clone().unwrap_or_else(|| MASK.into())) },
+        "ladder": r.ladder,
+        "progress": progress,
+        "enabled": r.enabled,
+    });
+    if r.ladder {
+        v["steps"] = Value::Array(steps);
+    }
+    v
+}
+
 async fn achievements(State(st): State<SiteState>) -> Result<Json<Value>, ApiError> {
     let rules = st.rules.read().unwrap_or_else(|p| p.into_inner()).clone();
+    let cfg = st.cfg.read().unwrap_or_else(|p| p.into_inner()).clone();
+    let tz = crate::runtime::local_offset(Utc::now());
     let unlocks = st.store.list_unlocks().map_err(internal)?; // newest first
+    let skills = skills_json(&st, &cfg)?;
     let mut out = Vec::new();
+    let mut hidden_remaining = 0;
     for r in &rules.list {
-        let count = st.store.unlock_count(&r.id).map_err(internal)?;
-        let last = unlocks.iter().find(|u| u.rule_id == r.id);
-        let unlocked = count > 0;
-        out.push(json!({
-            "id": r.id,
-            "name": if unlocked { r.name.as_str() } else { MASK },
-            "tier": tier_str(r.tier),
-            "unlocked": unlocked,
-            "count": count,
-            "last_at": st.store.last_unlock_at(&r.id).map_err(internal)?,
-            "flavor_text_latest": last.map(|u| u.flavor_text.clone().unwrap_or_else(|| r.fallback.clone())),
-            "hint": if unlocked { r.hint.clone() } else { Some(r.hint.clone().unwrap_or_else(|| MASK.into())) },
-        }));
+        if r.hidden && !unlocks.iter().any(|u| owns(r, &u.rule_id)) {
+            hidden_remaining += 1;
+            continue;
+        }
+        if matches!(r.counter, Counter::SkillLevel) && !skills.is_empty() {
+            // One entry per skill with XP; its progress is the skill's level.
+            for s in &skills {
+                let (sid, sname) = (s["id"].as_str().unwrap_or_default(), s["name"].as_str().unwrap_or_default());
+                let key = |t: Tier| format!("{}.{}.{}", r.id, sid, t.as_str());
+                let name = format!("{}: {}", r.name, sname);
+                out.push(achievement_json(r, &format!("{}.{sid}", r.id), key, &name, s["level"].as_u64(), &unlocks));
+            }
+        } else {
+            let progress = counters::progress(r, &st.store, tz).map_err(internal)?;
+            out.push(achievement_json(r, &r.id, |t| r.step_id(t), &r.name, progress, &unlocks));
+        }
     }
     // Unlocks whose rule was since removed or renamed stay visible, using the stored row.
     let mut seen = std::collections::HashSet::new();
     for u in &unlocks {
-        if rules.list.iter().any(|r| r.id == u.rule_id) || !seen.insert(u.rule_id.as_str()) {
+        if rules.list.iter().any(|r| owns(r, &u.rule_id)) || !seen.insert(u.rule_id.as_str()) {
             continue;
         }
         let count = unlocks.iter().filter(|x| x.rule_id == u.rule_id).count();
         out.push(json!({
             "id": u.rule_id, "name": u.name, "tier": u.tier, "unlocked": true, "count": count,
             "last_at": u.ts, "flavor_text_latest": u.flavor_text, "hint": Value::Null,
+            "ladder": false, "progress": Value::Null, "enabled": true,
         }));
     }
-    Ok(Json(Value::Array(out)))
+    Ok(Json(json!({ "achievements": out, "hidden_remaining": hidden_remaining })))
 }
 
 #[derive(Deserialize)]
@@ -254,7 +307,7 @@ tier = "bronze"
 fallback = "You merged."
 hint = "Merge something."
 trigger = ["pr_merged"]
-detector = { type = "first", scope = "ever" }
+counter = { type = "first", scope = "ever" }
 "#;
 
     #[tokio::test]
@@ -330,13 +383,17 @@ globs = [\"*.md\"]
     async fn locked_achievements_masked() {
         let st = state_with(Rules { list: vec![parse_rule(RULE).unwrap()], ..Default::default() });
         let v = get_json(&st, "/api/achievements").await;
-        let a = &v.as_array().unwrap()[0];
+        assert_eq!(v["hidden_remaining"], 0);
+        let a = &v["achievements"].as_array().unwrap()[0];
         assert_eq!(a["id"], "first-merge");
         assert_eq!(a["name"], "???");
         assert_eq!(a["unlocked"], false);
         assert_eq!(a["count"], 0);
         assert_eq!(a["hint"], "Merge something.");
         assert!(a["flavor_text_latest"].is_null());
+        assert_eq!((a["ladder"].clone(), a["enabled"].clone()), (json!(false), json!(true)));
+        assert!(a["progress"].is_null(), "moment counters have no progress");
+        assert!(a.get("steps").is_none(), "steps are for ladders only");
     }
 
     #[tokio::test]
@@ -344,7 +401,7 @@ globs = [\"*.md\"]
         let st = state_with(Rules { list: vec![parse_rule(RULE).unwrap()], ..Default::default() });
         process(&st, &ev("m1", EventKind::PrMerged));
         let v = get_json(&st, "/api/achievements").await;
-        let a = &v[0];
+        let a = &v["achievements"][0];
         assert_eq!(a["name"], "Merge Maestro");
         assert_eq!(a["unlocked"], true);
         assert_eq!(a["count"], 1);
@@ -352,7 +409,7 @@ globs = [\"*.md\"]
         assert_eq!(a["flavor_text_latest"], "You merged.", "falls back to the rule's fallback");
         let id = st.store.list_unlocks().unwrap()[0].id;
         st.store.set_unlock_flavor(id, "LLM words").unwrap();
-        assert_eq!(get_json(&st, "/api/achievements").await[0]["flavor_text_latest"], "LLM words");
+        assert_eq!(get_json(&st, "/api/achievements").await["achievements"][0]["flavor_text_latest"], "LLM words");
     }
 
     #[tokio::test]
@@ -369,10 +426,160 @@ globs = [\"*.md\"]
             })
             .unwrap();
         let v = get_json(&st, "/api/achievements").await;
+        let v = &v["achievements"];
         assert_eq!(v.as_array().unwrap().len(), 1);
         assert_eq!(v[0]["name"], "Old Glory");
         assert_eq!(v[0]["tier"], "gold");
         assert_eq!(v[0]["unlocked"], true);
+    }
+
+    const LADDER: &str = r#"
+id = "committed"
+name = "Committed"
+trigger = ["commit"]
+counter = { type = "lifetime" }
+tiers = [
+  { tier = "bronze", at = 1 },
+  { tier = "silver", at = 3 },
+  { tier = "gold", at = 10 },
+  { tier = "platinum", at = 100 },
+]
+fallback = "You commit."
+"#;
+
+    fn unlock(st: &SiteState, rule_id: &str, tier: &str) {
+        st.store
+            .insert_unlock(&rpg_core::store::NewUnlock {
+                rule_id: rule_id.into(),
+                name: rule_id.into(),
+                tier: tier.into(),
+                xp: 0,
+                context: json!({}),
+                ts: Utc::now(),
+            })
+            .unwrap();
+    }
+
+    fn ids(v: &Value) -> Vec<String> {
+        v["achievements"].as_array().unwrap().iter().map(|a| a["id"].as_str().unwrap().to_string()).collect()
+    }
+
+    #[tokio::test]
+    async fn ladder_entry_has_steps_and_progress() {
+        let st = state_with(Rules { list: vec![parse_rule(LADDER).unwrap()], ..Default::default() });
+        let v = get_json(&st, "/api/achievements").await;
+        let a = &v["achievements"][0];
+        assert_eq!((a["name"].clone(), a["unlocked"].clone(), a["progress"].clone()), (json!("???"), json!(false), json!(0)));
+        assert_eq!(a["tier"], "bronze", "nothing unlocked: the first step");
+        assert_eq!(a["steps"][0]["at"], 1);
+        assert_eq!(a["steps"][1]["at"], "???");
+        process(&st, &ev("c1", EventKind::Commit));
+        process(&st, &ev("c2", EventKind::Commit));
+        let v = get_json(&st, "/api/achievements").await;
+        let a = &v["achievements"][0];
+        assert_eq!(a["id"], "committed");
+        assert_eq!(a["name"], "Committed");
+        assert_eq!(a["ladder"], true);
+        assert_eq!(a["enabled"], true);
+        assert_eq!(a["unlocked"], true);
+        assert_eq!(a["tier"], "bronze", "the highest unlocked step");
+        assert_eq!(a["count"], 1);
+        assert_eq!(a["progress"], 2);
+        assert!(a["last_at"].is_string());
+        assert_eq!(a["flavor_text_latest"], "You commit.");
+        let steps = a["steps"].as_array().unwrap();
+        let tiers: Vec<&str> = steps.iter().map(|s| s["tier"].as_str().unwrap()).collect();
+        assert_eq!(tiers, vec!["bronze", "silver", "gold", "platinum"]);
+        let ats: Vec<Value> = steps.iter().map(|s| s["at"].clone()).collect();
+        assert_eq!(ats, vec![json!(1), json!(3), json!("???"), json!("???")], "only the next locked step shows its threshold");
+        let unlocked: Vec<bool> = steps.iter().map(|s| s["unlocked"].as_bool().unwrap()).collect();
+        assert_eq!(unlocked, vec![true, false, false, false]);
+        assert!(steps[0]["last_at"].is_string());
+        assert!(steps[1]["last_at"].is_null());
+    }
+
+    #[tokio::test]
+    async fn step_unlocks_are_not_orphans() {
+        let st = state_with(Rules { list: vec![parse_rule(LADDER).unwrap()], ..Default::default() });
+        process(&st, &ev("c1", EventKind::Commit));
+        unlock(&st, "committed.silver", "silver");
+        unlock(&st, "committedx", "gold");
+        let v = get_json(&st, "/api/achievements").await;
+        assert_eq!(ids(&v), vec!["committed", "committedx"], "a shared prefix without the dot is still an orphan");
+        assert_eq!(v["achievements"][0]["tier"], "silver");
+        assert_eq!(v["achievements"][0]["count"], 2);
+    }
+
+    #[tokio::test]
+    async fn disabled_rule_shown_off() {
+        let off = format!("{RULE}enabled = false
+");
+        let st = state_with(Rules { list: vec![parse_rule(&off).unwrap()], ..Default::default() });
+        let v = get_json(&st, "/api/achievements").await;
+        let a = &v["achievements"].as_array().unwrap()[0];
+        assert_eq!((a["id"].clone(), a["enabled"].clone()), (json!("first-merge"), json!(false)));
+    }
+
+    #[tokio::test]
+    async fn hidden_locked_rule_omitted_and_counted() {
+        let hidden = RULE.replace(r#"id = "first-merge""#, "id = \"secret\"\nhidden = true");
+        let st = state_with(Rules {
+            list: vec![parse_rule(RULE).unwrap(), parse_rule(&hidden).unwrap(), parse_rule(&format!("{LADDER}hidden = true\n")).unwrap()],
+            ..Default::default()
+        });
+        let v = get_json(&st, "/api/achievements").await;
+        assert_eq!(ids(&v), vec!["first-merge"]);
+        assert_eq!(v["hidden_remaining"], 2);
+        process(&st, &ev("m1", EventKind::PrMerged));
+        process(&st, &ev("c1", EventKind::Commit));
+        let v = get_json(&st, "/api/achievements").await;
+        assert_eq!(ids(&v), vec!["first-merge", "secret", "committed"]);
+        assert_eq!(v["hidden_remaining"], 0);
+        assert_eq!(v["achievements"][1]["name"], "Merge Maestro");
+    }
+
+    #[tokio::test]
+    async fn skill_ladder_one_entry_per_skill() {
+        let rule = parse_rule(
+            r#"
+id = "skill_master"
+name = "Skill Master"
+trigger = ["commit"]
+counter = { type = "skill_level" }
+tiers = [
+  { tier = "bronze", at = 2 },
+  { tier = "silver", at = 5 },
+  { tier = "gold", at = 9 },
+]
+fallback = "A skill, levelled."
+"#,
+        )
+        .unwrap();
+        let skill = |s: &str| rpg_core::skills::parse_skill(s).unwrap();
+        let rules = Rules {
+            list: vec![rule],
+            skills: vec![
+                skill("id = \"rust\"\nname = \"Rust\"\nglobs = [\"*.rs\"]\nxp = 150\n"),
+                skill("id = \"docs\"\nname = \"Scribe\"\nglobs = [\"*.md\"]\n"),
+                skill("id = \"idle\"\nname = \"Idle\"\nglobs = [\"*.zz\"]\n"),
+            ],
+        };
+        let st = state_with(rules);
+        let mut c = ev("c1", EventKind::Commit);
+        c.data = json!({ "files": [{ "path": "src/main.rs" }, { "path": "README.md" }] });
+        process(&st, &c);
+        let v = get_json(&st, "/api/achievements").await;
+        assert_eq!(ids(&v), vec!["skill_master.rust", "skill_master.docs"], "skills with xp, biggest first; no orphans");
+        let (rust, docs) = (&v["achievements"][0], &v["achievements"][1]);
+        assert_eq!(rust["name"], "Skill Master: Rust");
+        assert_eq!((rust["progress"].clone(), rust["unlocked"].clone(), rust["tier"].clone()), (json!(2), json!(true), json!("bronze")));
+        assert_eq!((rust["ladder"].clone(), rust["count"].clone()), (json!(true), json!(1)));
+        let steps = rust["steps"].as_array().unwrap();
+        assert_eq!(steps[0]["unlocked"], true);
+        assert_eq!((steps[1]["at"].clone(), steps[2]["at"].clone()), (json!(5), json!("???")));
+        assert_eq!(docs["name"], "???");
+        assert_eq!((docs["progress"].clone(), docs["unlocked"].clone(), docs["count"].clone()), (json!(1), json!(false), json!(0)));
+        assert_eq!(docs["steps"][0]["at"], 2);
     }
 
     #[tokio::test]

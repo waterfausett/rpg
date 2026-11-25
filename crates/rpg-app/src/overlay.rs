@@ -44,6 +44,8 @@ struct ToastPayload {
     label: String,
     notice: bool,
     skill: bool,
+    /// Tier label of an achievement toast ("Bronze"...).
+    tier: Option<&'static str>,
 }
 
 #[derive(Deserialize)]
@@ -259,7 +261,7 @@ fn pump(inner: &Arc<Inner>) {
 fn show_toasts(inner: &Arc<Inner>, f: &mut Flow, toasts: Vec<Toast>) {
     let Some(win) = inner.window(TOAST) else { return };
     let _ = win.show();
-    let payload: Vec<ToastPayload> = toasts.into_iter().map(|t| ToastPayload { amount: t.amount, label: t.label, notice: t.notice, skill: t.skill }).collect();
+    let payload: Vec<ToastPayload> = toasts.into_iter().map(|t| ToastPayload { amount: t.amount, label: t.label, notice: t.notice, skill: t.skill, tier: t.tier.map(|t| t.label()) }).collect();
     if let Err(e) = inner.app.emit_to(TOAST, "toast", payload) {
         log(&inner.state.paths, &format!("emitting toast failed: {e}"));
     }
@@ -329,7 +331,7 @@ fn payload(id: u64, b: &Banner) -> BannerPayload {
         name: b.name.clone(),
         text: b.text.clone(),
         reward: b.reward.clone(),
-        tier: b.tier.map(tier_name),
+        tier: b.tier.map(Tier::label),
     }
 }
 
@@ -347,14 +349,6 @@ fn finish_banner(inner: &Arc<Inner>, id: u64) {
         }
     }
     pump(inner);
-}
-
-fn tier_name(t: Tier) -> &'static str {
-    match t {
-        Tier::Bronze => "Bronze",
-        Tier::Silver => "Silver",
-        Tier::Gold => "Gold",
-    }
 }
 
 /// The announcement line for an unlock that is about to get a banner: LLM text
@@ -410,7 +404,7 @@ id = "first_push"
 name = "First Push"
 tier = "bronze"
 trigger = ["push"]
-detector = {{ type = "first", scope = "ever" }}
+counter = {{ type = "first", scope = "ever" }}
 repeatable = false
 fallback = "STATIC"
 flavor = {flavor}

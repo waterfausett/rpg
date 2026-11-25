@@ -1,4 +1,5 @@
 use crate::event::normalize_repo;
+use crate::rules::{Announce, Tier};
 use anyhow::{Context, Result};
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use serde::Deserialize;
@@ -17,6 +18,34 @@ pub struct Config {
     pub site: SiteConfig,
     pub paths: PathFilter,
     pub updates: UpdatesConfig,
+    pub announce: AnnounceConfig,
+}
+
+/// How an unlock of each tier is announced when its rule doesn't say: a banner or just a toast.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct AnnounceConfig {
+    pub bronze: Announce,
+    pub silver: Announce,
+    pub gold: Announce,
+    pub platinum: Announce,
+}
+
+impl Default for AnnounceConfig {
+    fn default() -> Self {
+        Self { bronze: Announce::Toast, silver: Announce::Banner, gold: Announce::Banner, platinum: Announce::Banner }
+    }
+}
+
+impl AnnounceConfig {
+    pub fn for_tier(&self, tier: Tier) -> Announce {
+        match tier {
+            Tier::Bronze => self.bronze,
+            Tier::Silver => self.silver,
+            Tier::Gold => self.gold,
+            Tier::Platinum => self.platinum,
+        }
+    }
 }
 
 /// Background checks for a new release. The tray's "Check for updates" works either way.
@@ -240,6 +269,15 @@ mod tests {
         let c = Config::load(&f).unwrap();
         assert_eq!(c.xp.commit, 99);
         assert_eq!(c.xp.push, 25);
+    }
+
+    #[test]
+    fn announce_defaults() {
+        let c = Config::default();
+        let got: Vec<Announce> = [Tier::Bronze, Tier::Silver, Tier::Gold, Tier::Platinum].into_iter().map(|t| c.announce.for_tier(t)).collect();
+        assert_eq!(got, vec![Announce::Toast, Announce::Banner, Announce::Banner, Announce::Banner]);
+        let c: Config = toml::from_str("[announce]\nbronze = \"banner\"\ngold = \"toast\"\n").unwrap();
+        assert_eq!((c.announce.bronze, c.announce.silver, c.announce.gold), (Announce::Banner, Announce::Banner, Announce::Toast));
     }
 
     fn filter(toml_text: &str) -> PathFilter {

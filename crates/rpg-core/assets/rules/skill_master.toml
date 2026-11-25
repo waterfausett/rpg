@@ -1,0 +1,12 @@
+id = "skill_master"
+name = "Skill Master"
+trigger = ["commit", "pr_merged", "review_submitted", "claude_session_end"]
+counter = { type = "skill_level" }
+tiers = [
+  { tier = "bronze", at = 5 },
+  { tier = "silver", at = 10 },
+  { tier = "gold", at = 20 },
+]
+hint = "Level a skill up. Keep going."
+fallback = "A skill reached a new rank. Practice makes permanent, and at this point you have a lot of practice."
+flavor = { type = "llm", prompt = "Rewrite this achievement announcement for this specific unlock, in the same voice: \"{fallback}\". Use the concrete details. Context: {context}" }

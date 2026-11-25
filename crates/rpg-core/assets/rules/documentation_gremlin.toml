@@ -1,0 +1,10 @@
+id = "documentation_gremlin"
+name = "Documentation Gremlin"
+tier = "bronze"
+trigger = ["commit"]
+filter = { files_only = ['*.md', '*.mdx'] }
+counter = { type = "each" }
+repeatable = true
+cooldown_hours = 168
+hint = "Commit nothing but docs."
+fallback = "A commit of only markdown. Someone finally wrote it down. Someone should check it is still true."

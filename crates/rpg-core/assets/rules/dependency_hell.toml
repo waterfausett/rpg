@@ -1,0 +1,10 @@
+id = "dependency_hell"
+name = "Dependency Hell"
+tier = "bronze"
+trigger = ["commit"]
+filter = { files_only = ['Cargo.lock', 'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'poetry.lock', 'Gemfile.lock', 'go.sum', 'composer.lock', '*.lock'] }
+counter = { type = "each" }
+repeatable = true
+cooldown_hours = 168
+hint = "Commit only a lockfile."
+fallback = "A commit made entirely of lockfile. Ten thousand lines changed and you read none of them."

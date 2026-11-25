@@ -1,0 +1,10 @@
+id = "lawyered"
+name = "Lawyered"
+tier = "bronze"
+trigger = ["commit"]
+filter = { files_any = ['LICENSE', 'LICENSE.*', 'LICENSE-*', 'COPYING', 'COPYING.*', '**/LICENSE', '**/LICENSE.*', '**/LICENSE-*', '**/COPYING', '**/COPYING.*'] }
+counter = { type = "each" }
+repeatable = true
+announce = "banner"
+hint = "Touch the license file."
+fallback = "You modified a license file. Somewhere a lawyer felt a disturbance."

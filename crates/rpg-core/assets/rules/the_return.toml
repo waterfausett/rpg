@@ -1,0 +1,9 @@
+id = "the_return"
+name = "The Return"
+tier = "silver"
+trigger = ["commit"]
+counter = { type = "gap_days", min = 14, scope = "ever" }
+repeatable = true
+hint = "Absence makes the commit grow fonder."
+fallback = "First commit after two weeks of silence. The code missed you. The merge conflicts missed you more."
+flavor = { type = "llm", prompt = "Rewrite this achievement announcement for this specific unlock, in the same voice: \"{fallback}\". Use the concrete details. Context: {context}" }

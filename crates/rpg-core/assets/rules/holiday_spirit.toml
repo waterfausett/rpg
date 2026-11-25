@@ -1,0 +1,10 @@
+id = "holiday_spirit"
+name = "Holiday Spirit"
+tier = "silver"
+trigger = ["commit"]
+filter = { dates = ["12-25", "01-01"] }
+repeatable = true
+cooldown_hours = 24
+hint = "Some holidays are for family. You have other plans."
+fallback = "A commit on Christmas Day or New Year's Day. Your family has stopped asking when you will come downstairs."
+flavor = { type = "llm", prompt = "Rewrite this achievement announcement for this specific unlock, in the same voice: \"{fallback}\". Use the concrete details. Context: {context}" }

@@ -1,0 +1,12 @@
+id = "on_a_roll"
+name = "On a Roll"
+trigger = ["commit"]
+counter = { type = "streak_days" }
+tiers = [
+  { tier = "bronze", at = 5 },
+  { tier = "silver", at = 15 },
+  { tier = "gold", at = 30 },
+]
+hint = "Commit on consecutive days. No weekends off."
+fallback = "Another streak of days in a row with a commit. Touch grass. Then commit again tomorrow."
+flavor = { type = "llm", prompt = "Rewrite this achievement announcement for this specific unlock, in the same voice: \"{fallback}\". Use the concrete details. Context: {context}" }

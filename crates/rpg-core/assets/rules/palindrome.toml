@@ -1,0 +1,11 @@
+id = "palindrome"
+name = "Palindrome"
+tier = "gold"
+trigger = ["commit"]
+filter = { hash_palindrome = 7 }
+counter = { type = "each" }
+repeatable = true
+announce = "banner"
+hint = "Some commit hashes read the same both ways."
+fallback = "A commit hash whose first seven characters are a palindrome. The odds are about one in 4,096. You did not even notice."
+flavor = { type = "llm", prompt = "Rewrite this achievement announcement for this specific unlock, in the same voice: \"{fallback}\". Use the concrete details. Context: {context}" }

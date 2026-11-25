@@ -239,6 +239,48 @@ impl Store {
             .optional()?)
     }
 
+    /// Events of the given kinds with `ts >= since`, oldest first (`ts ASC, id ASC`), backfill
+    /// included. An empty `kinds` slice yields no events.
+    pub fn events_of(&self, kinds: &[EventKind], since: Option<DateTime<Utc>>) -> Result<Vec<Event>> {
+        if kinds.is_empty() {
+            return Ok(Vec::new());
+        }
+        let marks = vec!["?"; kinds.len()].join(",");
+        let mut args: Vec<String> = kinds.iter().map(|k| k.as_str().to_string()).collect();
+        let mut sql = format!("SELECT {EVENT_COLS} FROM events e WHERE e.kind IN ({marks})");
+        if let Some(t) = since {
+            sql.push_str(" AND e.ts >= ?");
+            args.push(ts_str(t));
+        }
+        sql.push_str(" ORDER BY e.ts ASC, e.id ASC");
+        let conn = self.conn();
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(args.iter()), event_from_row)?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// Up to `limit` events of `kind` (optionally only in `repo`) that sort strictly before
+    /// `(ts, id)` in `events_of` order, newest first (`ts DESC, id DESC`). Pass the last one
+    /// returned as the next `(ts, id)` to page further back.
+    pub fn events_before(
+        &self,
+        kind: EventKind,
+        repo: Option<&str>,
+        ts: DateTime<Utc>,
+        id: &str,
+        limit: u32,
+    ) -> Result<Vec<Event>> {
+        let sql = format!(
+            "SELECT {EVENT_COLS} FROM events e
+             WHERE e.kind=?1 AND (?2 IS NULL OR e.repo=?2) AND (e.ts<?3 OR (e.ts=?3 AND e.id<?4))
+             ORDER BY e.ts DESC, e.id DESC LIMIT ?5"
+        );
+        let conn = self.conn();
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(params![kind.as_str(), repo, ts_str(ts), id, limit as i64], event_from_row)?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
     pub fn add_xp(&self, event_id: &str, amount: u64, reason: &str, ts: DateTime<Utc>) -> Result<()> {
         self.conn().execute(
             "INSERT INTO xp_ledger(event_id, amount, reason, ts) VALUES(?1,?2,?3,?4)",
@@ -321,6 +363,14 @@ impl Store {
         let n: i64 =
             self.conn().query_row("SELECT COUNT(*) FROM unlocks WHERE rule_id=?1", params![rule_id], |r| r.get(0))?;
         Ok(n as u32)
+    }
+
+    /// How many times each stored `rule_id` was unlocked, ordered by `rule_id`.
+    pub fn unlock_counts(&self) -> Result<Vec<(String, u32)>> {
+        let conn = self.conn();
+        let mut st = conn.prepare("SELECT rule_id, COUNT(*) FROM unlocks GROUP BY rule_id ORDER BY rule_id")?;
+        let rows = st.query_map([], |r| Ok((r.get(0)?, r.get::<_, i64>(1)? as u32)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     pub fn last_unlock_at(&self, rule_id: &str) -> Result<Option<DateTime<Utc>>> {
@@ -428,6 +478,18 @@ mod tests {
     }
 
     #[test]
+    fn unlock_counts_per_rule_id() {
+        let s = Store::open_in_memory().unwrap();
+        assert!(s.unlock_counts().unwrap().is_empty());
+        for id in ["b", "a.silver", "b", "a.bronze"] {
+            let u = NewUnlock { rule_id: id.into(), name: id.into(), tier: "bronze".into(), xp: 0, context: serde_json::json!({}), ts: Utc::now() };
+            s.insert_unlock(&u).unwrap();
+        }
+        let want: Vec<(String, u32)> = vec![("a.bronze".into(), 1), ("a.silver".into(), 1), ("b".into(), 2)];
+        assert_eq!(s.unlock_counts().unwrap(), want);
+    }
+
+    #[test]
     fn duplicate_event_rejected() {
         let s = Store::open_in_memory().unwrap();
         let e = ev("a", EventKind::Commit, Utc::now());
@@ -487,6 +549,40 @@ mod tests {
         s.set_record("m", 3.5, Utc::now()).unwrap();
         s.set_record("m", 7.0, Utc::now()).unwrap();
         assert_eq!(s.record("m").unwrap(), Some(7.0));
+    }
+
+    #[test]
+    fn events_before_pages_backwards() {
+        let s = Store::open_in_memory().unwrap();
+        let t0 = Utc::now() - Duration::days(1);
+        let at = |m: i64| t0 + Duration::minutes(m);
+        for (id, m, repo) in [("a", 0, "r"), ("b", 1, "x"), ("c", 2, "r"), ("d2", 3, "r"), ("d1", 3, "r"), ("e", 4, "r")] {
+            let mut e = ev(id, EventKind::Commit, at(m));
+            e.repo = Some(repo.into());
+            s.insert_event(&e).unwrap();
+        }
+        s.insert_event(&ev("p", EventKind::Push, at(2))).unwrap();
+        let ids = |v: Vec<Event>| v.into_iter().map(|e| e.id).collect::<Vec<_>>();
+        // Strictly before (ts, id) = (3, "d2"), newest first, ties broken by id descending.
+        assert_eq!(ids(s.events_before(EventKind::Commit, None, at(3), "d2", 10).unwrap()), ["d1", "c", "b", "a"]);
+        assert_eq!(ids(s.events_before(EventKind::Commit, None, at(3), "d2", 2).unwrap()), ["d1", "c"], "limit");
+        assert_eq!(ids(s.events_before(EventKind::Commit, Some("r"), at(3), "d2", 10).unwrap()), ["d1", "c", "a"]);
+        assert_eq!(ids(s.events_before(EventKind::Commit, None, at(0), "a", 10).unwrap()), Vec::<String>::new());
+    }
+
+    #[test]
+    fn events_of_filters_and_orders() {
+        let s = Store::open_in_memory().unwrap();
+        let now = Utc::now();
+        s.insert_event(&ev("b", EventKind::Commit, now)).unwrap();
+        s.insert_event(&ev("a", EventKind::Commit, now)).unwrap();
+        s.insert_event(&ev("old", EventKind::Commit, now - chrono::Duration::days(2))).unwrap();
+        s.insert_event(&ev("s", EventKind::ClaudeSessionStart, now)).unwrap();
+        let all = s.events_of(&[EventKind::Commit], None).unwrap();
+        assert_eq!(all.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(), ["old", "a", "b"]);
+        let recent = s.events_of(&[EventKind::Commit], Some(now)).unwrap();
+        assert_eq!(recent.len(), 2);
+        assert!(s.events_of(&[], None).unwrap().is_empty());
     }
 
     #[test]

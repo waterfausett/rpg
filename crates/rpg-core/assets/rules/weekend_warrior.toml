@@ -1,0 +1,9 @@
+id = "weekend_warrior"
+name = "Weekend Warrior"
+tier = "bronze"
+trigger = ["commit"]
+filter = { weekdays = ["sat", "sun"] }
+repeatable = true
+cooldown_hours = 168
+hint = "The weekend is for rest. Allegedly."
+fallback = "A commit on a Saturday or Sunday. Your free time has been reclassified as unpaid overtime."

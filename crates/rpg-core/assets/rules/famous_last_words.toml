@@ -1,0 +1,12 @@
+id = "famous_last_words"
+name = "Famous Last Words"
+tier = "silver"
+trigger = ["commit"]
+filter = { message = '\b(final final|final fix|final version|fix(ed)? for real|should work( now)?|last fix|definitely works)\b' }
+counter = { type = "each" }
+repeatable = true
+cooldown_hours = 72
+announce = "toast"
+hint = "Promise the fix is final. Out loud. In writing."
+fallback = "A commit message swearing this one is final, for real, definitely works. The last person to say that was wrong too."
+flavor = { type = "llm", prompt = "Rewrite this achievement announcement for this specific unlock, in the same voice: \"{fallback}\". Use the concrete details. Context: {context}" }

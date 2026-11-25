@@ -1,0 +1,10 @@
+id = "thousand_year_branch"
+name = "Thousand Year Branch"
+tier = "silver"
+trigger = ["pr_merged"]
+filter = { pr_open_minutes = { min = 43200 } }
+counter = { type = "each" }
+repeatable = true
+hint = "Some PRs are patient."
+fallback = "A pull request merged after at least thirty days open. It outlived two sprints and one reorg."
+flavor = { type = "llm", prompt = "Rewrite this achievement announcement for this specific unlock, in the same voice: \"{fallback}\". Use the concrete details. Context: {context}" }

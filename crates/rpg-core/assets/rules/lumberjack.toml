@@ -1,0 +1,12 @@
+id = "lumberjack"
+name = "Lumberjack"
+trigger = ["commit"]
+counter = { type = "lifetime", sum = "lines_removed" }
+tiers = [
+  { tier = "bronze", at = 1000 },
+  { tier = "silver", at = 10000 },
+  { tier = "gold", at = 100000 },
+]
+hint = "Delete code. Lots of it."
+fallback = "Another heap of lines deleted. The best code is the code that no longer exists, and you are thorough."
+flavor = { type = "llm", prompt = "Rewrite this achievement announcement for this specific unlock, in the same voice: \"{fallback}\". Use the concrete details. Context: {context}" }
