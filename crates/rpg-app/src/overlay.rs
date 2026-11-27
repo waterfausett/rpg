@@ -8,6 +8,7 @@ use rpg_core::engine::{Outcome, Unlock};
 use rpg_core::event::Event;
 use rpg_core::flavor;
 use rpg_core::paths::Paths;
+use rpg_core::quests::state::{Offer, QuestView};
 use rpg_core::rules::Tier;
 use serde::{Deserialize, Serialize};
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -195,6 +196,24 @@ impl OutcomeSink for OverlaySink {
     fn present(&self, batch: Vec<(Event, Outcome)>, away: bool) {
         self.0.flow().presenter.push(&batch, away);
         pump(&self.0);
+    }
+
+    fn offers_allowed(&self) -> bool {
+        let t = &self.0.toggles;
+        !t.dnd.load(Ordering::Relaxed) && t.quests.load(Ordering::Relaxed)
+    }
+
+    // Stubs until the offer banner and quest pill exist (Tasks 6–7).
+    fn quest_offer(&self, id: u64, offer: Offer) {
+        log(&self.0.state.paths, &format!("quest offer {id}: {} ({} exp)", offer.quest_id, offer.reward));
+    }
+
+    fn quest_update(&self, view: QuestView) {
+        log(&self.0.state.paths, &format!("quest {} is {:?}", view.quest_id, view.status));
+    }
+
+    fn quest_offer_withdrawn(&self, id: u64) {
+        log(&self.0.state.paths, &format!("quest offer {id} withdrawn"));
     }
 }
 

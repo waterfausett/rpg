@@ -1,6 +1,6 @@
 //! Tray icon and menu.
 use crate::overlay::OverlaySink;
-use crate::runtime::{log, AppState};
+use crate::runtime::{log, AppState, Runtime};
 use crate::update::{self, Updates};
 use rpg_core::install;
 use rpg_core::paths::Paths;
@@ -11,16 +11,25 @@ use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Manager};
 
 /// User toggles from the tray (not persisted). The overlay reads `muted` when
-/// it plays a sound; `dnd` is pushed to the overlay when toggled.
+/// it plays a sound; `dnd` is pushed to the overlay when toggled. `quests` starts
+/// from `[quests] enabled` and is pushed to the runtime when toggled.
 #[derive(Default)]
 pub struct Toggles {
     pub muted: AtomicBool,
     pub dnd: AtomicBool,
+    pub quests: AtomicBool,
+}
+
+impl Toggles {
+    pub fn new(quests: bool) -> Toggles {
+        Toggles { quests: AtomicBool::new(quests), ..Toggles::default() }
+    }
 }
 
 const OPEN_SHEET: &str = "open_sheet";
 const MUTE: &str = "mute";
 const DND: &str = "dnd";
+const QUESTS: &str = "quests";
 const OPEN_RULES: &str = "open_rules";
 const INSTALL: &str = "install_hooks";
 const UNINSTALL: &str = "uninstall_hooks";
@@ -29,6 +38,8 @@ const QUIT: &str = "quit";
 pub fn build(app: &AppHandle, state: &AppState, toggles: Arc<Toggles>) -> tauri::Result<()> {
     let mute = CheckMenuItem::with_id(app, MUTE, "Mute sounds", true, false, None::<&str>)?;
     let dnd = CheckMenuItem::with_id(app, DND, "Do not disturb", true, false, None::<&str>)?;
+    let quests_on = toggles.quests.load(Ordering::Relaxed);
+    let quests = CheckMenuItem::with_id(app, QUESTS, "Quests", true, quests_on, None::<&str>)?;
     let update_item = MenuItem::with_id(app, update::MENU_ID, update::CHECK_LABEL, true, None::<&str>)?;
     let updates = Updates::new(state.clone(), update_item.clone());
     app.manage(updates.clone());
@@ -39,6 +50,7 @@ pub fn build(app: &AppHandle, state: &AppState, toggles: Arc<Toggles>) -> tauri:
             &PredefinedMenuItem::separator(app)?,
             &mute,
             &dnd,
+            &quests,
             &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(app, OPEN_RULES, "Open rules folder", true, None::<&str>)?,
             &MenuItem::with_id(app, INSTALL, "Install hooks", true, None::<&str>)?,
@@ -69,6 +81,13 @@ pub fn build(app: &AppHandle, state: &AppState, toggles: Arc<Toggles>) -> tauri:
                 toggles.dnd.store(on, Ordering::Relaxed);
                 if let Some(overlay) = app.try_state::<Arc<OverlaySink>>() {
                     overlay.set_dnd(on);
+                }
+            }
+            QUESTS => {
+                let on = quests.is_checked().unwrap_or(false);
+                toggles.quests.store(on, Ordering::Relaxed);
+                if let Some(rt) = app.try_state::<Runtime>() {
+                    rt.set_quests_enabled(on);
                 }
             }
             OPEN_RULES => {

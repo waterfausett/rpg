@@ -16,6 +16,7 @@ use rpg_core::engine::Outcome;
 use rpg_core::event::Event;
 use rpg_core::flavor::{ClaudeCli, TextGen};
 use rpg_core::paths::Paths;
+use rpg_core::quests::state::{Offer, QuestView};
 use rpg_core::store::Store;
 use runtime::{log, AppState, OutcomeSink};
 use std::sync::{Arc, RwLock};
@@ -30,6 +31,23 @@ impl OutcomeSink for LogSink {
         let xp: u64 = batch.iter().flat_map(|(_, o)| &o.xp_gains).map(|g| g.amount).sum();
         let unlocks: Vec<&str> = batch.iter().flat_map(|(_, o)| &o.unlocks).map(|u| u.name.as_str()).collect();
         log(&self.0, &format!("presented {} events (away={away}): +{xp} exp, unlocks {unlocks:?}", batch.len()));
+    }
+
+    /// Nothing could answer an offer.
+    fn offers_allowed(&self) -> bool {
+        false
+    }
+
+    fn quest_offer(&self, id: u64, offer: Offer) {
+        log(&self.0, &format!("quest offer {id}: {}", offer.quest_id));
+    }
+
+    fn quest_update(&self, view: QuestView) {
+        log(&self.0, &format!("quest {} is {:?}", view.quest_id, view.status));
+    }
+
+    fn quest_offer_withdrawn(&self, id: u64) {
+        log(&self.0, &format!("quest offer {id} withdrawn"));
     }
 }
 
@@ -74,7 +92,8 @@ fn main() {
                 }
                 e
             })?;
-            let toggles = Arc::new(Toggles::default());
+            let quests_on = state.cfg.read().unwrap_or_else(|p| p.into_inner()).quests.enabled;
+            let toggles = Arc::new(Toggles::new(quests_on));
             // Without an overlay, XP still counts: fall back to logging batches.
             let sink: Arc<dyn OutcomeSink> = match OverlaySink::new(app.handle(), state.clone(), toggles.clone()) {
                 Ok(overlay) => {
@@ -97,7 +116,8 @@ fn main() {
                 }
             });
             tray::setup(app, &state, toggles)?;
-            runtime::spawn(state, sink);
+            // The tray and overlay look the runtime up when the user acts.
+            app.manage(runtime::spawn(state, sink));
             Ok(())
         })
         .build(tauri::generate_context!())
