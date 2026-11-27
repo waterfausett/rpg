@@ -54,7 +54,6 @@ impl ConfigStore {
         }
     }
 
-    #[allow(dead_code)] // used by the settings commands (Task 7)
     pub fn set(&self, key: &str, value: &serde_json::Value) -> Result<(), EditError> {
         let mut last_written = lock(&self.save);
         let file = self.paths.config_file();

@@ -6,6 +6,7 @@ mod overlay;
 mod platform;
 mod presenter;
 mod runtime;
+mod settings;
 mod site;
 mod sound;
 mod tray;
@@ -78,7 +79,7 @@ fn main() {
                 }
                 e
             })?;
-            let toggles = Arc::new(Toggles::default());
+            let toggles = Arc::new(Toggles::from_config(&state.cfg.read().unwrap_or_else(|p| p.into_inner())));
             // Without an overlay, XP still counts: fall back to logging batches.
             let sink: Arc<dyn OutcomeSink> = match OverlaySink::new(app.handle(), state.clone(), toggles.clone()) {
                 Ok(overlay) => {
@@ -100,7 +101,7 @@ fn main() {
                     log(&site_paths, &format!("character sheet unavailable on 127.0.0.1:{port}: {e}"));
                 }
             });
-            tray::setup(app, &state, toggles)?;
+            tray::setup(app, &state, toggles.clone())?;
             // Live settings: later tasks fetch the store with `app.state::<Arc<ConfigStore>>()`.
             let store = ConfigStore::new(state.paths.clone(), state.cfg.clone());
             app.manage(store.clone());
@@ -110,6 +111,10 @@ fn main() {
             let handle = app.handle().clone();
             // Runs under the save lock of the store: only cheap, non-blocking work here.
             store.on_change(move |old, new| {
+                if old.sound.muted != new.sound.muted || old.announce.dnd != new.announce.dnd {
+                    tray::sync_toggles(&handle, &toggles, new);
+                    tray::notify_settings_changed(&handle);
+                }
                 if old.llm.enabled != new.llm.enabled || old.llm.model != new.llm.model {
                     let g = runtime::make_gen(&new.llm, &gen_state.paths);
                     *gen_state.gen.write().unwrap_or_else(|p| p.into_inner()) = g;
