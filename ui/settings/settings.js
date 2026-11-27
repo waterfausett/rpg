@@ -128,7 +128,7 @@
   // A decimal input that saves on change.
   function dec(k, key, value, min, label, what) {
     return h("input", {
-      type: "number", class: "num", min, step: 0.1, value: String(value), "aria-label": label, "data-k": k,
+      type: "number", class: "num", min, step: "any", value: String(value), "aria-label": label, "data-k": k,
       onchange: (e) => {
         const raw = e.target.value.trim();
         const n = Number(raw);
@@ -341,7 +341,7 @@
         num("quests.passes", "quests.max_passes", q.max_passes, 1, "Passes before the chain breaks",
           (n) => "The chain breaks after " + n + " pass" + (n === 1 ? "" : "es")))),
       row(field("Chain bonus per quest", "x1, then up by this per completion in a row",
-        dec("quests.step", "quests.chain_step", q.chain_step, 0.1, "Chain bonus per quest",
+        dec("quests.step", "quests.chain_step", q.chain_step, 0.01, "Chain bonus per quest",
           (n) => "Each quest in a chain adds ×" + n),
         h("span", { class: "unit" }, "×"))),
       row(field("Chain cap", null,

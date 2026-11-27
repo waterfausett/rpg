@@ -989,7 +989,7 @@ fallback = "Commit more."
         let mut q = quiet();
         live_commit(&f, &sink, &mut q);
         assert!(sink.offers().is_empty());
-        // Quests toggled off for the session: no offer either.
+        // Quests toggled off: no offer either.
         let sink = RecSink::default();
         let mut q = QuestRuntime::new(false, Box::new(|| {}));
         live_commit(&f, &sink, &mut q);
