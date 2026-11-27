@@ -1,5 +1,6 @@
-//! The overlay: a corner window for "+N exp" toasts and a top-center window for
-//! the Gold Banner. Drives the `Presenter` and resolves banner flavor text lazily.
+//! The overlay: a corner window for "+N exp" toasts and the quest timer pill, and a
+//! top-center window for the Gold Banner. Drives the `Presenter` and resolves banner
+//! flavor text lazily.
 use crate::presenter::{Banner, BannerKind, Presenter, Toast};
 use crate::runtime::{local_offset, log, panic_message, AppState, OutcomeSink, Runtime};
 use crate::tray::Toggles;
@@ -8,7 +9,7 @@ use rpg_core::engine::{Outcome, Unlock};
 use rpg_core::event::Event;
 use rpg_core::flavor;
 use rpg_core::paths::Paths;
-use rpg_core::quests::state::{Offer, QuestView};
+use rpg_core::quests::state::{Offer, QuestStatus, QuestView};
 use rpg_core::rules::Tier;
 use serde::{Deserialize, Serialize};
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -33,7 +34,8 @@ const BANNER_TOP: f64 = 42.0;
 const CLICK_POLL: Duration = Duration::from_millis(40);
 /// Margin from the screen edge, in logical pixels.
 const MARGIN: f64 = 16.0;
-/// Hide the toast window this long after the last toast (pills fade over 3s).
+/// Hide the toast window this long after the last toast (pills fade over 3s),
+/// unless the quest pill is up.
 const TOAST_HIDE_AFTER: Duration = Duration::from_millis(3600);
 /// If the banner page never reports `banner-done` (it does after ~8s), move on anyway.
 /// While the pointer rests on the banner the deadline keeps sliding forward.
@@ -89,6 +91,41 @@ struct ToastPayload {
     tier: Option<&'static str>,
 }
 
+/// The timer pill's state, sent to the toast page as `quest`. The page runs the countdown.
+#[derive(Serialize, Clone)]
+struct QuestPayload {
+    /// Which quest: an `active` update for another row replaces the pill.
+    row_id: i64,
+    status: &'static str,
+    name: String,
+    tier_label: &'static str,
+    deadline_ms: i64,
+    steps: Vec<StepPayload>,
+    reward: u64,
+    multiplier: f64,
+}
+
+#[derive(Serialize, Clone)]
+struct StepPayload {
+    label: String,
+    have: u32,
+    need: u32,
+}
+
+/// Where the toast page drew the pill (CSS pixels from the window's top-left), from `quest-pill-rect`.
+#[derive(Deserialize, Debug, Clone, Copy, PartialEq)]
+struct PillRect {
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+}
+
+#[derive(Deserialize)]
+struct CardPayload {
+    open: bool,
+}
+
 #[derive(Deserialize)]
 struct DonePayload {
     id: u64,
@@ -124,8 +161,15 @@ struct Flow {
     banner_ready: bool,
     current: Option<Current>,
     next_id: u64,
-    /// Bumped on every toast batch; the hide timer only hides its own batch.
-    toast_gen: u64,
+    /// When the last toast batch showed; the window hides `TOAST_HIDE_AFTER` later.
+    last_toast: Option<Instant>,
+    /// The latest quest update, from the first one until the page reports its pill gone
+    /// after an ending (completed / failed / cancelled). While set, the toast window stays up.
+    quest: Option<QuestPayload>,
+    /// The pill's last reported rect (`None`: no pill on the page).
+    pill_rect: Option<PillRect>,
+    /// The thread that lets clicks reach the pill is running.
+    pill_polling: bool,
     /// The pointer is on the current banner (it stays up while this is set).
     banner_hovered: bool,
 }
@@ -133,6 +177,14 @@ struct Flow {
 impl Flow {
     fn current_id(&self) -> Option<u64> {
         self.current.as_ref().map(|c| c.id)
+    }
+
+    /// Whether the toast window may hide now: no quest pill and no recent toast.
+    fn toasts_idle(&self, now: Instant) -> bool {
+        match self.last_toast {
+            Some(t) => should_hide_toasts(self.quest.is_some(), t, now),
+            None => self.quest.is_none(),
+        }
     }
 
     /// End the current banner without requeueing it (it is off screen or about to be hidden).
@@ -175,6 +227,13 @@ impl OverlaySink {
                 }
             }
             log(&i.state.paths, &format!("overlay {} ready", p.window));
+            if p.window == TOAST {
+                // A quest update that came before the page could listen (the startup re-show).
+                let f = i.flow();
+                if let Some(q) = f.quest.clone() {
+                    emit_quest(&i, q);
+                }
+            }
             pump(&i);
         });
         let i = inner.clone();
@@ -208,6 +267,38 @@ impl OverlaySink {
             if fresh {
                 if let Some(rt) = runtime(&i) {
                     rt.answer_offer(p.offer_id, p.accept);
+                }
+            }
+        });
+
+        // The toast page reports the pill's rect after every layout change, `null` once it is gone.
+        let i = inner.clone();
+        app.listen_any("quest-pill-rect", move |e| {
+            let Ok(rect) = serde_json::from_str::<Option<PillRect>>(e.payload()) else { return };
+            let mut f = i.flow();
+            f.pill_rect = rect;
+            // Gone after its ending: the window may hide. (Gone while the latest update is
+            // live means a pill is being replaced; the new one reports in a moment.)
+            if rect.is_none() && f.quest.as_ref().is_some_and(|q| !is_live(q.status)) {
+                f.quest = None;
+                if f.toasts_idle(Instant::now()) {
+                    if let Some(w) = i.window(TOAST) {
+                        let _ = w.hide();
+                    }
+                }
+            }
+        });
+
+        // The card opened: take focus so that a click anywhere else blurs the page, which
+        // collapses it. The window is non-activating otherwise, and goes back to that on close.
+        let i = inner.clone();
+        app.listen_any("quest-card-open", move |e| {
+            let Ok(p) = serde_json::from_str::<CardPayload>(e.payload()) else { return };
+            let Some(w) = i.window(TOAST) else { return };
+            let _ = w.set_focusable(p.open);
+            if p.open {
+                if let Err(e) = w.set_focus() {
+                    log(&i.state.paths, &format!("focusing the quest card failed: {e}"));
                 }
             }
         });
@@ -288,9 +379,28 @@ impl OutcomeSink for OverlaySink {
         }
     }
 
-    // Stub until the quest pill exists (Task 7).
+    /// Show the timer pill (any status). Not held by Do not disturb: it only drops toasts.
     fn quest_update(&self, view: QuestView) {
         log(&self.0.state.paths, &format!("quest {} is {:?}", view.quest_id, view.status));
+        let q = quest_payload(&view);
+        let start_poll = {
+            let mut f = self.0.flow();
+            f.quest = Some(q.clone());
+            if f.toast_ready {
+                emit_quest(&self.0, q);
+            }
+            let start = !f.pill_polling;
+            f.pill_polling = true;
+            start
+        };
+        if start_poll {
+            let i = self.0.clone();
+            let spawned = std::thread::Builder::new().name("rpg-pill-clicks".into()).spawn(move || pass_clicks_outside_pill(&i));
+            if let Err(e) = spawned {
+                log(&self.0.state.paths, &format!("pill click thread failed: {e}"));
+                self.0.flow().pill_polling = false;
+            }
+        }
     }
 
     /// The runtime no longer wants an answer: unqueue or hide it, without calling back.
@@ -411,18 +521,96 @@ fn show_toasts(inner: &Arc<Inner>, f: &mut Flow, toasts: Vec<Toast>) {
     if let Err(e) = inner.app.emit_to(TOAST, "toast", payload) {
         log(&inner.state.paths, &format!("emitting toast failed: {e}"));
     }
-    f.toast_gen += 1;
-    let gen = f.toast_gen;
+    f.last_toast = Some(Instant::now());
     let i = inner.clone();
     let _ = std::thread::Builder::new().name("rpg-toast".into()).spawn(move || {
         std::thread::sleep(TOAST_HIDE_AFTER);
         let f = i.flow();
-        if f.toast_gen == gen {
+        // A later batch has its own timer; a quest pill hides the window itself once gone.
+        if f.toasts_idle(Instant::now()) {
             if let Some(w) = i.window(TOAST) {
                 let _ = w.hide();
             }
         }
     });
+}
+
+/// Whether the toast window should hide at `now`, given the last toast batch at
+/// `last_toast`: never while the quest pill is up, else once the toasts have faded.
+fn should_hide_toasts(quest_shown: bool, last_toast: Instant, now: Instant) -> bool {
+    !quest_shown && now.saturating_duration_since(last_toast) >= TOAST_HIDE_AFTER
+}
+
+fn is_live(status: &str) -> bool {
+    matches!(status, "active" | "checking")
+}
+
+fn quest_payload(v: &QuestView) -> QuestPayload {
+    QuestPayload {
+        row_id: v.row_id,
+        status: match v.status {
+            QuestStatus::Active => "active",
+            QuestStatus::Checking => "checking",
+            QuestStatus::Completed => "completed",
+            QuestStatus::Failed => "failed",
+            QuestStatus::Cancelled => "cancelled",
+        },
+        name: v.name.clone(),
+        tier_label: v.tier.label(),
+        deadline_ms: v.deadline.timestamp_millis(),
+        steps: v.steps.iter().map(|s| StepPayload { label: s.label.clone(), have: s.have, need: s.need }).collect(),
+        reward: v.reward,
+        multiplier: v.multiplier,
+    }
+}
+
+/// Show the toast window and send it the pill's state. Call with the flow lock held.
+fn emit_quest(inner: &Inner, q: QuestPayload) {
+    if let Some(w) = inner.window(TOAST) {
+        let _ = w.show();
+    }
+    if let Err(e) = inner.app.emit_to(TOAST, "quest", q) {
+        log(&inner.state.paths, &format!("emitting quest failed: {e}"));
+    }
+}
+
+/// Whether `cursor` is over the pill drawn at `rect` (CSS pixels) in a toast window at
+/// `win` (cursor and window in physical desktop pixels) on a display with `scale`.
+fn over_pill(cursor: (f64, f64), win: (f64, f64), scale: f64, rect: &PillRect) -> bool {
+    let (x, y) = ((cursor.0 - win.0) / scale, (cursor.1 - win.1) / scale);
+    (rect.x..rect.x + rect.w).contains(&x) && (rect.y..rect.y + rect.h).contains(&y)
+}
+
+/// While there is a quest pill, make the toast window catch the mouse only while the
+/// cursor is over the pill (exp pills and the empty rest keep passing clicks through).
+/// When the pill is gone, restore full click-through and stop.
+fn pass_clicks_outside_pill(inner: &Arc<Inner>) {
+    let Some(win) = inner.window(TOAST) else {
+        inner.flow().pill_polling = false;
+        return;
+    };
+    let mut ignoring = None;
+    loop {
+        let rect = {
+            let mut f = inner.flow();
+            if f.quest.is_none() {
+                // Under the lock, so a new quest update either sees this thread running or starts another.
+                f.pill_polling = false;
+                let _ = win.set_ignore_cursor_events(true);
+                return;
+            }
+            f.pill_rect
+        };
+        let over = rect.is_some_and(|r| match (inner.app.cursor_position(), win.outer_position(), win.scale_factor()) {
+            (Ok(c), Ok(p), Ok(s)) => over_pill((c.x, c.y), (p.x as f64, p.y as f64), s, &r),
+            _ => true, // can't tell: keep the pill clickable
+        });
+        if ignoring != Some(!over) {
+            let _ = win.set_ignore_cursor_events(!over);
+            ignoring = Some(!over);
+        }
+        std::thread::sleep(CLICK_POLL);
+    }
 }
 
 /// Runs on its own thread: resolve the text (may wait on the LLM), then, if
@@ -788,5 +976,74 @@ fallback = "LADDER"
         assert!(!over(500.0, 105.0), "top glow margin");
         assert!(!over(970.0, 200.0), "right glow margin");
         assert!(!over(500.0, 410.0), "bottom glow margin");
+    }
+
+    #[test]
+    fn toast_window_stays_up_while_quest_active() {
+        let t0 = Instant::now();
+        let later = |d: Duration| t0 + d;
+        assert!(!should_hide_toasts(true, t0, later(Duration::ZERO)));
+        assert!(!should_hide_toasts(true, t0, later(TOAST_HIDE_AFTER)));
+        assert!(!should_hide_toasts(true, t0, later(Duration::from_secs(3600))), "a quest pill keeps it up at any age");
+        assert!(!should_hide_toasts(false, t0, later(TOAST_HIDE_AFTER - Duration::from_millis(1))));
+        assert!(should_hide_toasts(false, t0, later(TOAST_HIDE_AFTER)));
+        assert!(should_hide_toasts(false, t0, later(Duration::from_secs(60))));
+        // A toast newer than `now` (clock skew between threads) never hides.
+        assert!(!should_hide_toasts(false, later(Duration::from_secs(1)), t0));
+    }
+
+    #[test]
+    fn cursor_over_pill() {
+        // Window at (100, 50) on a 150% display; the pill at CSS (60, 350) 270x34
+        // spans physical x 190..595, y 575..626.
+        let rect = PillRect { x: 60.0, y: 350.0, w: 270.0, h: 34.0 };
+        let over = |x, y| over_pill((x, y), (100.0, 50.0), 1.5, &rect);
+        assert!(over(190.0, 575.0) && over(594.0, 625.0) && over(400.0, 600.0));
+        assert!(!over(189.0, 600.0), "left of the pill");
+        assert!(!over(595.0, 600.0), "right of the pill");
+        assert!(!over(400.0, 574.0), "above the pill (the exp pills)");
+        assert!(!over(400.0, 626.0), "below the pill");
+    }
+
+    #[test]
+    fn quest_payload_carries_the_view() {
+        use rpg_core::quests::state::{QuestStatus, StepView};
+        let deadline = chrono::DateTime::from_timestamp_millis(1_800_000_000_123).unwrap();
+        let view = QuestView {
+            row_id: 7,
+            quest_id: "ship_it".into(),
+            name: "Ship It".into(),
+            tier: Tier::Platinum,
+            deadline,
+            steps: vec![StepView { label: "Push".into(), have: 1, need: 1 }, StepView { label: "Open a PR".into(), have: 0, need: 1 }],
+            reward: 1200,
+            multiplier: 1.5,
+            status: QuestStatus::Checking,
+            has_github_step: true,
+        };
+        let v = serde_json::to_value(quest_payload(&view)).unwrap();
+        assert_eq!(
+            v,
+            serde_json::json!({
+                "row_id": 7, "status": "checking", "name": "Ship It", "tier_label": "Platinum",
+                "deadline_ms": 1_800_000_000_123_i64, "reward": 1200, "multiplier": 1.5,
+                "steps": [{ "label": "Push", "have": 1, "need": 1 }, { "label": "Open a PR", "have": 0, "need": 1 }]
+            })
+        );
+        for (s, want) in [
+            (QuestStatus::Active, "active"),
+            (QuestStatus::Completed, "completed"),
+            (QuestStatus::Failed, "failed"),
+            (QuestStatus::Cancelled, "cancelled"),
+        ] {
+            assert_eq!(quest_payload(&QuestView { status: s, ..view.clone() }).status, want);
+        }
+    }
+
+    #[test]
+    fn pill_rect_report_may_be_null() {
+        assert_eq!(serde_json::from_str::<Option<PillRect>>("null").unwrap(), None);
+        let r = serde_json::from_str::<Option<PillRect>>(r#"{"x":1,"y":2.5,"w":3,"h":4}"#).unwrap();
+        assert_eq!(r, Some(PillRect { x: 1.0, y: 2.5, w: 3.0, h: 4.0 }));
     }
 }

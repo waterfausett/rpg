@@ -42,6 +42,169 @@
     document.getElementById("toasts").appendChild(pill);
   }
 
+  // ---- Quest timer pill (toast window) ----
+  const HURRY_S = 120;        // pulse red in the last 2 minutes
+  const PILL_END_MS = 3500;   // a completed / failed pill stays this long, then fades
+  const PILL_OUT_MS = 500;    // the .bye fade
+  const PILL_TICK_MS = 250;
+
+  // The pill on screen: { el, id, status, deadline, total, timer, ro, ending }.
+  let pill = null;
+  let lastRect;               // last value sent as quest-pill-rect (undefined: none sent yet)
+
+  const fmtLeft = (ms) => {
+    const s = Math.max(0, Math.ceil(ms / 1000));
+    return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+  };
+  const isLive = (status) => status === "active" || status === "checking";
+
+  // Tell the app where the pill is (CSS px from the window's top-left, ignoring transforms), or null.
+  function reportRect(force) {
+    let r = null;
+    if (pill && pill.el.isConnected) {
+      const c = pill.el.offsetParent ? pill.el.offsetParent.getBoundingClientRect() : { left: 0, top: 0 };
+      r = { x: c.left + pill.el.offsetLeft, y: c.top + pill.el.offsetTop, w: pill.el.offsetWidth, h: pill.el.offsetHeight };
+    }
+    const key = JSON.stringify(r);
+    if (key === lastRect && !force) return;
+    lastRect = key;
+    ev.emit("quest-pill-rect", r);
+  }
+
+  function setOpen(open) {
+    if (!pill || pill.el.classList.contains("open") === open) return;
+    pill.el.classList.toggle("open", open);
+    ev.emit("quest-card-open", { open: open });
+  }
+
+  function tickPill() {
+    if (!pill || pill.ending || pill.status !== "active") return;
+    const left = pill.deadline - Date.now();
+    pill.el.querySelector(".tm").textContent = fmtLeft(left);
+    pill.el.querySelector(".meter i").style.width = Math.max(0, Math.min(100, (100 * left) / pill.total)) + "%";
+    pill.el.classList.toggle("hurry", left < HURRY_S * 1000);
+  }
+
+  function removePill() {
+    if (!pill) return;
+    const p = pill;
+    pill = null;
+    clearInterval(p.timer);
+    p.timers.forEach(clearTimeout);
+    p.ro.disconnect();
+    if (p.el.classList.contains("open")) ev.emit("quest-card-open", { open: false });
+    p.el.remove();
+    reportRect();
+  }
+
+  function makePill(q) {
+    const el = document.createElement("div");
+    el.className = "qp";
+    const span = (cls) => { const s = document.createElement("span"); s.className = cls; return s; };
+    const bar = document.createElement("div");
+    bar.className = "bar0";
+    const gem = document.createElement("i");
+    gem.className = "gem";
+    bar.append(gem, span("nm"), span("tm"), span("dots"));
+    const more = document.createElement("div");
+    more.className = "more";
+    const inner = document.createElement("div");
+    const meter = document.createElement("div");
+    meter.className = "meter";
+    meter.appendChild(document.createElement("i"));
+    const foot = document.createElement("div");
+    foot.className = "foot";
+    foot.append(span("rw"), span("ch"));
+    inner.append(document.createElement("ul"), meter, foot);
+    more.appendChild(inner);
+    el.append(bar, more);
+    el.addEventListener("click", () => { if (pill && pill.el === el && !pill.ending) setOpen(!el.classList.contains("open")); });
+    const toasts = $("toasts");
+    toasts.insertBefore(el, toasts.firstChild); // column-reverse: first is the bottom
+    const left = q.deadline_ms - Date.now();
+    pill = { el: el, id: q.row_id, status: q.status, deadline: q.deadline_ms, total: Math.max(1, left), timer: 0, timers: [], ending: false };
+    pill.ro = new ResizeObserver(() => reportRect());
+    pill.ro.observe(el);
+    el.addEventListener("transitionend", () => reportRect());
+    pill.timer = setInterval(tickPill, PILL_TICK_MS);
+  }
+
+  // Name, tier, steps (✓ done, ▸ next) and the stakes, from an update.
+  function fillPill(q) {
+    const el = pill.el;
+    el.dataset.tier = q.tier_label || "";
+    el.querySelector(".nm").textContent = q.name || "";
+    const dots = el.querySelector(".dots");
+    const ul = el.querySelector("ul");
+    dots.textContent = "";
+    ul.textContent = "";
+    let next = true;
+    (q.steps || []).forEach((s) => {
+      const done = s.have >= s.need;
+      const dot = document.createElement("i");
+      const li = document.createElement("li");
+      li.textContent = s.label;
+      if (done) { dot.className = "done"; li.className = "done"; }
+      else if (next) { li.className = "next"; next = false; }
+      dots.appendChild(dot);
+      ul.appendChild(li);
+    });
+    el.querySelector(".rw").textContent = num(q.reward) + " exp";
+    el.querySelector(".ch").textContent = "chain " + mult(q.multiplier) + " at stake";
+  }
+
+  // Completed / failed: hold the final look, then fade and go. Cancelled: just fade.
+  function endPill(q) {
+    const p = pill;
+    p.ending = true;
+    p.status = q.status;
+    setOpen(false);
+    p.el.classList.remove("hurry");
+    const bye = () => {
+      p.el.classList.add("bye");
+      p.timers.push(setTimeout(() => { if (pill === p) removePill(); }, PILL_OUT_MS));
+    };
+    if (q.status === "completed") {
+      p.el.classList.add("won");
+      p.el.querySelector(".nm").textContent = "Quest complete!";
+      p.el.querySelector(".tm").textContent = "+" + num(q.reward);
+    } else if (q.status === "failed") {
+      p.el.classList.add("lost");
+      p.el.querySelector(".nm").textContent = "Quest failed · chain lost";
+      p.el.querySelector(".tm").textContent = "0:00";
+    } else {
+      bye();
+      return;
+    }
+    p.timers.push(setTimeout(bye, PILL_END_MS));
+  }
+
+  function onQuest(q) {
+    if (pill && pill.id !== q.row_id) {
+      if (!isLive(q.status)) return; // a late ending for some other quest
+      removePill();                  // a new quest replaces the old pill
+    }
+    if (pill && pill.ending) return;
+    if (!pill) {
+      if (q.status === "cancelled") { reportRect(true); return; } // the app waits for this null
+      makePill(q);
+    }
+    fillPill(q);
+    pill.deadline = q.deadline_ms;
+    if (isLive(q.status)) {
+      pill.status = q.status;
+      if (q.status === "checking") {
+        pill.el.classList.remove("hurry");
+        pill.el.querySelector(".tm").textContent = "checking GitHub…";
+      } else {
+        tickPill();
+      }
+    } else {
+      endPill(q);
+    }
+    reportRect();
+  }
+
   // Accept: the offer shrinks into the bottom-right corner (where the quest pill appears).
   const TAKE_MS = 550;
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -192,6 +355,9 @@
   async function init() {
     if (mode === "toast") {
       await ev.listen("toast", (e) => e.payload.forEach(addToast));
+      await ev.listen("quest", (e) => onQuest(e.payload));
+      // The card took focus when it opened; a click anywhere else takes it away.
+      window.addEventListener("blur", () => setOpen(false));
     } else {
       const banner = $("banner");
       // An offer's body does nothing: only its buttons (and its fuse) end it.
