@@ -602,6 +602,12 @@ impl Store {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// An event's `data`, if the event is stored and its data parses.
+    pub fn event_data(&self, id: &str) -> Result<Option<serde_json::Value>> {
+        let text: Option<String> = self.conn().query_row("SELECT data FROM events WHERE id=?1", params![id], |r| r.get(0)).optional()?;
+        Ok(text.and_then(|t| serde_json::from_str(&t).ok()))
+    }
+
     pub fn meta_get(&self, key: &str) -> Result<Option<String>> {
         Ok(self.conn().query_row("SELECT value FROM meta WHERE key=?1", params![key], |r| r.get(0)).optional()?)
     }
