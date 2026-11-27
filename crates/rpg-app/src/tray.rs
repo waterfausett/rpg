@@ -35,16 +35,22 @@ pub struct TrayChecks {
 }
 
 /// Push the config's Mute/DND state into the atomics, the menu check marks and the overlay.
+/// Safe to call under the config store's save lock: only the atomics are set inline; the
+/// menu and overlay (main-thread-bound, may block) are updated via `run_on_main_thread`.
 pub fn sync_toggles(app: &AppHandle, toggles: &Toggles, cfg: &Config) {
-    toggles.muted.store(cfg.sound.muted, Ordering::Relaxed);
-    toggles.dnd.store(cfg.announce.dnd, Ordering::Relaxed);
-    if let Some(checks) = app.try_state::<TrayChecks>() {
-        let _ = checks.mute.set_checked(cfg.sound.muted);
-        let _ = checks.dnd.set_checked(cfg.announce.dnd);
-    }
-    if let Some(overlay) = app.try_state::<Arc<OverlaySink>>() {
-        overlay.set_dnd(cfg.announce.dnd);
-    }
+    let (muted, dnd) = (cfg.sound.muted, cfg.announce.dnd);
+    toggles.muted.store(muted, Ordering::Relaxed);
+    toggles.dnd.store(dnd, Ordering::Relaxed);
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        if let Some(checks) = handle.try_state::<TrayChecks>() {
+            let _ = checks.mute.set_checked(muted);
+            let _ = checks.dnd.set_checked(dnd);
+        }
+        if let Some(overlay) = handle.try_state::<Arc<OverlaySink>>() {
+            overlay.set_dnd(dnd);
+        }
+    });
 }
 
 /// The notice to show when saving a toggle failed: `None` when it saved.
