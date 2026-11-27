@@ -26,7 +26,7 @@ Output: `target/release/rpg-app.exe` plus installers in `target/release/bundle/{
    This sets a global git `core.hooksPath` to rpg's shim folder and adds `SessionStart`/`SessionEnd` entries to `~/.claude/settings.json` (a backup is written next to it as `settings.json.rpg-backup`, and your other settings are kept). Every standard git hook except `reference-transaction` and `post-index-change` (see Known limitations) gets a pass-through shim, so a repo's own `.git/hooks/*` keep working.
 3. Commit something. A `+10 exp · commit` pop-up appears bottom-right; unlocks show a gold banner top-center. To write your own achievements, see the [rule format reference](docs/rules.md).
 
-Tray menu: Open character sheet, Settings…, Mute sounds, Do not disturb, Open rules folder, Install hooks, Uninstall hooks, Check for updates, Quit. Only one app instance runs at a time. Hooks never fail a git command; errors go to `rpg.log`.
+Tray menu: Open character sheet, Settings…, Mute sounds, Do not disturb, Start at login, Open rules folder, Install hooks, Uninstall hooks, Check for updates, Quit. **Start at login** (off by default) adds rpg to your login items (Windows: the `rpg` value under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, which Task Manager's Startup apps tab also shows); the check mark reads that setting back, so turning it off in Task Manager unchecks it. Only one app instance runs at a time. Hooks never fail a git command; errors go to `rpg.log`.
 
 ## Updates
 
@@ -45,7 +45,7 @@ The updater signing key is the `TAURI_SIGNING_PRIVATE_KEY` repo secret (no passw
 
 ## Uninstall
 
-`rpg uninstall-hooks` (or tray **Uninstall hooks**) restores your previous `core.hooksPath` (or unsets it) and removes only rpg's entries from `settings.json`. Then delete the app. Your data stays until you delete the data dir. Always run `uninstall-hooks` **before** deleting the data dir: the global `core.hooksPath` points into it, and if that folder is gone git silently runs no hooks at all, in any repo.
+`rpg uninstall-hooks` (or tray **Uninstall hooks**) restores your previous `core.hooksPath` (or unsets it) and removes only rpg's entries from `settings.json`. Turn off **Start at login**, then delete the app. Your data stays until you delete the data dir. Always run `uninstall-hooks` **before** deleting the data dir: the global `core.hooksPath` points into it, and if that folder is gone git silently runs no hooks at all, in any repo.
 
 ## Where things live
 
@@ -99,7 +99,7 @@ tier = "silver"                # bronze | silver | gold | platinum | legendary |
 xp = 600                       # optional; overrides the tier default
 fallback = "Static text shown when there is no LLM flavor."
 hint = "Shown while still locked."          # optional
-trigger = ["commit"]           # commit, push, pr_opened, pr_merged,
+trigger = ["commit"]           # commit, merge_conflict_resolved, push, pr_opened, pr_merged,
                                # review_submitted, claude_session_start, claude_session_end
 filter = { hours = { start = 0, end = 4 } }   # optional; which events count
 counter = { type = "each" }    # optional, default "each"; what to do with them
@@ -119,7 +119,8 @@ Counters (set `type` plus the params):
 | `each` | | every matching event |
 | `first` | `scope = "ever"` or `"repo"` | first event ever / first commit in this repo |
 | `per_day` | `at` | the `at`-th event in the local day |
-| `personal_record` | `metric = "prs_merged_per_day"`, `"commits_per_day"` or `"pr_deletions"` | a new personal best |
+| `per_key` | `key`, `at` | the `at`-th event in this repo with the same `data[key]` (e.g. `key = "branch"`) |
+| `personal_record` | `metric = "prs_merged_per_day"`, `"commits_per_day"`, `"pr_deletions"` or `"conflict_files"` | a new personal best |
 | `file_age` | `min_years` | a commit touches a file untouched for that long |
 
 **Upgrading from 0.2:** the old `detector = {...}` field is gone, and a rule file that still has it fails to load. After upgrading to this version, empty your `rules/` folder, `skills/` included; the app reseeds it on the next start (move custom rules or skills aside first and copy them back after).
@@ -221,6 +222,7 @@ include = ['C:/work', 'octo/*']                # optional: only these count
 - Repos with their own local `core.hooksPath` (e.g. husky) override the global one, so rpg does not see their commits ([#7](../../issues/7)).
 - Repo-local `reference-transaction` and `post-index-change` hooks do not run while rpg is installed (no shim for those two names, to keep git fast) ([#7](../../issues/7)).
 - A push is counted when `pre-push` runs, before the push is known to have succeeded.
+- Merge conflicts count only when a `git merge` (or a merging `git pull`) stops on them and you commit the result. Conflicts during a rebase, cherry-pick, revert or `git stash pop` don't count yet ([#44](../../issues/44)).
 - macOS is not supported yet ([#4](../../issues/4)).
 - The installed hooks point at the exact `rpg-app.exe` (or `rpg.exe`) path they were installed from. If you move or reinstall the app somewhere else, run **Install hooks** again.
 - No autostart at login yet ([#10](../../issues/10)).

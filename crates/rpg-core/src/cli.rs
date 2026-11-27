@@ -44,6 +44,15 @@ enum Emit {
         #[arg(long)]
         remote: String,
     },
+    /// A commit that concluded a conflicted merge; `marker` is the shim's conflict file.
+    MergeConflict {
+        #[arg(long)]
+        repo: PathBuf,
+        #[arg(long)]
+        hash: String,
+        #[arg(long)]
+        marker: PathBuf,
+    },
     ClaudeSessionStart,
     ClaudeSessionEnd,
 }
@@ -72,6 +81,10 @@ fn run_emit(paths: &Paths, what: Emit) -> anyhow::Result<()> {
     let ev = match what {
         Emit::Commit { repo, hash } => emit::commit_event(&repo, &hash)?,
         Emit::Push { repo, remote } => emit::push_event(&repo, &remote)?,
+        Emit::MergeConflict { repo, hash, marker } => match emit::conflict_event(&repo, &hash, &marker)? {
+            Some(ev) => ev,
+            None => return Ok(()),
+        },
         Emit::ClaudeSessionStart => emit::claude_event(EventKind::ClaudeSessionStart, &stdin_string()?)?,
         Emit::ClaudeSessionEnd => emit::claude_event(EventKind::ClaudeSessionEnd, &stdin_string()?)?,
     };

@@ -94,6 +94,8 @@ pub enum Metric {
     PrsMergedPerDay,
     CommitsPerDay,
     PrDeletions,
+    /// Conflicted files resolved in one merge.
+    ConflictFiles,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -127,6 +129,8 @@ pub enum Counter {
     #[default]
     Each,
     PerDay { at: u32 },
+    /// Fires when the matching events in this repo with this event's `data[key]` reach `at`.
+    PerKey { key: String, at: u32 },
     Run { at: u32 },
     Combo { kinds: Vec<EventKind>, within_minutes: u32 },
     GapDays { min: u32, scope: Scope },
@@ -292,6 +296,15 @@ fn check_counter(c: &Counter, trigger: &[EventKind]) -> Result<(), String> {
                 return Err(format!("`counter.kinds`: the last kind `{}` must be one of the rule's `trigger` kinds", k.as_str()))
             }
             Some(_) => {}
+        }
+    }
+    if let Counter::PerKey { key, at } = c {
+        // `key` goes into a JSON path, so keep it to one plain field name.
+        if key.is_empty() || !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            return Err(format!("counter `per_key`: bad `key` `{key}` (one top-level field name: letters, digits, `_`)"));
+        }
+        if *at == 0 {
+            return Err("counter `per_key`: `at` must be at least 1".into());
         }
     }
     if let Counter::Lifetime { sum, distinct } = c {
@@ -537,6 +550,7 @@ fallback = "f"
         let moment = [
             Counter::Each,
             Counter::PerDay { at: 1 },
+            Counter::PerKey { key: "branch".into(), at: 3 },
             Counter::Run { at: 2 },
             Counter::Combo { kinds: vec![EventKind::Commit], within_minutes: 5 },
             Counter::GapDays { min: 30, scope: Scope::Repo },
@@ -618,6 +632,29 @@ counter={type=\"combo\",kinds=[\"push\",\"commit\"],within_minutes=5}")).is_ok()
         assert!(err(&format!("{ladder}\ncooldown_hours=2")).contains("cooldown_hours"));
         assert!(err(&format!("{ladder}\nxp=9")).contains("`xp`"));
         assert!(err(&format!("{ladder}\nat=9")).contains("`at`"));
+    }
+
+    #[test]
+    fn per_key_parses_and_validates() {
+        let r = parse_rule(&base("tier=\"silver\"
+counter={type=\"per_key\",key=\"branch\",at=3}")).unwrap();
+        assert_eq!(r.counter, Counter::PerKey { key: "branch".into(), at: 3 });
+        let missing = err("tier=\"silver\"
+counter={type=\"per_key\",at=3}");
+        assert!(missing.contains("key"), "{missing}");
+        let zero = err("tier=\"silver\"
+counter={type=\"per_key\",key=\"branch\",at=0}");
+        assert!(zero.contains("at least 1"), "{zero}");
+        for bad in ["", "a.b", "$.x", "a b"] {
+            let e = err(&format!("tier=\"silver\"
+counter={{type=\"per_key\",key=\"{bad}\",at=3}}"));
+            assert!(e.contains("bad `key`"), "{bad}: {e}");
+        }
+        // A moment counter: `at` lives inside the counter, never at the top level.
+        let top = err("tier=\"silver\"
+at=3
+counter={type=\"per_key\",key=\"branch\",at=3}");
+        assert!(top.contains("`at`"), "{top}");
     }
 
     #[test]
@@ -704,7 +741,7 @@ counter={type=\"combo\",kinds=[\"push\",\"commit\"],within_minutes=5}")).is_ok()
         let doc = fs::read_to_string(path).unwrap().replace("\r\n", "\n");
         let blocks: Vec<&str> = doc.split("```toml\n").skip(1).map(|b| b.split("```").next().unwrap()).collect();
         // The intro example plus one per counter.
-        assert_eq!(blocks.len(), 14);
+        assert_eq!(blocks.len(), 15);
         for b in blocks {
             if let Err(e) = parse_rule(b) {
                 panic!("{e}\n{b}");

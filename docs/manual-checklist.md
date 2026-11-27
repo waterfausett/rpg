@@ -33,6 +33,7 @@ The automated and scripted checks cannot see these. Do them once on your machine
 - [ ] Open character sheet opens `http://127.0.0.1:47474` with your level, XP and achievements, and a Skills list (biggest first) once you have committed something.
 - [ ] Mute sounds toggles (check mark) and takes effect on the next banner.
 - [ ] Do not disturb: turn on, commit, and see no pop-up and no banner. Turn off and the queued banners appear (at most 3 plus a summary if many).
+- [ ] Start at login: check it, sign out and back in, and the tray icon is back with no second instance. Task Manager > Startup apps lists rpg as Enabled; disable it there and the menu shows it unchecked after the app restarts. Uncheck it in the menu and the entry is gone.
 - [ ] Open rules folder opens `rules/` in Explorer.
 - [ ] Install hooks, Uninstall hooks and Quit all work (see below).
 

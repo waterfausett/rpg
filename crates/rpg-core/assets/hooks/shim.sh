@@ -46,6 +46,33 @@ if [ -f "$RPG_BIN" ]; then
         head=$(git rev-parse HEAD 2>/dev/null </dev/null)
         if [ -n "$top" ] && [ -n "$head" ]; then
           "$RPG_BIN" emit commit --repo "$top" --hash "$head" ${RPG_HOME_DIR:+--home "$RPG_HOME_DIR"} </dev/null >/dev/null 2>&1 &
+          # This commit may conclude a conflicted merge (marker from prepare-commit-msg below).
+          # Rename it so the next commit can't see it; rpg checks it against HEAD^2 and deletes it.
+          if [ -f "$gitdir/rpg-conflict" ] && mv -f "$gitdir/rpg-conflict" "$gitdir/rpg-conflict-$head" 2>/dev/null; then
+            "$RPG_BIN" emit merge-conflict --repo "$top" --hash "$head" --marker "$gitdir/rpg-conflict-$head" ${RPG_HOME_DIR:+--home "$RPG_HOME_DIR"} </dev/null >/dev/null 2>&1 &
+          fi
+        fi
+      fi
+      ;;
+    prepare-commit-msg)
+      # A commit concluding a merge that stopped on conflicts: git listed the conflicted paths in
+      # MERGE_MSG under "# Conflicts:". MERGE_HEAD and MERGE_MSG are gone by post-commit, so note
+      # the merge and its paths in a marker. Builtins only: no extra processes on any commit.
+      if [ -f "$gitdir/MERGE_HEAD" ] && [ -f "$gitdir/MERGE_MSG" ] && [ ! -d "$gitdir/rebase-merge" ] && [ ! -d "$gitdir/rebase-apply" ]; then
+        read -r mh < "$gitdir/MERGE_HEAD"
+        files=
+        sect=
+        while IFS= read -r l || [ -n "$l" ]; do
+          case "$l" in
+            ?" Conflicts:") sect=1 ;;
+            ?"	"*) [ -n "$sect" ] && files="$files${l#??}
+" ;;
+            *) sect= ;;
+          esac
+        done < "$gitdir/MERGE_MSG"
+        if [ -n "$mh" ] && [ -n "$files" ]; then
+          printf '%s
+%s' "$mh" "$files" > "$gitdir/rpg-conflict" 2>/dev/null
         fi
       fi
       ;;

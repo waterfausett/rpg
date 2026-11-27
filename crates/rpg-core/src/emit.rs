@@ -84,6 +84,42 @@ pub fn commit_event(repo: &Path, hash: &str) -> Result<Event> {
     ))
 }
 
+/// The shim's conflict marker: line 1 is the `MERGE_HEAD` the conflicts belong to, every
+/// further non-empty line a conflicted path. None when it has no hash or no paths.
+pub fn parse_conflict_marker(text: &str) -> Option<(String, Vec<String>)> {
+    let mut lines = text.lines();
+    let merge_head = lines.next()?.trim();
+    let files: Vec<String> = lines.filter(|l| !l.is_empty()).map(str::to_string).collect();
+    (!merge_head.is_empty() && !files.is_empty()).then(|| (merge_head.to_string(), files))
+}
+
+/// Build a MergeConflictResolved event for commit `hash` from the marker the shim wrote in
+/// `prepare-commit-msg` (and renamed in `post-commit`). The marker is deleted whatever happens.
+/// Ok(None) when the marker is stale: it names a merge other than `hash`'s second parent, as
+/// after a conflicted merge whose commit failed and a later, unrelated commit.
+pub fn conflict_event(repo: &Path, hash: &str, marker: &Path) -> Result<Option<Event>> {
+    let text = std::fs::read_to_string(marker);
+    let _ = std::fs::remove_file(marker);
+    let text = text.with_context(|| format!("reading {}", marker.display()))?;
+    let Some((merge_head, paths)) = parse_conflict_marker(&text) else { return Ok(None) };
+    let second = git(repo, &["rev-parse", "-q", "--verify", &format!("{hash}^2")]).ok();
+    if second.as_deref() != Some(merge_head.as_str()) {
+        return Ok(None);
+    }
+    let top = toplevel(repo)?;
+    let branch = git(repo, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+    let files: Vec<_> = paths.iter().map(|p| json!({ "path": p })).collect();
+    Ok(Some(Event::new(
+        EventKind::MergeConflictResolved,
+        Source::Git,
+        Some(top.clone()),
+        json!({
+            "hash": hash, "branch": branch, "repo_path": top,
+            "files": files, "file_count": paths.len(), "github_repo": github_repo(repo),
+        }),
+    )))
+}
+
 pub fn push_event(repo: &Path, remote: &str) -> Result<Event> {
     let top = toplevel(repo)?;
     let branch = git(repo, &["rev-parse", "--abbrev-ref", "HEAD"])?;
