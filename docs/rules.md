@@ -73,7 +73,7 @@ A filter that can never match one of the rule's `trigger` kinds is a load error 
 | `title` | regex | `pr_opened`, `pr_merged` | the PR title matches |
 | `hash` | regex | `commit` | the full commit hash matches |
 | `hash_palindrome` | integer N | `commit` | the first N hash characters read the same backwards |
-| `branch` | list of globs | `commit`, `merge_conflict_resolved`, `push` (never matches other kinds) | the branch matches one glob |
+| `branch` | list of globs | `commit`, `merge_conflict_resolved`, `push` (never matches other kinds) | the branch matches one glob. A glob starting with `!` excludes instead: the branch must match none of those and, if there are any plain globs, one of them (`["!main", "!master"]` is any other branch) |
 | `repo` | list of globs | any | the repo matches one glob (local path with `/` separators for git events, `owner/name` for GitHub events) |
 | `files_any` | list of globs | `commit` | at least one changed file matches |
 | `files_only` | list of globs | `commit` | there is at least one file and every one matches |
@@ -105,6 +105,7 @@ The `files` filters (`files_any`, `files_only`, `min_files`, `max_files`, `min_e
 | --- | --- | --- |
 | `each` | | any matching event (the default) |
 | `per_day` | `at` | the number of matching events today reaches exactly `at` (once per day) |
+| `per_key` | `key`, `at` | the number of matching events in this repo with this event's `data[key]` reaches exactly `at` (once per key). `key` is one top-level string field, like `"branch"`; an event without it never fires. The repo is the GitHub repo when the event has one, so worktrees count together. |
 | `run` | `at` | the last `at` events of this kind in this repo all matched, and the one before them didn't (once per run) |
 | `combo` | `kinds`, `within_minutes` | events of each kind in `kinds` happened in order within the window, in the same GitHub repo, ending with this event. The last kind must be one of the `trigger` kinds. |
 | `gap_days` | `min`, `scope` (`"ever"` / `"repo"`) | a matching event at least `min` days after the previous matching event (in this repo, or anywhere). The very first one doesn't count. |
@@ -134,6 +135,18 @@ trigger = ["pr_merged"]
 counter = { type = "per_day", at = 3 }
 repeatable = true
 fallback = "Three pull requests merged in one day."
+```
+
+```toml
+# per_key
+id = "recurring_nightmare"
+name = "Recurring Nightmare"
+tier = "silver"
+trigger = ["merge_conflict_resolved"]
+filter = { branch = ["!main", "!master", "!HEAD"] }
+counter = { type = "per_key", key = "branch", at = 3 }
+repeatable = true
+fallback = "Three merge conflicts resolved on the same branch."
 ```
 
 ```toml

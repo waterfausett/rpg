@@ -1,0 +1,11 @@
+id = "recurring_nightmare"
+name = "Recurring Nightmare"
+tier = "silver"
+trigger = ["merge_conflict_resolved"]
+# The default branches, and a detached HEAD (`HEAD`), aren't anyone's pull request.
+filter = { branch = ["!main", "!master", "!HEAD"] }
+counter = { type = "per_key", key = "branch", at = 3 }
+repeatable = true
+hint = "Keep a branch open long enough and main will come for it. Again. And again."
+fallback = "Three merge conflicts resolved on the same branch. Everyone else merged first, and you paid the toll each time."
+flavor = { type = "llm", prompt = "Rewrite this achievement announcement for this specific unlock, in the same voice: \"{fallback}\". Use the concrete details. Context: {context}" }
