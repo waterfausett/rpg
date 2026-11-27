@@ -4016,7 +4016,7 @@ dependencies = [
 
 [[package]]
 name = "rpg-app"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -4044,7 +4044,7 @@ dependencies = [
 
 [[package]]
 name = "rpg-cli"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "assert_cmd",
  "rpg-core",
@@ -4054,7 +4054,7 @@ dependencies = [
 
 [[package]]
 name = "rpg-core"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "chrono",
