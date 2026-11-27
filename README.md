@@ -204,7 +204,7 @@ include = ['C:/work', 'octo/*']                # optional: only these count
 ```
 
 - Patterns are matched against the event's repo: the local folder for commits, pushes and Claude sessions, `owner/name` for GitHub events.
-- A plain folder (no `*`, `?`, `[` or `{`) covers itself and everything under it. Anything else is a glob, as in skills: case-insensitive, `*` crosses folders.
+- A plain folder (no `*`, `?`, `[` or `{`) covers itself and everything under it. Anything else is a glob, as in skills: case-insensitive, `*` crosses folders. To name a folder that contains one of those characters, wrap each one in brackets (`C:/work/[[]old]` for `C:\work\[old]`); the Settings window's **Add folder…** does this for you.
 - `\` or `/`, drive-letter case and a trailing slash don't matter. Use single quotes in TOML so backslashes stay literal.
 - `exclude` wins over `include`. A non-empty `include` drops everything that doesn't match it. Events with no repo always count.
 - Only new events are filtered; past ones keep their exp. A bad pattern makes the whole config invalid (the app logs it to `rpg.log` and uses defaults).

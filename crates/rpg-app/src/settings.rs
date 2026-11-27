@@ -5,7 +5,7 @@ use crate::config_store::ConfigStore;
 use crate::runtime::log;
 use crate::sound::{collect_files, preview, resolve_sound};
 use crate::sound_slots::{copy_into, fallback, pin_exists, Slot};
-use rpg_core::config::{raw_paths, Config};
+use rpg_core::config::{escape_folder, raw_paths, Config};
 use rpg_core::config_edit::EditError;
 use rpg_core::paths::Paths;
 use rpg_core::rules::{Announce, Tier};
@@ -197,7 +197,8 @@ pub async fn settings_add_folder(window: WebviewWindow, store: State<'_, Arc<Con
         ensure_valid(&store)?;
         let picked = window.dialog().file().set_parent(&window).blocking_pick_folder();
         let Some(picked) = picked else { return current_snapshot(&store) };
-        let folder = picked.into_path().map_err(|e| e.to_string())?.to_string_lossy().into_owned();
+        // Escaped so a folder named like `[old]` is matched as itself, not read as a glob.
+        let folder = escape_folder(&picked.into_path().map_err(|e| e.to_string())?.to_string_lossy());
         // Read the list after the dialog closes: the file may have changed while it was open.
         let text = read_config_text(store.paths())?;
         let (include, exclude) = text.as_deref().map(raw_paths).unwrap_or_default();

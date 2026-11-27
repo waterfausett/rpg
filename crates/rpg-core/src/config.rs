@@ -218,6 +218,36 @@ pub fn raw_paths(text: &str) -> (Vec<String>, Vec<String>) {
     toml::from_str::<Doc>(text).map(|d| (d.paths.include, d.paths.exclude)).unwrap_or_default()
 }
 
+/// A folder path as a `[paths]` pattern: glob characters are escaped as one-character classes
+/// (`[` → `[[]`), so the pattern still counts as a folder and matches itself and everything under it.
+pub fn escape_folder(folder: &str) -> String {
+    let mut out = String::with_capacity(folder.len());
+    for c in folder.chars() {
+        if matches!(c, '*' | '?' | '[' | ']' | '{' | '}') {
+            out.extend(['[', c, ']']);
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Whether `p` names one exact path: no wildcards or alternatives, and every `[` opens a
+/// one-character class such as `[[]` (how `escape_folder` writes a literal glob character).
+fn is_literal(p: &str) -> bool {
+    let c: Vec<char> = p.chars().collect();
+    let mut i = 0;
+    while i < c.len() {
+        match c[i] {
+            '*' | '?' | '{' | '}' => return false,
+            '[' if c.get(i + 2) == Some(&']') => i += 3,
+            '[' => return false,
+            _ => i += 1,
+        }
+    }
+    true
+}
+
 /// A pattern with no glob characters is a folder: it matches itself and everything under it.
 /// Backslashes and drive-letter case are normalized like repo keys, and matching ignores case.
 fn path_set(field: &str, patterns: &[String]) -> Result<Option<GlobSet>, String> {
@@ -231,7 +261,7 @@ fn path_set(field: &str, patterns: &[String]) -> Result<Option<GlobSet>, String>
             return Err(format!("empty pattern in `paths.{field}`"));
         }
         let mut globs = vec![p.clone()];
-        if !p.contains(['*', '?', '[', '{']) {
+        if is_literal(&p) {
             globs.push(format!("{}/**", p.trim_end_matches('/')));
         }
         for g in globs {
@@ -389,5 +419,25 @@ exclude = ['C:\Users\me\AppData\Local\Temp\']
         for bad in ["[paths]\nexclude = ['[']\n", "[paths]\nexclude = ['']\n", "[paths]\nexlude = ['x']\n"] {
             assert!(toml::from_str::<Config>(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn escaped_folder_matches_itself_and_below() {
+        for folder in [r"C:\work\My Repos [old]", "C:/work/a{b}*?c", "C:/work/x]y"] {
+            let pat = escape_folder(folder);
+            assert!(validate_path_pattern(&pat).is_ok(), "{pat}");
+            let f = filter(&format!("[paths]\nexclude = ['{pat}']\n"));
+            let norm = normalize_repo(folder);
+            assert!(!f.allows(Some(folder)), "{pat} should match the folder itself");
+            assert!(!f.allows(Some(&format!("{norm}/sub/repo"))), "{pat} should match below the folder");
+            assert!(f.allows(Some(&format!("{norm}x"))), "{pat} must not match a sibling");
+        }
+        // `[old]` must not act as a character class.
+        let f = filter(&format!("[paths]\nexclude = ['{}']\n", escape_folder("C:/w/[old]")));
+        assert!(f.allows(Some("C:/w/o")));
+        // Plain folders don't change, and real globs stay globs.
+        assert_eq!(escape_folder("C:/work/plain"), "C:/work/plain");
+        let f = filter("[paths]\nexclude = ['C:/w/[ab]']\n");
+        assert!(!f.allows(Some("C:/w/a")) && f.allows(Some("C:/w/a/sub")));
     }
 }
