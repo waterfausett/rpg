@@ -97,7 +97,7 @@ tier = "silver"                # bronze | silver | gold | platinum | legendary |
 xp = 600                       # optional; overrides the tier default
 fallback = "Static text shown when there is no LLM flavor."
 hint = "Shown while still locked."          # optional
-trigger = ["commit"]           # commit, push, pr_opened, pr_merged,
+trigger = ["commit"]           # commit, merge_conflict_resolved, push, pr_opened, pr_merged,
                                # review_submitted, claude_session_start, claude_session_end
 filter = { hours = { start = 0, end = 4 } }   # optional; which events count
 counter = { type = "each" }    # optional, default "each"; what to do with them
@@ -117,7 +117,7 @@ Counters (set `type` plus the params):
 | `each` | | every matching event |
 | `first` | `scope = "ever"` or `"repo"` | first event ever / first commit in this repo |
 | `per_day` | `at` | the `at`-th event in the local day |
-| `personal_record` | `metric = "prs_merged_per_day"`, `"commits_per_day"` or `"pr_deletions"` | a new personal best |
+| `personal_record` | `metric = "prs_merged_per_day"`, `"commits_per_day"`, `"pr_deletions"` or `"conflict_files"` | a new personal best |
 | `file_age` | `min_years` | a commit touches a file untouched for that long |
 
 **Upgrading from 0.2:** the old `detector = {...}` field is gone, and a rule file that still has it fails to load. After upgrading to this version, empty your `rules/` folder, `skills/` included; the app reseeds it on the next start (move custom rules or skills aside first and copy them back after).
@@ -215,6 +215,7 @@ include = ['C:/work', 'octo/*']                # optional: only these count
 - Repos with their own local `core.hooksPath` (e.g. husky) override the global one, so rpg does not see their commits ([#7](../../issues/7)).
 - Repo-local `reference-transaction` and `post-index-change` hooks do not run while rpg is installed (no shim for those two names, to keep git fast) ([#7](../../issues/7)).
 - A push is counted when `pre-push` runs, before the push is known to have succeeded.
+- Merge conflicts count only when a `git merge` (or a merging `git pull`) stops on them and you commit the result. Conflicts during a rebase, cherry-pick, revert or `git stash pop` don't count yet ([#44](../../issues/44)).
 - macOS is not supported yet ([#4](../../issues/4)).
 - The installed hooks point at the exact `rpg-app.exe` (or `rpg.exe`) path they were installed from. If you move or reinstall the app somewhere else, run **Install hooks** again.
 - Do not disturb and Mute are not remembered across restarts. No autostart at login yet ([#10](../../issues/10)).

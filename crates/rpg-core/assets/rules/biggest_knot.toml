@@ -1,0 +1,9 @@
+id = "biggest_knot"
+name = "Biggest Knot"
+tier = "silver"
+trigger = ["merge_conflict_resolved"]
+counter = { type = "personal_record", metric = "conflict_files" }
+repeatable = true
+hint = "Untangle a merge with more conflicted files than ever before."
+fallback = "A new record for conflicted files untangled in one merge. Alexander would have just cut it, but you had a deadline and no sword."
+flavor = { type = "llm", prompt = "Rewrite this achievement announcement for this specific unlock, in the same voice: \"{fallback}\". Use the concrete details. Context: {context}" }

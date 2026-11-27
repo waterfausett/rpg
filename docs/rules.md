@@ -49,6 +49,7 @@ Unknown fields are a load error, so a typo is reported rather than silently igno
 | Kind | From | Useful data |
 | --- | --- | --- |
 | `commit` | git hook | `message`, `hash`, `branch`, `files` (`path`, `added`, `removed`), `lines_added`, `lines_removed`, `github_repo` |
+| `merge_conflict_resolved` | git hook | `hash`, `branch`, `files` (`path`), `file_count`, `github_repo` |
 | `push` | git hook | `branch`, `remote`, `github_repo` |
 | `pr_opened` | GitHub | `number`, `title`, `url`, `additions`, `deletions`, `created_at` |
 | `pr_merged` | GitHub | as `pr_opened`, plus `merged_at` |
@@ -57,6 +58,8 @@ Unknown fields are a load error, so a typo is reported rather than silently igno
 | `claude_session_end` | Claude Code hook | `session_id`, `session_minutes` (only when the start is known) |
 
 Older events may lack newer fields. A filter on a missing field never matches.
+
+`merge_conflict_resolved` fires alongside the `commit` event, on the commit that concludes a `git merge` (or a `git pull` that merges) which stopped on conflicts. `files` lists the paths git reported as conflicted. It earns no base exp of its own: the commit already did. It doesn't fire for a clean merge, an aborted merge, a fast-forward or `git pull --rebase`, or conflicts during a rebase, cherry-pick, revert or `git stash pop`. A conflict git's `rerere` resolved from a recorded resolution still counts.
 
 ## Filters
 
@@ -70,7 +73,7 @@ A filter that can never match one of the rule's `trigger` kinds is a load error 
 | `title` | regex | `pr_opened`, `pr_merged` | the PR title matches |
 | `hash` | regex | `commit` | the full commit hash matches |
 | `hash_palindrome` | integer N | `commit` | the first N hash characters read the same backwards |
-| `branch` | list of globs | `commit`, `push` (never matches other kinds) | the branch matches one glob |
+| `branch` | list of globs | `commit`, `merge_conflict_resolved`, `push` (never matches other kinds) | the branch matches one glob |
 | `repo` | list of globs | any | the repo matches one glob (local path with `/` separators for git events, `owner/name` for GitHub events) |
 | `files_any` | list of globs | `commit` | at least one changed file matches |
 | `files_only` | list of globs | `commit` | there is at least one file and every one matches |
@@ -106,7 +109,7 @@ The `files` filters (`files_any`, `files_only`, `min_files`, `max_files`, `min_e
 | `combo` | `kinds`, `within_minutes` | events of each kind in `kinds` happened in order within the window, in the same GitHub repo, ending with this event. The last kind must be one of the `trigger` kinds. |
 | `gap_days` | `min`, `scope` (`"ever"` / `"repo"`) | a matching event at least `min` days after the previous matching event (in this repo, or anywhere). The very first one doesn't count. |
 | `first` | `scope` (`"ever"` / `"repo"` / `"year"`) | the first event of this kind ever, in this repo, or in this calendar year |
-| `personal_record` | `metric` (`"prs_merged_per_day"` / `"commits_per_day"` / `"pr_deletions"`) | this event beats the stored record. The first value only seeds the record. |
+| `personal_record` | `metric` (`"prs_merged_per_day"` / `"commits_per_day"` / `"pr_deletions"` / `"conflict_files"`) | this event beats the stored record. The first value only seeds the record. `conflict_files` is the number of conflicted files in one `merge_conflict_resolved`. |
 | `file_age` | `min_years` | the commit touches a file last changed at least `min_years` ago |
 | `month_every_day` | | the first matching event on the last day of a month in which every day had a matching event |
 
@@ -246,7 +249,7 @@ fallback = "Seven days in a row with a commit."
 # meta
 id = "achievement_hunter"
 name = "Achievement Hunter"
-trigger = ["commit", "push", "pr_opened", "pr_merged", "review_submitted", "claude_session_end"]
+trigger = ["commit", "merge_conflict_resolved", "push", "pr_opened", "pr_merged", "review_submitted", "claude_session_end"]
 counter = { type = "meta", of = "distinct_unlocks" }
 tiers = [
   { tier = "silver", at = 25 },
