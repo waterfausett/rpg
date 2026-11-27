@@ -11,6 +11,8 @@ pub enum EventKind {
     ReviewSubmitted,
     ClaudeSessionStart,
     ClaudeSessionEnd,
+    QuestCompleted,
+    QuestFailed,
 }
 
 impl EventKind {
@@ -23,7 +25,14 @@ impl EventKind {
             EventKind::ReviewSubmitted => "review_submitted",
             EventKind::ClaudeSessionStart => "claude_session_start",
             EventKind::ClaudeSessionEnd => "claude_session_end",
+            EventKind::QuestCompleted => "quest_completed",
+            EventKind::QuestFailed => "quest_failed",
         }
+    }
+
+    /// Internal events the quest engine emits itself.
+    pub fn is_quest(self) -> bool {
+        matches!(self, EventKind::QuestCompleted | EventKind::QuestFailed)
     }
 }
 
@@ -33,6 +42,7 @@ pub enum Source {
     Git,
     Github,
     Claude,
+    Quest,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

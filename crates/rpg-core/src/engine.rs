@@ -107,6 +107,7 @@ pub fn base_label(kind: EventKind) -> Option<&'static str> {
         EventKind::ReviewSubmitted => Some("review"),
         EventKind::ClaudeSessionStart => None,
         EventKind::ClaudeSessionEnd => Some("Claude session"),
+        EventKind::QuestCompleted | EventKind::QuestFailed => None,
     }
 }
 
@@ -117,7 +118,7 @@ fn base_xp(store: &Store, cfg: &Config, ev: &Event) -> Result<Option<(u64, &'sta
         EventKind::PrOpened => cfg.xp.pr_opened,
         EventKind::PrMerged => cfg.xp.pr_merged,
         EventKind::ReviewSubmitted => cfg.xp.review,
-        EventKind::ClaudeSessionStart => return Ok(None),
+        EventKind::ClaudeSessionStart | EventKind::QuestCompleted | EventKind::QuestFailed => return Ok(None),
         EventKind::ClaudeSessionEnd => {
             let has_start = match ev.data["session_id"].as_str() {
                 Some(id) => store.find_session_start(id)?.is_some(),
@@ -806,5 +807,14 @@ tiers=[{tier=\"bronze\",at=100,xp=5},{tier=\"silver\",at=1000,xp=50},{tier=\"gol
         assert!(o.unlocks.is_empty());
         assert_eq!(store.unlock_count("committed.bronze").unwrap(), 1);
         assert_eq!(store.unlock_count("committed.silver").unwrap(), 1);
+    }
+
+    #[test]
+    fn quest_kinds_earn_no_base_xp() {
+        let store = Store::open_in_memory().unwrap();
+        let rules = Rules::default();
+        let o = run(&store, &rules, &mk(EventKind::QuestCompleted, "2026-01-02T00:00:00Z", serde_json::json!({})));
+        assert!(o.xp_gains.is_empty());
+        assert_eq!(base_label(EventKind::QuestFailed), None);
     }
 }

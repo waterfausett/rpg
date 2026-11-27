@@ -55,6 +55,8 @@ Unknown fields are a load error, so a typo is reported rather than silently igno
 | `review_submitted` | GitHub | `url` (of the PR) |
 | `claude_session_start` | Claude Code hook | `session_id`, `open_sessions` |
 | `claude_session_end` | Claude Code hook | `session_id`, `session_minutes` (only when the start is known) |
+| `quest_completed` | quest (internal) | `quest_id`, `tier`, `chain` (level reached after this completion), `multiplier`, `xp` |
+| `quest_failed` | quest (internal) | `quest_id`, `tier`, `chain_lost` (the chain level that was lost) |
 
 Older events may lack newer fields. A filter on a missing field never matches.
 
@@ -85,6 +87,8 @@ A filter that can never match one of the rule's `trigger` kinds is a load error 
 | `pr_open_minutes` | `{ min, max }` | `pr_merged` | merged minus created, in minutes, is within the range |
 | `session_minutes` | `{ min, max }` | `claude_session_end` | the session length is within the range (only for sessions with a known start) |
 | `open_sessions` | `{ min }` | `claude_session_start` | at least this many Claude sessions are open, this one included |
+| `chain` | `{ min, max }` | `quest_completed` | the chain level reached is within the range |
+| `quest` | list of globs | `quest_completed`, `quest_failed` | the quest id matches one of the globs |
 
 The `files` filters (`files_any`, `files_only`, `min_files`, `max_files`, `min_extensions`) never match an event that has no file list.
 

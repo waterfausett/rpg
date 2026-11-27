@@ -58,6 +58,8 @@ pub struct RawFilter {
     pub session_minutes: Option<RawRange>,
     pub message_length: Option<RawRange>,
     pub open_sessions: Option<RawMin>,
+    pub chain: Option<RawRange>,
+    pub quest: Option<Vec<String>>,
 }
 
 /// Compiled filter. The default matches everything.
@@ -83,6 +85,8 @@ pub struct Filter {
     session_minutes: Option<RawRange>,
     message_length: Option<RawRange>,
     open_sessions: Option<u64>,
+    chain: Option<RawRange>,
+    quest: Option<GlobSet>,
 }
 
 fn regex(field: &str, p: Option<String>) -> Result<Option<Regex>, String> {
@@ -169,6 +173,8 @@ impl TryFrom<RawFilter> for Filter {
             session_minutes: r.session_minutes,
             message_length: r.message_length,
             open_sessions: r.open_sessions.map(|o| o.min),
+            chain: r.chain,
+            quest: glob_set("quest", r.quest)?,
         })
     }
 }
@@ -281,6 +287,16 @@ impl Filter {
                 return false;
             }
         }
+        if let Some(r) = &self.chain {
+            if !data["chain"].as_f64().is_some_and(|v| in_range(r, v)) {
+                return false;
+            }
+        }
+        if let Some(g) = &self.quest {
+            if !text("quest_id").is_some_and(|q| g.is_match(q)) {
+                return false;
+            }
+        }
         if let Some(min) = self.open_sessions {
             if !data["open_sessions"].as_u64().is_some_and(|v| v >= min) {
                 return false;
@@ -334,12 +350,14 @@ impl Filter {
             || self.hash.is_some()
             || self.hash_palindrome.is_some()
             || self.message_length.is_some();
-        let checks: [(&str, bool, &[EventKind]); 5] = [
+        let checks: [(&str, bool, &[EventKind]); 7] = [
             ("message/files/hash/message_length", commit_only, &[Commit]),
             ("title", self.title.is_some(), &[PrOpened, PrMerged]),
             ("pr_open_minutes", self.pr_open_minutes.is_some(), &[PrMerged]),
             ("session_minutes", self.session_minutes.is_some(), &[ClaudeSessionEnd]),
             ("open_sessions", self.open_sessions.is_some(), &[ClaudeSessionStart]),
+            ("chain", self.chain.is_some(), &[QuestCompleted]),
+            ("quest", self.quest.is_some(), &[QuestCompleted, QuestFailed]),
         ];
         for (name, used, ok) in checks {
             if used {
@@ -510,5 +528,18 @@ mod tests {
         assert!(filt("pr_open_minutes = {max = 5}").kinds_ok(&[EventKind::PrOpened]).is_err());
         assert!(filt("title = 'x'").kinds_ok(&[EventKind::PrOpened, EventKind::PrMerged]).is_ok());
         assert!(Filter::default().kinds_ok(&[EventKind::ReviewSubmitted]).is_ok());
+    }
+
+    #[test]
+    fn chain_and_quest_filters() {
+        let f = filt("chain = { min = 5 }
+quest = [\"ship_*\"]");
+        let done = |chain, id| ev(EventKind::QuestCompleted, "2026-01-05T12:00:00Z", json!({"chain": chain, "quest_id": id}));
+        assert!(f.matches(&done(5, "ship_it_speedrun"), utc()));
+        assert!(!f.matches(&done(4, "ship_it_speedrun"), utc()));
+        assert!(!f.matches(&done(9, "hot_streak"), utc()));
+        assert!(filt("quest = [\"*\"]").kinds_ok(&[EventKind::QuestFailed]).is_ok());
+        assert!(filt("chain = { min = 2 }").kinds_ok(&[EventKind::QuestFailed]).is_err());
+        assert!(filt("chain = { min = 2 }").kinds_ok(&[EventKind::Commit]).is_err());
     }
 }

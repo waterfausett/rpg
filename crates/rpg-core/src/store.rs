@@ -84,6 +84,7 @@ fn source_str(s: Source) -> &'static str {
         Source::Git => "git",
         Source::Github => "github",
         Source::Claude => "claude",
+        Source::Quest => "quest",
     }
 }
 
