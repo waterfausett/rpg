@@ -44,8 +44,12 @@ pub struct QuestDef {
 
 impl QuestDef {
     pub fn has_github_step(&self) -> bool {
-        self.steps.iter().any(|s| matches!(s.kind, EventKind::PrOpened | EventKind::PrMerged | EventKind::ReviewSubmitted))
+        self.steps.iter().any(|s| is_pr_kind(s.kind))
     }
+}
+
+fn is_pr_kind(k: EventKind) -> bool {
+    matches!(k, EventKind::PrOpened | EventKind::PrMerged | EventKind::ReviewSubmitted)
 }
 
 #[derive(Deserialize)]
@@ -137,14 +141,15 @@ pub fn parse_quest(text: &str) -> Result<QuestDef, String> {
     if r.steps.is_empty() {
         return Err("`steps` is empty (a quest needs at least one step)".into());
     }
-    if r.same == Some(Same::Pr)
-        && !r.trigger.iter().all(|k| matches!(k, EventKind::PrOpened | EventKind::PrMerged | EventKind::ReviewSubmitted))
-    {
+    if r.same == Some(Same::Pr) && !r.trigger.iter().all(|&k| is_pr_kind(k)) {
         return Err("`same = \"pr\"` needs a `trigger` made only of PR kinds (pr_opened, pr_merged, review_submitted)".into());
     }
     let filter = Filter::try_from(r.filter.unwrap_or_default()).map_err(|e| format!("`filter`: {e}"))?;
     filter.kinds_ok(&r.trigger).map_err(|e| format!("`filter`: {e}"))?;
     let steps = r.steps.into_iter().enumerate().map(|(i, s)| parse_step(i + 1, s)).collect::<Result<Vec<_>, _>>()?;
+    if r.same == Some(Same::Branch) && steps.iter().any(|s| is_pr_kind(s.kind)) {
+        return Err("`same = \"branch\"` can't have a PR step (pr_opened, pr_merged, review_submitted): PR events have no branch. Use `same = \"repo\"`".into());
+    }
     Ok(QuestDef {
         xp: r.xp.unwrap_or_else(|| r.tier.default_xp() / 2),
         id: r.id,
@@ -239,6 +244,8 @@ fallback = "You committed. Bold."
             (with("minutes = 15", "minutes = 0"), "minutes"),
             (with("{ kind = \"push\" }", "{ kind = \"push\", count = 0 }"), "count"),
             (with("same = \"repo\"", "same = \"pr\""), "same"),
+            // PR events carry no branch, so a branch binding could never credit a PR step.
+            (with("same = \"repo\"", "same = \"branch\""), "same"),
             (with("{ kind = \"push\" }", "{ kind = \"push\", filter = { message = \"x\" } }"), "filter"),
             (with("id = \"ship_it_speedrun\"", "id = \"a.b\""), "id"),
         ];

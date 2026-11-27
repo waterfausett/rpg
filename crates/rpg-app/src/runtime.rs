@@ -998,15 +998,17 @@ fallback = "Commit more."
     #[test]
     fn no_github_check_when_github_is_off() {
         let f = quest_fixture_with(r#"steps = [{ kind = "pr_opened" }]"#);
-        f.state.cfg.write().unwrap().github.enabled = false;
         let sink = RecSink::default();
         let (mut q, pokes) = counting();
         live_commit(&f, &sink, &mut q);
         let id = sink.offers()[0].0;
         handle(&f.state, &sink, &mut q, Msg::Answer(id, true), Utc::now());
+        // GitHub turned off after accepting (a GitHub-step quest isn't offered while it's off).
+        f.state.cfg.write().unwrap().github.enabled = false;
+        assert_eq!(pokes.load(SeqCst), 1, "polled on accept, while GitHub was on");
         deadline_check(&f.state, &sink, &mut q, Utc::now() + chrono::Duration::minutes(2));
         assert_eq!(sink.updates(), vec![QuestStatus::Active, QuestStatus::Failed]);
-        assert_eq!(pokes.load(SeqCst), 0);
+        assert_eq!(pokes.load(SeqCst), 1, "no check at the deadline");
     }
 
     #[test]

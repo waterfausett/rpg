@@ -1153,6 +1153,10 @@ fn chain_gang() {
     let r = starter();
     assert!(fires(&r, &[], quest_done("2026-11-24T10:00:00Z", 5), "chain_gang"));
     assert!(!fires(&r, &[], quest_done("2026-11-24T10:00:00Z", 4), "chain_gang"));
+    // Once per run that reaches 5: the completions after it don't fire again.
+    assert!(!fires(&r, &[], quest_done("2026-11-24T10:00:00Z", 6), "chain_gang"));
+    let run = [quest_done("2026-11-24T09:00:00Z", 5)];
+    assert!(!fires(&r, &run, quest_done("2026-11-24T10:00:00Z", 6), "chain_gang"));
 }
 
 #[test]

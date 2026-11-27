@@ -21,7 +21,8 @@ pub const QUEST_BEST_CHAIN: &str = "quest_best_chain";
 pub const QUEST_PASSES: &str = "quest_passes";
 pub const QUEST_LAST_OFFER: &str = "quest_last_offer";
 
-/// Only events this recent can raise an offer.
+/// Only events this recent can raise an offer. GitHub events also get the poll interval, since
+/// they arrive up to `poll_minutes` late.
 const FRESH_MINUTES: i64 = 5;
 
 /// The meta key holding when quest `id` was last offered.
@@ -102,7 +103,9 @@ pub fn bind(same: Option<Same>, trigger: &Event) -> Binding {
 impl Binding {
     fn matches(&self, ev: &Event) -> bool {
         let same = |want: &Option<String>, got: Option<String>| want.as_ref().is_none_or(|w| got.as_ref() == Some(w));
-        same(&self.repo, resolved_repo(ev)) && same(&self.branch, data_str(ev, "branch")) && same(&self.pr_url, data_str(ev, "url"))
+        // GitHub owner/name is case-insensitive (as the combo counter treats it).
+        let same_repo = self.repo.as_ref().is_none_or(|w| resolved_repo(ev).is_some_and(|g| g.eq_ignore_ascii_case(w)));
+        same_repo && same(&self.branch, data_str(ev, "branch")) && same(&self.pr_url, data_str(ev, "url"))
     }
 }
 
@@ -219,7 +222,11 @@ pub fn offer_for(
     if !cfg.quests.enabled || !cfg.paths.allows(ev.repo.as_deref()) || ev.kind.is_quest() || ev.backfill {
         return Ok(None);
     }
-    if now - ev.ts > Duration::minutes(FRESH_MINUTES) || store.active_quest()?.is_some() {
+    let fresh = match ev.source {
+        Source::Github => FRESH_MINUTES + cfg.github.poll_minutes as i64,
+        _ => FRESH_MINUTES,
+    };
+    if now - ev.ts > Duration::minutes(fresh) || store.active_quest()?.is_some() {
         return Ok(None);
     }
     if let Some(last) = meta_time(store, QUEST_LAST_OFFER)? {
@@ -227,7 +234,13 @@ pub fn offer_for(
             return Ok(None);
         }
     }
-    for def in quests.iter().filter(|q| q.enabled && q.trigger.contains(&ev.kind) && q.filter.matches(ev, tz)) {
+    // A GitHub step needs GitHub on, and when it is bound to the trigger's repo or branch, a
+    // trigger that knows its GitHub repo (a GitHub event's own repo is one).
+    let knows_github_repo = ev.source == Source::Github || ev.data["github_repo"].as_str().is_some_and(|g| !g.is_empty());
+    let completable = |q: &QuestDef| {
+        !q.has_github_step() || (cfg.github.enabled && (!matches!(q.same, Some(Same::Repo | Same::Branch)) || knows_github_repo))
+    };
+    for def in quests.iter().filter(|q| q.enabled && q.trigger.contains(&ev.kind) && q.filter.matches(ev, tz) && completable(q)) {
         if let Some(last) = meta_time(store, &last_offer_key(&def.id))? {
             if now < last + Duration::hours(def.cooldown_hours as i64) {
                 continue;
@@ -501,7 +514,7 @@ mod tests {
         let quests = [q(SHIP_IT)];
         let cfg = no_gap();
         let at = |m: i64| {
-            let e = ev(EventKind::Commit, "r", mins(m), json!({}));
+            let e = ev(EventKind::Commit, "r", mins(m), json!({"github_repo": "r"}));
             offer_for(&store, &quests, &cfg, &e, mins(m), tz(), &mut zero()).unwrap()
         };
         assert!(at(0).is_some());
@@ -554,10 +567,55 @@ mod tests {
     }
 
     #[test]
+    fn github_quests_need_github() {
+        let quests = [q(SHIP_IT)];
+        let linked = ev(EventKind::Commit, "C:/w", mins(0), json!({"github_repo": "o/w"}));
+        let off: Config = toml::from_str("[github]
+enabled = false
+").unwrap();
+        let store = Store::open_in_memory().unwrap();
+        assert!(offer_for(&store, &quests, &off, &linked, t0(), tz(), &mut zero()).unwrap().is_none(), "github off");
+        let store = Store::open_in_memory().unwrap();
+        let local = ev(EventKind::Commit, "C:/w", mins(0), json!({}));
+        assert!(offer_for(&store, &quests, &Config::default(), &local, t0(), tz(), &mut zero()).unwrap().is_none(), "no github remote");
+        let store = Store::open_in_memory().unwrap();
+        assert!(offer_for(&store, &quests, &Config::default(), &linked, t0(), tz(), &mut zero()).unwrap().is_some());
+        // Quests without a GitHub step still offer with GitHub off.
+        let store = Store::open_in_memory().unwrap();
+        assert!(offer_for(&store, &[q(HOT_STREAK)], &off, &local, t0(), tz(), &mut zero()).unwrap().is_some());
+    }
+
+    #[test]
+    fn github_triggers_get_the_poll_delay() {
+        let quests = [q(include_str!("../../assets/quests/review_bounty.toml"))];
+        let cfg = Config::default();
+        assert_eq!(cfg.github.poll_minutes, 10);
+        let store = Store::open_in_memory().unwrap();
+        let pr = ev(EventKind::PrOpened, "o/w", mins(-12), json!({"url": "u"}));
+        assert!(offer_for(&store, &quests, &cfg, &pr, t0(), tz(), &mut zero()).unwrap().is_some(), "12 min old PR");
+        let store = Store::open_in_memory().unwrap();
+        let late = ev(EventKind::PrOpened, "o/w", mins(-16), json!({"url": "u"}));
+        assert!(offer_for(&store, &quests, &cfg, &late, t0(), tz(), &mut zero()).unwrap().is_none(), "past poll + 5");
+        let store = Store::open_in_memory().unwrap();
+        let commit = ev(EventKind::Commit, "r", mins(-6), json!({}));
+        assert!(offer_for(&store, &[easy(1.0)], &cfg, &commit, t0(), tz(), &mut zero()).unwrap().is_none(), "6 min old commit");
+    }
+
+    #[test]
+    fn repo_binding_ignores_case() {
+        let store = Store::open_in_memory().unwrap();
+        let rules = Rules::default();
+        start(&store, &q(SHIP_IT), &ev(EventKind::Commit, "C:/w", mins(-1), json!({"github_repo": "Octo/Widget"})));
+        assert!(run(&store, &rules, &ev(EventKind::Push, "C:/w", mins(1), json!({"github_repo": "Octo/Widget"}))).quest.is_some());
+        let o = run(&store, &rules, &ev(EventKind::PrOpened, "octo/widget", mins(2), json!({"url": "u"})));
+        assert_eq!(o.quest.expect("credited").status, QuestStatus::Completed);
+    }
+
+    #[test]
     fn steps_complete_in_order_within_window() {
         let store = Store::open_in_memory().unwrap();
         let rules = Rules::default();
-        let v = start(&store, &q(SHIP_IT), &ev(EventKind::Commit, "r", mins(-1), json!({})));
+        let v = start(&store, &q(SHIP_IT), &ev(EventKind::Commit, "r", mins(-1), json!({"github_repo": "r"})));
         assert_eq!((v.status, v.reward, v.deadline), (QuestStatus::Active, 500, mins(15)));
         assert!(v.has_github_step);
         let o = run(&store, &rules, &ev(EventKind::PrOpened, "r", mins(1), json!({"url": "u1"})));
@@ -635,7 +693,7 @@ mod tests {
     fn branch_binding_needs_same_repo_and_branch() {
         let store = Store::open_in_memory().unwrap();
         let rules = Rules::default();
-        let def = q(&SHIP_IT.replace("same = \"repo\"", "same = \"branch\""));
+        let def = q(&SHIP_IT.replace("same = \"repo\"", "same = \"branch\"").replace(", { kind = \"pr_opened\" }", ""));
         start(&store, &def, &ev(EventKind::Commit, "r", mins(-1), json!({"branch": "feat"})));
         assert!(run(&store, &rules, &ev(EventKind::Push, "r", mins(1), json!({"branch": "main"}))).quest.is_none());
         assert!(run(&store, &rules, &ev(EventKind::Push, "r2", mins(2), json!({"branch": "feat"}))).quest.is_none());
@@ -646,7 +704,7 @@ mod tests {
     fn duplicate_event_counts_once() {
         let store = Store::open_in_memory().unwrap();
         let rules = Rules::default();
-        start(&store, &q(SHIP_IT), &ev(EventKind::Commit, "r", mins(-1), json!({})));
+        start(&store, &q(SHIP_IT), &ev(EventKind::Commit, "r", mins(-1), json!({"github_repo": "r"})));
         let push = ev(EventKind::Push, "r", mins(1), json!({}));
         assert!(run(&store, &rules, &push).quest.is_some());
         assert!(run(&store, &rules, &push).quest.is_none());
@@ -656,7 +714,7 @@ mod tests {
     #[test]
     fn active_quest_survives_definition_removal() {
         let store = Store::open_in_memory().unwrap();
-        start(&store, &q(SHIP_IT), &ev(EventKind::Commit, "r", mins(-1), json!({})));
+        start(&store, &q(SHIP_IT), &ev(EventKind::Commit, "r", mins(-1), json!({"github_repo": "r"})));
         let rules = Rules { quests: vec![], ..Default::default() };
         run(&store, &rules, &ev(EventKind::Push, "r", mins(1), json!({})));
         let o = run(&store, &rules, &ev(EventKind::PrOpened, "r", mins(2), json!({})));
@@ -782,7 +840,7 @@ mod tests {
         .unwrap();
         let rules = Rules { list: vec![gang], ..Default::default() };
         store.meta_set(QUEST_CHAIN, "1").unwrap();
-        start(&store, &q(SHIP_IT), &ev(EventKind::Commit, "r", mins(-1), json!({})));
+        start(&store, &q(SHIP_IT), &ev(EventKind::Commit, "r", mins(-1), json!({"github_repo": "r"})));
         run(&store, &rules, &ev(EventKind::Push, "r", mins(1), json!({})));
         let o = run(&store, &rules, &ev(EventKind::PrOpened, "r", mins(2), json!({})));
         assert_eq!(o.unlocks.iter().map(|u| u.rule_id.as_str()).collect::<Vec<_>>(), vec!["gang"]);
