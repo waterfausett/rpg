@@ -132,6 +132,6 @@ Config is read at startup. The tray **Quests** check item turns quests off or on
 
 ## Events and achievements
 
-Resolving a quest records `quest_completed` (`quest_id`, `tier`, `chain`, `multiplier`, `xp`) or `quest_failed` (`quest_id`, `tier`, `chain_lost`), and rules run on them in the same transaction. They earn no base exp and never trigger quests. Rules can use the `chain = { min, max }` filter (`quest_completed`) and `quest = [globs]` (both). The starter achievements are Quest Giver's Pet (10 / 50 / 200 completions), Chain Gang (a chain of 5) and Fumble (three failures).
+Resolving a quest records `quest_completed` (`quest_id`, `tier`, `chain`, `multiplier`, `xp`) or `quest_failed` (`quest_id`, `tier`, `chain_lost`), and rules run on them in the same transaction. They earn no base exp and never trigger quests. Rules can use the `chain = { min, max }` filter (`quest_completed`) and `quest = [globs]` (both). The starter achievements are Quest Giver's Pet (10 / 50 / 200 completions), Chain Gang (a chain of 5) and Fumble (three failures in one day).
 
 The character sheet's Achievements tab has a Quests section: current and best chain, completions and failures, a log of resolved quests and a board of every loaded quest.

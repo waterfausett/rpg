@@ -2,8 +2,8 @@ id = "fumble"
 name = "Fumble"
 tier = "bronze"
 trigger = ["quest_failed"]
-counter = { type = "run", at = 3 }
+counter = { type = "per_day", at = 3 }
 repeatable = true
-hint = "The timer is not your friend."
-fallback = "Three failed quests in a row. The clock won every time, and it didn't even need to try."
+hint = "Fail three quests in one day. The timer is not your friend."
+fallback = "Three failed quests in one day. The clock won every time, and it didn't even need to try."
 flavor = { type = "llm", prompt = "Rewrite this achievement announcement for this specific unlock, in the same voice: \"{fallback}\". Use the concrete details. Context: {context}" }

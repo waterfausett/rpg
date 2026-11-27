@@ -1160,7 +1160,9 @@ fn fumble() {
     let r = starter();
     let h = [quest_lost("2026-11-24T10:00:00Z"), quest_lost("2026-11-24T11:00:00Z")];
     assert!(fires(&r, &h, quest_lost("2026-11-24T12:00:00Z"), "fumble"));
-    // Only two failures: not yet. (`run` looks at one event kind only, so a completion in
-    // between does not reset it.)
+    // Only two failures in the day: not yet.
     assert!(!fires(&r, &h[..1], quest_lost("2026-11-24T12:00:00Z"), "fumble"));
+    // Three failures spread over two days don't count.
+    let split = [quest_lost("2026-11-23T10:00:00Z"), quest_lost("2026-11-24T11:00:00Z")];
+    assert!(!fires(&r, &split, quest_lost("2026-11-24T12:00:00Z"), "fumble"));
 }
