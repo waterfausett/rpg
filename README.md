@@ -26,7 +26,7 @@ Output: `target/release/rpg-app.exe` plus installers in `target/release/bundle/{
    This sets a global git `core.hooksPath` to rpg's shim folder and adds `SessionStart`/`SessionEnd` entries to `~/.claude/settings.json` (a backup is written next to it as `settings.json.rpg-backup`, and your other settings are kept). Every standard git hook except `reference-transaction` and `post-index-change` (see Known limitations) gets a pass-through shim, so a repo's own `.git/hooks/*` keep working.
 3. Commit something. A `+10 exp · commit` pop-up appears bottom-right; unlocks show a gold banner top-center. To write your own achievements, see the [rule format reference](docs/rules.md).
 
-Tray menu: Open character sheet, Mute sounds, Do not disturb, Open rules folder, Install hooks, Uninstall hooks, Check for updates, Quit. Only one app instance runs at a time. Hooks never fail a git command; errors go to `rpg.log`.
+Tray menu: Open character sheet, Mute sounds, Do not disturb, Start at login, Open rules folder, Install hooks, Uninstall hooks, Check for updates, Quit. **Start at login** (off by default) adds rpg to your login items (Windows: the `rpg` value under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, which Task Manager's Startup apps tab also shows); the check mark reads that setting back, so turning it off in Task Manager unchecks it. Only one app instance runs at a time. Hooks never fail a git command; errors go to `rpg.log`.
 
 ## Updates
 
@@ -45,7 +45,7 @@ The updater signing key is the `TAURI_SIGNING_PRIVATE_KEY` repo secret (no passw
 
 ## Uninstall
 
-`rpg uninstall-hooks` (or tray **Uninstall hooks**) restores your previous `core.hooksPath` (or unsets it) and removes only rpg's entries from `settings.json`. Then delete the app. Your data stays until you delete the data dir. Always run `uninstall-hooks` **before** deleting the data dir: the global `core.hooksPath` points into it, and if that folder is gone git silently runs no hooks at all, in any repo.
+`rpg uninstall-hooks` (or tray **Uninstall hooks**) restores your previous `core.hooksPath` (or unsets it) and removes only rpg's entries from `settings.json`. Turn off **Start at login**, then delete the app. Your data stays until you delete the data dir. Always run `uninstall-hooks` **before** deleting the data dir: the global `core.hooksPath` points into it, and if that folder is gone git silently runs no hooks at all, in any repo.
 
 ## Where things live
 

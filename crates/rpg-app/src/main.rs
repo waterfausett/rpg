@@ -66,6 +66,8 @@ fn main() {
         // Must be the first plugin: a second launch just exits.
         .plugin(tauri_plugin_single_instance::init(|_app, _argv, _cwd| {}))
         .plugin(tauri_plugin_updater::Builder::new().build())
+        // Login item (Windows `Run` key, macOS launch agent) named after productName.
+        .plugin(tauri_plugin_autostart::Builder::new().build())
         .setup(|app| {
             platform::configure_app(app);
             let state = init_state().map_err(|e| {
