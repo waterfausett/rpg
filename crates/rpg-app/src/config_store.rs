@@ -100,7 +100,11 @@ impl ConfigStore {
                 let old = self.swap(new.clone());
                 self.notify_change(&old, &new);
             }
-            Err(e) => log(&self.paths, &format!("config.toml invalid, keeping current settings: {e:#}")),
+            Err(e) => {
+                log(&self.paths, &format!("config.toml invalid, keeping current settings: {e:#}"));
+                // The file no longer holds what we wrote, so restoring that exact text later is a change too.
+                *last_written = None;
+            }
         }
         for f in lock(&self.on_external).iter() {
             f();
@@ -205,6 +209,25 @@ mod tests {
         assert_eq!(f.externals.load(Ordering::SeqCst), 1);
         let log = std::fs::read_to_string(f.paths.log()).unwrap();
         assert!(log.contains("config.toml invalid"), "{log}");
+    }
+
+    /// Breaking the file by hand and then restoring exactly what the app last wrote must still
+    /// tell the window, or it keeps showing the error panel.
+    #[test]
+    fn restoring_the_last_written_text_after_a_break_notifies() {
+        let f = fx();
+        f.store.set("sound.volume", &serde_json::json!(0.3)).unwrap();
+        let good = std::fs::read_to_string(f.paths.config_file()).unwrap();
+        std::fs::write(f.paths.config_file(), "[sound\n").unwrap();
+        f.store.reload_from_disk();
+        assert_eq!(f.externals.load(Ordering::SeqCst), 1);
+        std::fs::write(f.paths.config_file(), &good).unwrap();
+        f.store.reload_from_disk();
+        assert_eq!(f.externals.load(Ordering::SeqCst), 2, "the fix wasn't reported");
+        assert!((f.cfg.read().unwrap().sound.volume as f64 - 0.3).abs() < 1e-6);
+        // Once seen, the same text is quiet again.
+        f.store.reload_from_disk();
+        assert_eq!(f.externals.load(Ordering::SeqCst), 2);
     }
 
     #[test]
