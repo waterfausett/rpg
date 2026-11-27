@@ -46,6 +46,8 @@ The automated and scripted checks cannot see these. Do them once on your machine
 - [ ] Breaking `config.toml` shows the error panel. The tray Mute still works and shows the "Couldn't save" pop-up. Fixing the file and pressing **Check again** restores the sections.
 - [ ] **Choose…** with a file with spaces in its name: it lands in the right folder and plays on the next matching banner. ▶ previews it even while muted. ✕ unpins it, and the file stays in `sounds/`.
 - [ ] Repos: **Add folder…** adds a path. A bad pattern shows an error and isn't saved.
+- [ ] Quests section: the Quests switch and the tray Quests check mark agree both ways and survive a restart. Turning it off there withdraws a pending offer and cancels an active quest, exactly like the tray.
+- [ ] Quests section: Offer window 9, Passes 0, Chain bonus 0 and Chain cap 0.5 each show an error and revert; valid values save to `[quests]` in `config.toml` (comments kept). A new Offer window applies to the next offer, and Minimum time 0 lets offers come back to back, with no restart.
 
 ## Character sheet
 - [ ] Achievements tab: a ladder card (e.g. a `lifetime` rule with `tiers`) shows its current tier and a progress bar toward the next step, labelled like `Silver · 412 / 1,000`; hovering the bar lists the steps, with `???` past the next one.

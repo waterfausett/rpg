@@ -37,6 +37,8 @@ enum Kind {
     Volume,
     FileName,
     IntRange(i64, i64),
+    /// A number in `min..=max`; when `open_min`, `min` itself is excluded.
+    FloatRange { min: f64, max: f64, open_min: bool },
     NonEmptyString,
     Patterns,
 }
@@ -51,6 +53,11 @@ fn kind_of(key: &str) -> Option<Kind> {
         "github.poll_minutes" => Kind::IntRange(1, 1440),
         "llm.timeout_secs" => Kind::IntRange(1, 600),
         "updates.check_hours" => Kind::IntRange(0, 8760),
+        "quests.offer_seconds" => Kind::IntRange(10, 3600),
+        "quests.max_passes" => Kind::IntRange(1, 100),
+        "quests.min_gap_minutes" => Kind::IntRange(0, 1440),
+        "quests.chain_step" => Kind::FloatRange { min: 0.0, max: 100.0, open_min: true },
+        "quests.chain_max" => Kind::FloatRange { min: 1.0, max: 100.0, open_min: false },
         "llm.model" => Kind::NonEmptyString,
         "paths.include" | "paths.exclude" => Kind::Patterns,
         _ => {
@@ -96,6 +103,13 @@ fn to_item(key: &str, kind: Kind, v: &Value) -> Result<Item, EditError> {
         Kind::IntRange(min, max) => match v.as_i64() {
             Some(n) if (min..=max).contains(&n) => Ok(toml_edit::value(n)),
             _ => Err(bad(key, format!("expected an integer from {min} to {max}"))),
+        },
+        Kind::FloatRange { min, max, open_min } => match v.as_f64() {
+            Some(f) if f <= max && (f > min || (!open_min && f == min)) => Ok(toml_edit::value(f)),
+            _ => {
+                let low = if open_min { format!("above {min}") } else { format!("from {min}") };
+                Err(bad(key, format!("expected a number {low} to {max}")))
+            }
         },
         Kind::NonEmptyString => match v.as_str() {
             Some(s) if !s.trim().is_empty() => Ok(toml_edit::value(s)),
@@ -253,6 +267,26 @@ mod tests {
         assert!(t.contains("[quests]"));
         assert!(!c.quests.enabled);
         assert!(matches!(apply_edit(SAMPLE, "quests.enabled", &json!("no")), Err(EditError::BadValue { .. })));
+    }
+    #[test] fn quests_numbers_are_validated() {
+        for (k, v) in [("quests.offer_seconds", json!(10)), ("quests.max_passes", json!(1)), ("quests.min_gap_minutes", json!(0)),
+                       ("quests.chain_step", json!(0.25)), ("quests.chain_max", json!(1)), ("quests.chain_max", json!(7.5))] {
+            assert!(apply_edit(SAMPLE, k, &v).is_ok(), "{k} = {v}");
+        }
+        for (k, v) in [("quests.offer_seconds", json!(9)), ("quests.offer_seconds", json!(1.5)), ("quests.max_passes", json!(0)),
+                       ("quests.min_gap_minutes", json!(-1)), ("quests.chain_step", json!(0)), ("quests.chain_step", json!(-0.5)),
+                       ("quests.chain_step", json!("1")), ("quests.chain_max", json!(0.99))] {
+            assert!(matches!(apply_edit(SAMPLE, k, &v), Err(EditError::BadValue { .. })), "{k} = {v}");
+        }
+        let (t, c) = apply_edit(SAMPLE, "quests.chain_step", &json!(0.25)).unwrap();
+        assert!(t.contains("chain_step = 0.25"));
+        assert_eq!(c.quests.chain_step, 0.25);
+        // An integer for a float key is saved as a float, so it still parses.
+        let (t, c) = apply_edit("", "quests.chain_max", &json!(3)).unwrap();
+        assert!(t.contains("chain_max = 3.0"), "{t}");
+        assert_eq!(c.quests.chain_max, 3.0);
+        let (_, c) = apply_edit("", "quests.offer_seconds", &json!(90)).unwrap();
+        assert_eq!(c.quests.offer_seconds, 90);
     }
     #[test] fn broken_file_is_refused_untouched() {
         let err = apply_edit("[sound\nvolume = 1", "sound.volume", &json!(0.5)).unwrap_err();

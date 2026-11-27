@@ -102,6 +102,14 @@ pub fn snapshot(text: Option<&str>, sounds_root: &Path, files: &[PathBuf]) -> Va
             "updates": { "check_hours": cfg.updates.check_hours },
         },
         "repos": { "include": include, "exclude": exclude },
+        "quests": {
+            "enabled": cfg.quests.enabled,
+            "offer_seconds": cfg.quests.offer_seconds,
+            "max_passes": cfg.quests.max_passes,
+            "chain_step": cfg.quests.chain_step,
+            "chain_max": cfg.quests.chain_max,
+            "min_gap_minutes": cfg.quests.min_gap_minutes,
+        },
     })
 }
 
@@ -281,6 +289,21 @@ mod tests {
         assert_eq!(slot(&s, "tier:silver")["fallback"], "none");
         assert_eq!(slot(&s, "tier:silver")["label"], "Silver");
         assert_eq!(s["notifications"]["tiers"]["bronze"], "toast");
+    }
+
+    #[test]
+    fn snapshot_shows_quests() {
+        let s = snapshot(None, Path::new("/s"), &[]);
+        assert_eq!(
+            s["quests"],
+            serde_json::json!({ "enabled": true, "offer_seconds": 60, "max_passes": 3, "chain_step": 0.5, "chain_max": 5.0, "min_gap_minutes": 30 })
+        );
+        let s = snapshot(Some("[quests]
+enabled = false
+chain_step = 0.25
+"), Path::new("/s"), &[]);
+        assert_eq!(s["quests"]["enabled"], false);
+        assert_eq!(s["quests"]["chain_step"], 0.25);
     }
 
     #[test]

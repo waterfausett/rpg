@@ -950,9 +950,9 @@ fallback = "Shipped."
     }
 
     #[test]
-    fn settings_page_has_four_sections_and_invokes_known_commands() {
+    fn settings_page_has_five_sections_and_invokes_known_commands() {
         let html = include_str!("../../../ui/settings/index.html");
-        for section in ["notifications", "sounds", "integrations", "repos"] {
+        for section in ["notifications", "sounds", "integrations", "quests", "repos"] {
             assert!(html.contains(&format!("data-section=\"{section}\"")), "no section {section:?}");
         }
         let js = include_str!("../../../ui/settings/settings.js");
@@ -961,6 +961,18 @@ fallback = "Shipped."
             "settings_preview_sound", "settings_open_sounds_folder", "settings_open_config_file", "settings-changed",
         ] {
             assert!(js.contains(name), "settings.js never uses {name}");
+        }
+        // Every key the section saves is one config_edit accepts (its tests cover validation).
+        for (key, value) in [
+            ("quests.enabled", serde_json::json!(false)),
+            ("quests.offer_seconds", serde_json::json!(10)),
+            ("quests.max_passes", serde_json::json!(1)),
+            ("quests.chain_step", serde_json::json!(0.5)),
+            ("quests.chain_max", serde_json::json!(1)),
+            ("quests.min_gap_minutes", serde_json::json!(0)),
+        ] {
+            assert!(js.contains(&format!("\"{key}\"")), "settings.js never saves {key}");
+            assert!(rpg_core::config_edit::apply_edit("", key, &value).is_ok(), "{key} is not a settable key");
         }
     }
 

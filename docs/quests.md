@@ -129,7 +129,7 @@ chain_max = 5.0          # multiplier cap
 min_gap_minutes = 30     # min time between any two offers
 ```
 
-The tray **Quests** check item and the Settings window's Quests section turn quests off or on and save the choice to `enabled`, like Mute and Do not disturb. Changes apply without a restart.
+The tray **Quests** check item and the Settings window's Quests section turn quests off or on and save the choice to `enabled`, like Mute and Do not disturb. The Quests section also edits the other values above (offer window ≥ 10 s, passes ≥ 1, chain bonus > 0, chain cap ≥ 1, minimum gap ≥ 0 min). Changes apply without a restart.
 
 ## Events and achievements
 
