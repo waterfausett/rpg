@@ -74,7 +74,14 @@ impl ConfigStore {
 
     pub fn reload_from_disk(&self) {
         let mut last_written = lock(&self.save);
-        let text = std::fs::read_to_string(self.paths.config_file()).unwrap_or_default();
+        let text = match std::fs::read_to_string(self.paths.config_file()) {
+            Ok(t) => t,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(e) => {
+                log(&self.paths, &format!("cannot read config.toml, keeping current settings: {e}"));
+                return;
+            }
+        };
         if last_written.as_deref() == Some(text.as_str()) {
             return;
         }
@@ -189,6 +196,17 @@ mod tests {
         assert_eq!(f.externals.load(Ordering::SeqCst), 1);
         let log = std::fs::read_to_string(f.paths.log()).unwrap();
         assert!(log.contains("config.toml invalid"), "{log}");
+    }
+
+    #[test]
+    fn unreadable_config_keeps_current_config() {
+        let f = fx();
+        std::fs::create_dir(f.paths.config_file()).unwrap();
+        f.store.reload_from_disk();
+        assert!((f.cfg.read().unwrap().sound.volume as f64 - 0.8).abs() < 1e-6);
+        assert_eq!(f.changes.load(Ordering::SeqCst), 0);
+        let log = std::fs::read_to_string(f.paths.log()).unwrap();
+        assert!(log.contains("cannot read config.toml"), "{log}");
     }
 
     #[test]
