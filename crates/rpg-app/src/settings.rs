@@ -158,7 +158,6 @@ pub async fn settings_set(store: State<'_, Arc<ConfigStore>>, key: String, value
     .await
 }
 
-
 #[tauri::command]
 pub async fn settings_choose_sound(window: WebviewWindow, store: State<'_, Arc<ConfigStore>>, slot: String) -> Result<Value, String> {
     let slot = parse_slot(&slot)?;
