@@ -158,6 +158,12 @@ pub async fn settings_set(store: State<'_, Arc<ConfigStore>>, key: String, value
     .await
 }
 
+fn list_names(dir: &Path) -> std::collections::HashSet<String> {
+    std::fs::read_dir(dir)
+        .map(|rd| rd.flatten().filter_map(|e| e.file_name().to_str().map(String::from)).collect())
+        .unwrap_or_default()
+}
+
 #[tauri::command]
 pub async fn settings_choose_sound(window: WebviewWindow, store: State<'_, Arc<ConfigStore>>, slot: String) -> Result<Value, String> {
     let slot = parse_slot(&slot)?;
@@ -172,8 +178,17 @@ pub async fn settings_choose_sound(window: WebviewWindow, store: State<'_, Arc<C
             .blocking_pick_file();
         let Some(picked) = picked else { return current_snapshot(&store) };
         let src = picked.into_path().map_err(|e| e.to_string())?;
-        let name = copy_into(slot, &src, &store.paths().sounds()).map_err(|e| format!("could not copy the sound: {e}"))?;
-        store.set(&slot.config_key(), &Value::String(name)).map_err(|e| e.to_string())?;
+        let sounds = store.paths().sounds();
+        let existing = list_names(&slot.folder(&sounds));
+        let name = copy_into(slot, &src, &sounds).map_err(|e| format!("could not copy the sound: {e}"))?;
+        let created = !existing.contains(&name);
+        if let Err(e) = store.set(&slot.config_key(), &Value::String(name.clone())) {
+            // Don't leave a rejected copy behind to join the random pool; only a file this call created.
+            if created {
+                let _ = std::fs::remove_file(slot.folder(&sounds).join(&name));
+            }
+            return Err(e.to_string());
+        }
         current_snapshot(&store)
     })
     .await

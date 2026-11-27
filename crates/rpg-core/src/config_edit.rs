@@ -36,7 +36,7 @@ enum Kind {
     Announce,
     Volume,
     FileName,
-    IntMin(i64),
+    IntRange(i64, i64),
     NonEmptyString,
     Patterns,
 }
@@ -48,8 +48,9 @@ fn kind_of(key: &str) -> Option<Kind> {
         "announce.all" => Kind::Announce,
         "sound.volume" => Kind::Volume,
         "sound.achievement" | "sound.level_up" => Kind::FileName,
-        "github.poll_minutes" | "llm.timeout_secs" => Kind::IntMin(1),
-        "updates.check_hours" => Kind::IntMin(0),
+        "github.poll_minutes" => Kind::IntRange(1, 1440),
+        "llm.timeout_secs" => Kind::IntRange(1, 600),
+        "updates.check_hours" => Kind::IntRange(0, 8760),
         "llm.model" => Kind::NonEmptyString,
         "paths.include" | "paths.exclude" => Kind::Patterns,
         _ => {
@@ -87,14 +88,14 @@ fn to_item(key: &str, kind: Kind, v: &Value) -> Result<Item, EditError> {
             _ => Err(bad(key, "expected a number from 0 to 1")),
         },
         Kind::FileName => match v.as_str() {
-            Some(s) if !s.is_empty() && !s.contains(['/', '\\']) && !s.contains("..") => {
+            Some(s) if !s.is_empty() && !s.contains(['/', '\\']) && s != "." && s != ".." => {
                 Ok(toml_edit::value(s))
             }
-            _ => Err(bad(key, "expected a file name without path separators or \"..\"")),
+            _ => Err(bad(key, "expected a file name without path separators")),
         },
-        Kind::IntMin(min) => match v.as_i64() {
-            Some(n) if n >= min => Ok(toml_edit::value(n)),
-            _ => Err(bad(key, format!("expected an integer >= {min}"))),
+        Kind::IntRange(min, max) => match v.as_i64() {
+            Some(n) if (min..=max).contains(&n) => Ok(toml_edit::value(n)),
+            _ => Err(bad(key, format!("expected an integer from {min} to {max}"))),
         },
         Kind::NonEmptyString => match v.as_str() {
             Some(s) if !s.trim().is_empty() => Ok(toml_edit::value(s)),
@@ -173,7 +174,13 @@ pub fn write_atomic(path: &Path, text: &str) -> std::io::Result<()> {
     let mut name = path.file_name().unwrap_or_default().to_os_string();
     name.push(".tmp");
     let tmp = path.with_file_name(name);
-    std::fs::write(&tmp, text)?;
+    {
+        use std::io::Write;
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(text.as_bytes())?;
+        // Flush to disk before the rename, or a power cut can leave an empty file.
+        f.sync_all()?;
+    }
     std::fs::rename(&tmp, path).inspect_err(|_| {
         let _ = std::fs::remove_file(&tmp);
     })
@@ -192,6 +199,24 @@ mod tests {
         assert!(t.starts_with("# my config\n[sound]\nvolume = 0.5"));
         assert!(t.contains("[xp]\ncommit = 99\n"));
         assert_eq!(c.xp.commit, 99);
+    }
+    #[test] fn dots_inside_file_names_are_fine_but_dotdot_is_not() {
+        let (_, c) = apply_edit(SAMPLE, "sound.achievement", &json!("Wait...what.mp3")).unwrap();
+        assert_eq!(c.sound.achievement.as_deref(), Some("Wait...what.mp3"));
+        assert!(apply_edit(SAMPLE, "sound.achievement", &json!("..")).is_err());
+        assert!(apply_edit(SAMPLE, "sound.achievement", &json!(".")).is_err());
+    }
+    #[test] fn huge_intervals_are_rejected() {
+        assert!(apply_edit(SAMPLE, "github.poll_minutes", &json!(1441)).is_err());
+        assert!(apply_edit(SAMPLE, "github.poll_minutes", &json!(1440)).is_ok());
+        assert!(apply_edit(SAMPLE, "updates.check_hours", &json!(8761)).is_err());
+        assert!(apply_edit(SAMPLE, "llm.timeout_secs", &json!(601)).is_err());
+        assert!(apply_edit(SAMPLE, "llm.timeout_secs", &json!(i64::MAX)).is_err());
+    }
+    #[test] fn backslash_paths_round_trip() {
+        let (t, _) = apply_edit(SAMPLE, "paths.exclude", &json!([r"C:\Users\x"])).unwrap();
+        let (_, exclude) = crate::config::raw_paths(&t);
+        assert_eq!(exclude, vec![r"C:\Users\x".to_string()]);
     }
     #[test] fn inline_table_gets_new_tier_entry() {
         let (t, c) = apply_edit(SAMPLE, "sound.by_tier.gold", &json!("gong.wav")).unwrap();

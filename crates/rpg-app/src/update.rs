@@ -32,7 +32,7 @@ pub struct Updates {
 /// Background check interval: `None` when off (0 hours) or in debug builds, which would
 /// otherwise offer to replace the installed app with a release.
 pub fn background_interval(hours: u64, debug: bool) -> Option<Duration> {
-    (hours > 0 && !debug).then(|| Duration::from_secs(hours * 3600))
+    (hours > 0 && !debug).then(|| Duration::from_secs(hours.saturating_mul(3600)))
 }
 
 fn install_label(version: &str) -> String {

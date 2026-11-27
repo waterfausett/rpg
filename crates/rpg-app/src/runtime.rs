@@ -372,7 +372,7 @@ fn poll_loop_with(state: &AppState, wake: &Receiver<()>, mut poll: impl FnMut() 
                     failing = true;
                 }
             }
-            Duration::from_secs(minutes * 60)
+            Duration::from_secs(minutes.saturating_mul(60))
         } else {
             IDLE
         };

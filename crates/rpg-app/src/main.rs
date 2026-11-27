@@ -125,7 +125,10 @@ fn main() {
             store.on_external(move || tray::notify_settings_changed(&external));
             // Runs under the save lock of the store: only cheap, non-blocking work here.
             store.on_change(move |old, new| {
-                if old.sound.muted != new.sound.muted || old.announce.dnd != new.announce.dnd {
+                // Compare against the live toggles too: tray clicks while the file was broken
+                // changed them without changing the config, and the file's values win.
+                let resync = toggles.differ_from(new);
+                if resync || old.sound.muted != new.sound.muted || old.announce.dnd != new.announce.dnd {
                     tray::sync_toggles(&handle, &toggles, new);
                     tray::notify_settings_changed(&handle);
                 }

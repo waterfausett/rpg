@@ -34,6 +34,14 @@ pub struct TrayChecks {
     dnd: CheckMenuItem<tauri::Wry>,
 }
 
+impl Toggles {
+    /// True when the session toggles disagree with `cfg` (e.g. tray clicks made while the
+    /// file was broken); the file's values win on reload, so the tray must be resynced.
+    pub fn differ_from(&self, cfg: &Config) -> bool {
+        self.muted.load(Ordering::Relaxed) != cfg.sound.muted || self.dnd.load(Ordering::Relaxed) != cfg.announce.dnd
+    }
+}
+
 /// Push the config's Mute/DND state into the atomics, the menu check marks and the overlay.
 /// Safe to call under the config store's save lock: only the atomics are set inline; the
 /// menu and overlay (main-thread-bound, may block) are updated via `run_on_main_thread`.
@@ -232,6 +240,18 @@ pub fn setup(app: &tauri::App, state: &AppState, toggles: Arc<Toggles>) -> tauri
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn toggles_differ_even_when_config_did_not_change() {
+        let cfg = Config::default();
+        let t = Toggles::from_config(&cfg);
+        assert!(!t.differ_from(&cfg));
+        t.muted.store(true, Ordering::Relaxed);
+        assert!(t.differ_from(&cfg));
+        t.muted.store(false, Ordering::Relaxed);
+        t.dnd.store(true, Ordering::Relaxed);
+        assert!(t.differ_from(&cfg));
+    }
+
     use super::*;
     use rpg_core::config::Config;
     use rpg_core::config_edit::EditError;
