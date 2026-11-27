@@ -29,6 +29,8 @@ pub struct Config {
 pub struct AnnounceConfig {
     pub all: Option<Announce>,
     pub first_banner: bool,
+    /// Do not disturb: suppress unlock announcements. Set from the tray.
+    pub dnd: bool,
     pub bronze: Announce,
     pub silver: Announce,
     pub gold: Announce,
@@ -39,7 +41,7 @@ pub struct AnnounceConfig {
 
 impl Default for AnnounceConfig {
     fn default() -> Self {
-        Self { all: None, first_banner: true, bronze: Announce::Toast, silver: Announce::Banner, gold: Announce::Banner, platinum: Announce::Banner, legendary: Announce::Banner, celestial: Announce::Banner }
+        Self { all: None, first_banner: true, dnd: false, bronze: Announce::Toast, silver: Announce::Banner, gold: Announce::Banner, platinum: Announce::Banner, legendary: Announce::Banner, celestial: Announce::Banner }
     }
 }
 
@@ -151,6 +153,8 @@ impl Default for LlmConfig {
 #[serde(default)]
 pub struct SoundConfig {
     pub volume: f32,
+    /// Mute all sounds. Set from the tray or the Settings window.
+    pub muted: bool,
     pub achievement: Option<String>,
     pub level_up: Option<String>,
     pub by_tier: HashMap<String, String>,
@@ -161,6 +165,7 @@ impl Default for SoundConfig {
     fn default() -> Self {
         Self {
             volume: 0.8,
+            muted: false,
             achievement: None,
             level_up: None,
             by_tier: HashMap::new(),
@@ -196,6 +201,21 @@ pub struct PathFilter {
 struct RawPathFilter {
     include: Vec<String>,
     exclude: Vec<String>,
+}
+
+/// Check one path pattern against the same rules `paths.include` / `paths.exclude` use.
+pub fn validate_path_pattern(raw: &str) -> Result<(), String> {
+    path_set("pattern", &[raw.to_string()]).map(|_| ())
+}
+
+/// The `paths.include` and `paths.exclude` strings as written; empty if the text doesn't parse.
+pub fn raw_paths(text: &str) -> (Vec<String>, Vec<String>) {
+    #[derive(Default, Deserialize)]
+    #[serde(default)]
+    struct Doc {
+        paths: RawPathFilter,
+    }
+    toml::from_str::<Doc>(text).map(|d| (d.paths.include, d.paths.exclude)).unwrap_or_default()
 }
 
 /// A pattern with no glob characters is a folder: it matches itself and everything under it.
@@ -245,10 +265,15 @@ impl PathFilter {
 }
 
 impl Config {
+    /// Parse config text.
+    pub fn parse(text: &str) -> Result<Config> {
+        toml::from_str(text).map_err(Into::into)
+    }
+
     /// Load config from `path`. A missing file yields defaults.
     pub fn load(path: &Path) -> Result<Config> {
         match std::fs::read_to_string(path) {
-            Ok(s) => toml::from_str(&s).with_context(|| format!("parsing {}", path.display())),
+            Ok(s) => Config::parse(&s).with_context(|| format!("parsing {}", path.display())),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Config::default()),
             Err(e) => Err(e).with_context(|| format!("reading {}", path.display())),
         }
@@ -258,6 +283,30 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn muted_and_dnd_default_off_and_parse() {
+        let c = Config::default();
+        assert!(!c.sound.muted && !c.announce.dnd);
+        let c = Config::parse("[sound]\nmuted = true\n[announce]\ndnd = true\n").unwrap();
+        assert!(c.sound.muted && c.announce.dnd);
+    }
+
+    #[test]
+    fn validate_path_pattern_matches_path_set_rules() {
+        assert!(validate_path_pattern("C:/work").is_ok());
+        assert!(validate_path_pattern("octo/*").is_ok());
+        assert!(validate_path_pattern("[").is_err());
+        assert!(validate_path_pattern("  ").is_err());
+    }
+
+    #[test]
+    fn raw_paths_returns_strings_as_written() {
+        let (i, e) = raw_paths("[paths]\ninclude = ['C:\\work']\nexclude = ['**/tmp*']\n");
+        assert_eq!(i, vec![r"C:\work".to_string()]);
+        assert_eq!(e, vec!["**/tmp*".to_string()]);
+        assert_eq!(raw_paths("not toml ["), (vec![], vec![]));
+    }
 
     #[test]
     fn missing_config_gives_defaults() {
