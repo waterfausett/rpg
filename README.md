@@ -26,7 +26,7 @@ Output: `target/release/rpg-app.exe` plus installers in `target/release/bundle/{
    This sets a global git `core.hooksPath` to rpg's shim folder and adds `SessionStart`/`SessionEnd` entries to `~/.claude/settings.json` (a backup is written next to it as `settings.json.rpg-backup`, and your other settings are kept). Every standard git hook except `reference-transaction` and `post-index-change` (see Known limitations) gets a pass-through shim, so a repo's own `.git/hooks/*` keep working.
 3. Commit something. A `+10 exp · commit` pop-up appears bottom-right; unlocks show a gold banner top-center. To write your own achievements, see the [rule format reference](docs/rules.md).
 
-Tray menu: Open character sheet, Mute sounds, Do not disturb, Open rules folder, Install hooks, Uninstall hooks, Check for updates, Quit. Only one app instance runs at a time. Hooks never fail a git command; errors go to `rpg.log`.
+Tray menu: Open character sheet, Mute sounds, Do not disturb, Quests, Open rules folder, Install hooks, Uninstall hooks, Check for updates, Quit. Only one app instance runs at a time. Hooks never fail a git command; errors go to `rpg.log`.
 
 ## Updates
 
@@ -52,7 +52,7 @@ The updater signing key is the `TAURI_SIGNING_PRIVATE_KEY` repo secret (no passw
 | What | Windows | macOS (not yet supported) |
 | --- | --- | --- |
 | Data: `rpg.db`, `inbox/`, `git-hooks/`, `rpg.log` | `%APPDATA%\rpg\data` | `~/Library/Application Support/rpg` |
-| Config: `config.toml`, `rules/`, `sounds/` | `%APPDATA%\rpg\config` | `~/Library/Application Support/rpg` |
+| Config: `config.toml`, `rules/` (quests in `rules/quests/`), `sounds/` | `%APPDATA%\rpg\config` | `~/Library/Application Support/rpg` |
 
 (Resolved with `directories::ProjectDirs::from("", "", "rpg")`.) Set `RPG_HOME=<dir>` to put both under `<dir>/data` and `<dir>/config` instead (an empty `RPG_HOME` counts as unset).
 
@@ -123,6 +123,10 @@ Counters (set `type` plus the params):
 **Upgrading from 0.2:** the old `detector = {...}` field is gone, and a rule file that still has it fails to load. After upgrading to this version, empty your `rules/` folder, `skills/` included; the app reseeds it on the next start (move custom rules or skills aside first and copy them back after).
 
 The starter rules in `rules/` (copied from `crates/rpg-core/assets/rules/` on first run; starters added by later versions are copied on upgrade, and one you delete stays deleted; a `rules/` folder with no rule files left in it is reseeded in full on the next start) are working examples.
+
+## Quests
+
+Now and then something you just did raises a quest offer: a crimson banner with Accept and Pass. Accept and a timer pill appears bottom-right; finish the steps before it runs out for exp times a growing chain multiplier. Fail and the chain resets (no exp is lost). Quests are TOML files in `rules/quests/` (six starters are seeded, reloaded on change; tray **Open rules folder** reaches them). Turn them off with `[quests] enabled = false` or the tray **Quests** item (session only). Format and config: [docs/quests.md](docs/quests.md).
 
 ## Skills
 

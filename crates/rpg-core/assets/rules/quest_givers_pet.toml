@@ -1,0 +1,12 @@
+id = "quest_givers_pet"
+name = "Quest Giver's Pet"
+trigger = ["quest_completed"]
+counter = { type = "lifetime" }
+tiers = [
+  { tier = "bronze", at = 10 },
+  { tier = "silver", at = 50 },
+  { tier = "gold", at = 200 },
+]
+hint = "Keep saying yes to the crimson banner and finishing the job."
+fallback = "Another milestone of quests completed. The quest giver has started saving you the good ones."
+flavor = { type = "llm", prompt = "Rewrite this achievement announcement for this specific unlock, in the same voice: \"{fallback}\". Use the concrete details. Context: {context}" }

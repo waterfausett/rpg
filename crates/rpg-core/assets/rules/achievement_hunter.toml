@@ -1,6 +1,6 @@
 id = "achievement_hunter"
 name = "Achievement Hunter"
-trigger = ["commit", "push", "pr_opened", "pr_merged", "review_submitted", "claude_session_end"]
+trigger = ["commit", "push", "pr_opened", "pr_merged", "review_submitted", "claude_session_end", "quest_completed", "quest_failed"]
 counter = { type = "meta", of = "distinct_unlocks" }
 tiers = [
   { tier = "bronze", at = 10 },

@@ -78,6 +78,10 @@ const COVERED: &[&str] = &[
     "palindrome",
     "hash_brown",
     "lucky_sevens",
+    // quests
+    "quest_givers_pet",
+    "chain_gang",
+    "fumble",
 ];
 
 fn starter() -> Rules {
@@ -1119,4 +1123,44 @@ fn typical_day_has_at_most_two_banners() {
     for id in ["surgical_strike", "polyglot", "the_novelist", "famous_last_words", "marathon", "full_combo", "speed_run", "codependent"] {
         assert!(unlocks.iter().any(|(u, a)| u == id && *a == Announce::Toast), "{id} as a toast: {unlocks:?}");
     }
+}
+
+// quests
+
+fn quest_done(ts: &str, chain: u64) -> Event {
+    let mut e = ev(EventKind::QuestCompleted, ts, json!({"quest_id": "hot_streak", "tier": "bronze", "chain": chain, "multiplier": 1.0, "xp": 125}));
+    e.source = Source::Quest;
+    e
+}
+
+fn quest_lost(ts: &str) -> Event {
+    let mut e = ev(EventKind::QuestFailed, ts, json!({"quest_id": "hot_streak", "tier": "bronze", "chain_lost": 1}));
+    e.source = Source::Quest;
+    e
+}
+
+#[test]
+fn quest_givers_pet() {
+    let r = starter();
+    let h = many(9, |_| quest_done("2026-11-23T10:00:00Z", 1));
+    let next = quest_done("2026-11-24T10:00:00Z", 1);
+    assert!(fires_seeded(&r, &h, &[], next.clone(), "quest_givers_pet.bronze"));
+    assert!(!fires_seeded(&r, &h[..8], &[], next, "quest_givers_pet.bronze"));
+}
+
+#[test]
+fn chain_gang() {
+    let r = starter();
+    assert!(fires(&r, &[], quest_done("2026-11-24T10:00:00Z", 5), "chain_gang"));
+    assert!(!fires(&r, &[], quest_done("2026-11-24T10:00:00Z", 4), "chain_gang"));
+}
+
+#[test]
+fn fumble() {
+    let r = starter();
+    let h = [quest_lost("2026-11-24T10:00:00Z"), quest_lost("2026-11-24T11:00:00Z")];
+    assert!(fires(&r, &h, quest_lost("2026-11-24T12:00:00Z"), "fumble"));
+    // Only two failures: not yet. (`run` looks at one event kind only, so a completion in
+    // between does not reset it.)
+    assert!(!fires(&r, &h[..1], quest_lost("2026-11-24T12:00:00Z"), "fumble"));
 }

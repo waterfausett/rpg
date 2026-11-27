@@ -2,6 +2,8 @@
 
 Each achievement is one TOML file in the rules folder (tray menu, **Open rules folder**). Files load in filename order. A file that fails to parse or validate is skipped and reported; the others still load. If two files use the same `id`, the first one wins and the second is reported as a duplicate.
 
+Timed quests use a similar format and are described in [quests.md](quests.md).
+
 A rule says which events count (`trigger` and `filter`), what to do with them (`counter`), and what it unlocks (`tier`, or `tiers` for a series).
 
 ```toml
