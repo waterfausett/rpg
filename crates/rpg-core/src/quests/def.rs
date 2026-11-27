@@ -91,6 +91,7 @@ fn yes() -> bool {
 fn default_label(kind: EventKind) -> &'static str {
     match kind {
         EventKind::Commit => "Commit",
+        EventKind::MergeConflictResolved => "Resolve a merge conflict",
         EventKind::Push => "Push",
         EventKind::PrOpened => "Open a PR",
         EventKind::PrMerged => "Merge a PR",

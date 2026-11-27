@@ -10,7 +10,8 @@
     "security": {
       "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost",
       "capabilities": [
-        "overlay"
+        "overlay",
+        "settings"
       ]
     },
     "withGlobalTauri": true

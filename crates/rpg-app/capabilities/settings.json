@@ -1,0 +1,17 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "settings",
+  "description": "The Settings window: the settings commands and the settings-changed event. Nothing else.",
+  "windows": ["settings"],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "allow-settings-get",
+    "allow-settings-set",
+    "allow-settings-choose-sound",
+    "allow-settings-add-folder",
+    "allow-settings-preview-sound",
+    "allow-settings-open-sounds-folder",
+    "allow-settings-open-config-file"
+  ]
+}

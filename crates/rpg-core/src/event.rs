@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub enum EventKind {
     Commit,
+    /// A commit that concluded a `git merge` which had stopped on conflicts.
+    MergeConflictResolved,
     Push,
     PrOpened,
     PrMerged,
@@ -19,6 +21,7 @@ impl EventKind {
     pub fn as_str(&self) -> &'static str {
         match self {
             EventKind::Commit => "commit",
+            EventKind::MergeConflictResolved => "merge_conflict_resolved",
             EventKind::Push => "push",
             EventKind::PrOpened => "pr_opened",
             EventKind::PrMerged => "pr_merged",

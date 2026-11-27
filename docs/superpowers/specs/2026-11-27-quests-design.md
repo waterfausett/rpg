@@ -162,6 +162,8 @@ min_gap_minutes = 30     # min time between any two offers
 it is **not persisted**: it starts from `[quests] enabled` at launch and turns quests off or on for the session. Turning
 it off works exactly like `enabled = false`.
 
+*Superseded when merging main's Settings window:* the toggle is now persisted like Mute and Do not disturb (saved to `[quests] enabled`).
+
 **Chain math:** the chain level `n` is the number of completions in a row (0 after a reset). The multiplier is
 `min(1 + chain_step × n, chain_max)`. The reward is `floor(quest exp × multiplier)`.
 

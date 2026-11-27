@@ -109,6 +109,7 @@ pub(crate) fn in_tx<T>(store: &Store, f: impl FnOnce() -> Result<T>) -> Result<T
 pub fn base_label(kind: EventKind) -> Option<&'static str> {
     match kind {
         EventKind::Commit => Some("commit"),
+        EventKind::MergeConflictResolved => Some("merge conflict"),
         EventKind::Push => Some("push"),
         EventKind::PrOpened => Some("PR opened"),
         EventKind::PrMerged => Some("PR merged"),
@@ -122,6 +123,8 @@ pub fn base_label(kind: EventKind) -> Option<&'static str> {
 fn base_xp(store: &Store, cfg: &Config, ev: &Event) -> Result<Option<(u64, &'static str)>> {
     let amount = match ev.kind {
         EventKind::Commit => cfg.xp.commit,
+        // The concluding commit already earned its XP; only the achievements pay out.
+        EventKind::MergeConflictResolved => 0,
         EventKind::Push => cfg.xp.push,
         EventKind::PrOpened => cfg.xp.pr_opened,
         EventKind::PrMerged => cfg.xp.pr_merged,

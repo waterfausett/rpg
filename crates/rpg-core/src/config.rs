@@ -52,6 +52,8 @@ impl Default for QuestsConfig {
 pub struct AnnounceConfig {
     pub all: Option<Announce>,
     pub first_banner: bool,
+    /// Do not disturb: suppress unlock announcements. Set from the tray.
+    pub dnd: bool,
     pub bronze: Announce,
     pub silver: Announce,
     pub gold: Announce,
@@ -62,7 +64,7 @@ pub struct AnnounceConfig {
 
 impl Default for AnnounceConfig {
     fn default() -> Self {
-        Self { all: None, first_banner: true, bronze: Announce::Toast, silver: Announce::Banner, gold: Announce::Banner, platinum: Announce::Banner, legendary: Announce::Banner, celestial: Announce::Banner }
+        Self { all: None, first_banner: true, dnd: false, bronze: Announce::Toast, silver: Announce::Banner, gold: Announce::Banner, platinum: Announce::Banner, legendary: Announce::Banner, celestial: Announce::Banner }
     }
 }
 
@@ -174,6 +176,8 @@ impl Default for LlmConfig {
 #[serde(default)]
 pub struct SoundConfig {
     pub volume: f32,
+    /// Mute all sounds. Set from the tray or the Settings window.
+    pub muted: bool,
     pub achievement: Option<String>,
     pub level_up: Option<String>,
     pub by_tier: HashMap<String, String>,
@@ -184,6 +188,7 @@ impl Default for SoundConfig {
     fn default() -> Self {
         Self {
             volume: 0.8,
+            muted: false,
             achievement: None,
             level_up: None,
             by_tier: HashMap::new(),
@@ -221,6 +226,51 @@ struct RawPathFilter {
     exclude: Vec<String>,
 }
 
+/// Check one path pattern against the same rules `paths.include` / `paths.exclude` use.
+pub fn validate_path_pattern(raw: &str) -> Result<(), String> {
+    path_set("pattern", &[raw.to_string()]).map(|_| ())
+}
+
+/// The `paths.include` and `paths.exclude` strings as written; empty if the text doesn't parse.
+pub fn raw_paths(text: &str) -> (Vec<String>, Vec<String>) {
+    #[derive(Default, Deserialize)]
+    #[serde(default)]
+    struct Doc {
+        paths: RawPathFilter,
+    }
+    toml::from_str::<Doc>(text).map(|d| (d.paths.include, d.paths.exclude)).unwrap_or_default()
+}
+
+/// A folder path as a `[paths]` pattern: glob characters are escaped as one-character classes
+/// (`[` → `[[]`), so the pattern still counts as a folder and matches itself and everything under it.
+pub fn escape_folder(folder: &str) -> String {
+    let mut out = String::with_capacity(folder.len());
+    for c in folder.chars() {
+        if matches!(c, '*' | '?' | '[' | ']' | '{' | '}') {
+            out.extend(['[', c, ']']);
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Whether `p` names one exact path: no wildcards or alternatives, and every `[` opens a
+/// one-character class such as `[[]` (how `escape_folder` writes a literal glob character).
+fn is_literal(p: &str) -> bool {
+    let c: Vec<char> = p.chars().collect();
+    let mut i = 0;
+    while i < c.len() {
+        match c[i] {
+            '*' | '?' | '{' | '}' => return false,
+            '[' if c.get(i + 2) == Some(&']') => i += 3,
+            '[' => return false,
+            _ => i += 1,
+        }
+    }
+    true
+}
+
 /// A pattern with no glob characters is a folder: it matches itself and everything under it.
 /// Backslashes and drive-letter case are normalized like repo keys, and matching ignores case.
 fn path_set(field: &str, patterns: &[String]) -> Result<Option<GlobSet>, String> {
@@ -234,7 +284,7 @@ fn path_set(field: &str, patterns: &[String]) -> Result<Option<GlobSet>, String>
             return Err(format!("empty pattern in `paths.{field}`"));
         }
         let mut globs = vec![p.clone()];
-        if !p.contains(['*', '?', '[', '{']) {
+        if is_literal(&p) {
             globs.push(format!("{}/**", p.trim_end_matches('/')));
         }
         for g in globs {
@@ -268,10 +318,15 @@ impl PathFilter {
 }
 
 impl Config {
+    /// Parse config text.
+    pub fn parse(text: &str) -> Result<Config> {
+        toml::from_str(text).map_err(Into::into)
+    }
+
     /// Load config from `path`. A missing file yields defaults.
     pub fn load(path: &Path) -> Result<Config> {
         match std::fs::read_to_string(path) {
-            Ok(s) => toml::from_str(&s).with_context(|| format!("parsing {}", path.display())),
+            Ok(s) => Config::parse(&s).with_context(|| format!("parsing {}", path.display())),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Config::default()),
             Err(e) => Err(e).with_context(|| format!("reading {}", path.display())),
         }
@@ -296,6 +351,30 @@ enabled = false").unwrap();
     }
 
     use super::*;
+
+    #[test]
+    fn muted_and_dnd_default_off_and_parse() {
+        let c = Config::default();
+        assert!(!c.sound.muted && !c.announce.dnd);
+        let c = Config::parse("[sound]\nmuted = true\n[announce]\ndnd = true\n").unwrap();
+        assert!(c.sound.muted && c.announce.dnd);
+    }
+
+    #[test]
+    fn validate_path_pattern_matches_path_set_rules() {
+        assert!(validate_path_pattern("C:/work").is_ok());
+        assert!(validate_path_pattern("octo/*").is_ok());
+        assert!(validate_path_pattern("[").is_err());
+        assert!(validate_path_pattern("  ").is_err());
+    }
+
+    #[test]
+    fn raw_paths_returns_strings_as_written() {
+        let (i, e) = raw_paths("[paths]\ninclude = ['C:\\work']\nexclude = ['**/tmp*']\n");
+        assert_eq!(i, vec![r"C:\work".to_string()]);
+        assert_eq!(e, vec!["**/tmp*".to_string()]);
+        assert_eq!(raw_paths("not toml ["), (vec![], vec![]));
+    }
 
     #[test]
     fn missing_config_gives_defaults() {
@@ -378,5 +457,25 @@ exclude = ['C:\Users\me\AppData\Local\Temp\']
         for bad in ["[paths]\nexclude = ['[']\n", "[paths]\nexclude = ['']\n", "[paths]\nexlude = ['x']\n"] {
             assert!(toml::from_str::<Config>(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn escaped_folder_matches_itself_and_below() {
+        for folder in [r"C:\work\My Repos [old]", "C:/work/a{b}*?c", "C:/work/x]y"] {
+            let pat = escape_folder(folder);
+            assert!(validate_path_pattern(&pat).is_ok(), "{pat}");
+            let f = filter(&format!("[paths]\nexclude = ['{pat}']\n"));
+            let norm = normalize_repo(folder);
+            assert!(!f.allows(Some(folder)), "{pat} should match the folder itself");
+            assert!(!f.allows(Some(&format!("{norm}/sub/repo"))), "{pat} should match below the folder");
+            assert!(f.allows(Some(&format!("{norm}x"))), "{pat} must not match a sibling");
+        }
+        // `[old]` must not act as a character class.
+        let f = filter(&format!("[paths]\nexclude = ['{}']\n", escape_folder("C:/w/[old]")));
+        assert!(f.allows(Some("C:/w/o")));
+        // Plain folders don't change, and real globs stay globs.
+        assert_eq!(escape_folder("C:/work/plain"), "C:/work/plain");
+        let f = filter("[paths]\nexclude = ['C:/w/[ab]']\n");
+        assert!(!f.allows(Some("C:/w/a")) && f.allows(Some("C:/w/a/sub")));
     }
 }

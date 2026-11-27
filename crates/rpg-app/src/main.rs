@@ -1,27 +1,35 @@
 // No console window in release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod config_store;
 mod overlay;
 mod platform;
 mod presenter;
 mod runtime;
+mod settings;
 mod site;
 mod sound;
+mod sound_slots;
 mod tray;
 mod update;
 
+use config_store::ConfigStore;
 use overlay::OverlaySink;
 use rpg_core::config::Config;
 use rpg_core::engine::Outcome;
 use rpg_core::event::Event;
-use rpg_core::flavor::{ClaudeCli, TextGen};
+use rpg_core::flavor::TextGen;
 use rpg_core::paths::Paths;
 use rpg_core::quests::state::{Offer, QuestView};
 use rpg_core::store::Store;
 use runtime::{log, AppState, OutcomeSink};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use tauri::Manager;
 use tray::Toggles;
+
+/// Keeps the config file watcher alive for the life of the app.
+#[allow(dead_code)]
+struct ConfigWatcher(Mutex<Option<notify::RecommendedWatcher>>);
 
 /// Fallback sink when the overlay windows can't be created: records batches in the log.
 struct LogSink(Paths);
@@ -60,16 +68,14 @@ fn init_state() -> anyhow::Result<AppState> {
     });
     let store = Store::open(&paths.db())?;
     let rules = runtime::load_rules(&paths);
-    let gen: Option<Arc<dyn TextGen>> = (cfg.llm.enabled && ClaudeCli::available()).then(|| {
-        Arc::new(ClaudeCli { model: cfg.llm.model.clone(), workdir: paths.data.join("llm-sandbox") }) as Arc<dyn TextGen>
-    });
+    let gen: Option<Arc<dyn TextGen>> = runtime::make_gen(&cfg.llm, &paths);
     log(&paths, &format!("starting: {} rules, llm flavor {}", rules.list.len(), if gen.is_some() { "on" } else { "off" }));
     Ok(AppState {
         paths,
         store: Arc::new(store),
         rules: Arc::new(RwLock::new(rules)),
         cfg: Arc::new(RwLock::new(cfg)),
-        gen,
+        gen: Arc::new(RwLock::new(gen)),
     })
 }
 
@@ -84,6 +90,18 @@ fn main() {
         // Must be the first plugin: a second launch just exits.
         .plugin(tauri_plugin_single_instance::init(|_app, _argv, _cwd| {}))
         .plugin(tauri_plugin_updater::Builder::new().build())
+        // Login item (Windows `Run` key, macOS launch agent) named after productName.
+        .plugin(tauri_plugin_autostart::Builder::new().build())
+        .plugin(tauri_plugin_dialog::init())
+        .invoke_handler(tauri::generate_handler![
+            settings::settings_get,
+            settings::settings_set,
+            settings::settings_choose_sound,
+            settings::settings_add_folder,
+            settings::settings_preview_sound,
+            settings::settings_open_sounds_folder,
+            settings::settings_open_config_file,
+        ])
         .setup(|app| {
             platform::configure_app(app);
             let state = init_state().map_err(|e| {
@@ -92,8 +110,7 @@ fn main() {
                 }
                 e
             })?;
-            let quests_on = state.cfg.read().unwrap_or_else(|p| p.into_inner()).quests.enabled;
-            let toggles = Arc::new(Toggles::new(quests_on));
+            let toggles = Arc::new(Toggles::from_config(&state.cfg.read().unwrap_or_else(|p| p.into_inner())));
             // Without an overlay, XP still counts: fall back to logging batches.
             let sink: Arc<dyn OutcomeSink> = match OverlaySink::new(app.handle(), state.clone(), toggles.clone()) {
                 Ok(overlay) => {
@@ -115,9 +132,46 @@ fn main() {
                     log(&site_paths, &format!("character sheet unavailable on 127.0.0.1:{port}: {e}"));
                 }
             });
-            tray::setup(app, &state, toggles)?;
-            // The tray and overlay look the runtime up when the user acts.
-            app.manage(runtime::spawn(state, sink));
+            tray::setup(app, &state, toggles.clone())?;
+            // Live settings: the tray and the settings commands fetch it with `app.state::<Arc<ConfigStore>>()`.
+            let store = ConfigStore::new(state.paths.clone(), state.cfg.clone());
+            app.manage(store.clone());
+            app.manage(ConfigWatcher(Mutex::new(store.watch())));
+            let gen_state = state.clone();
+            let rt = runtime::spawn(state, sink);
+            let poll_wake = rt.poll_wake();
+            // The tray, overlay and settings sync look the runtime up when they act.
+            app.manage(rt);
+            let handle = app.handle().clone();
+            // A hand edit (valid or not): an open settings window re-reads its fields.
+            let external = handle.clone();
+            store.on_external(move || tray::notify_settings_changed(&external));
+            // Runs under the save lock of the store: only cheap, non-blocking work here.
+            store.on_change(move |old, new| {
+                // Compare against the live toggles too: tray clicks while the file was broken
+                // changed them without changing the config, and the file's values win.
+                let resync = toggles.differ_from(new);
+                if resync
+                    || old.sound.muted != new.sound.muted
+                    || old.announce.dnd != new.announce.dnd
+                    || old.quests.enabled != new.quests.enabled
+                {
+                    tray::sync_toggles(&handle, &toggles, new);
+                    tray::notify_settings_changed(&handle);
+                }
+                if old.llm.enabled != new.llm.enabled || old.llm.model != new.llm.model {
+                    let g = runtime::make_gen(&new.llm, &gen_state.paths);
+                    *gen_state.gen.write().unwrap_or_else(|p| p.into_inner()) = g;
+                }
+                if old.github.enabled != new.github.enabled || old.github.poll_minutes != new.github.poll_minutes {
+                    let _ = poll_wake.send(());
+                }
+                if old.updates.check_hours != new.updates.check_hours {
+                    if let Some(updates) = handle.try_state::<Arc<update::Updates>>() {
+                        updates.settings_changed();
+                    }
+                }
+            });
             Ok(())
         })
         .build(tauri::generate_context!())

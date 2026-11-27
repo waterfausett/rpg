@@ -7,7 +7,8 @@ use rpg_core::config::Config;
 use rpg_core::engine::{self, Outcome};
 use rpg_core::enrich::{self, FileAge};
 use rpg_core::event::{Event, EventKind};
-use rpg_core::flavor::TextGen;
+use rpg_core::config::LlmConfig;
+use rpg_core::flavor::{ClaudeCli, TextGen};
 use rpg_core::paths::Paths;
 use rpg_core::rules::{self, Rules};
 use rpg_core::quests;
@@ -25,7 +26,7 @@ use std::time::Duration;
 /// Fallback inbox scan interval, in case a filesystem notification is missed.
 const TICK: Duration = Duration::from_secs(30);
 /// Coalesce bursts of filesystem events (e.g. tmp write + rename) into one pass.
-const DEBOUNCE: Duration = Duration::from_millis(250);
+pub(crate) const DEBOUNCE: Duration = Duration::from_millis(250);
 /// Max files per commit to look up ages for.
 const FILE_AGE_CAP: usize = 50;
 const BACKFILL_KEY: &str = "github_backfill_done";
@@ -46,7 +47,14 @@ pub struct AppState {
     pub store: Arc<Store>,
     pub rules: Arc<RwLock<Rules>>,
     pub cfg: Arc<RwLock<Config>>,
-    pub gen: Option<Arc<dyn TextGen>>,
+    /// Swapped live when the `llm` settings change; readers clone the inner `Arc` at use.
+    pub gen: Arc<RwLock<Option<Arc<dyn TextGen>>>>,
+}
+
+/// Build the flavor generator for `llm`: `None` when disabled or `claude` is not installed.
+pub fn make_gen(llm: &LlmConfig, paths: &Paths) -> Option<Arc<dyn TextGen>> {
+    (llm.enabled && ClaudeCli::available())
+        .then(|| Arc::new(ClaudeCli { model: llm.model.clone(), workdir: paths.data.join("llm-sandbox") }) as Arc<dyn TextGen>)
 }
 
 /// Receives processed batches. `away` is true for the startup batch (events
@@ -208,6 +216,7 @@ enum Msg {
 #[derive(Clone)]
 pub struct Runtime {
     tx: Sender<Msg>,
+    poll_wake: Sender<()>,
 }
 
 impl Runtime {
@@ -221,7 +230,12 @@ impl Runtime {
         let _ = self.tx.send(Msg::DropOffer(id));
     }
 
-    /// Turn quests on or off for this session. Off cancels the active quest and withdraws an offer.
+    /// The GitHub poller's wake sender: send on it after the `github` settings change.
+    pub fn poll_wake(&self) -> Sender<()> {
+        self.poll_wake.clone()
+    }
+
+    /// Turn quests on or off. Off cancels the active quest and withdraws an offer.
     pub fn set_quests_enabled(&self, on: bool) {
         let _ = self.tx.send(Msg::SetQuests(on));
     }
@@ -229,7 +243,7 @@ impl Runtime {
 
 /// Quest bookkeeping owned by the inbox thread.
 pub(crate) struct QuestRuntime {
-    /// Quests on for this session (tray toggle; starts from `[quests] enabled`).
+    /// Quests on (starts from `[quests] enabled`; kept in step with it by the tray and settings).
     enabled: bool,
     next_id: u64,
     /// The offer waiting for an answer: id, offer, when it was raised.
@@ -265,7 +279,9 @@ impl QuestRuntime {
 /// the engine), the GitHub poller, and the rules watcher.
 pub fn spawn(state: AppState, sink: Arc<dyn OutcomeSink>) -> Runtime {
     let (tx, rx) = mpsc::channel::<Msg>();
-    let (poke_tx, poke_rx) = mpsc::channel::<()>();
+    // The GitHub poller's wake channel: settings changes and quest pokes.
+    let (poll_wake, poll_rx) = mpsc::channel::<()>();
+    let poke_tx = poll_wake.clone();
     let cfg = read(&state.cfg);
 
     let wake = tx.clone();
@@ -288,14 +304,13 @@ pub fn spawn(state: AppState, sink: Arc<dyn OutcomeSink>) -> Runtime {
         .expect("spawning inbox thread");
 
     // `gh` has no timeout, so polling lives on its own thread.
-    if cfg.github.enabled {
-        let st = state.clone();
-        let tx = tx.clone();
-        std::thread::Builder::new()
-            .name("rpg-github".into())
-            .spawn(move || poll_loop(&st, &tx, &poke_rx))
-            .expect("spawning github thread");
-    }
+    // Always spawned: it idles while `github.enabled` is off, so enabling needs no restart.
+    let st = state.clone();
+    let ptx = tx.clone();
+    std::thread::Builder::new()
+        .name("rpg-github".into())
+        .spawn(move || poll_loop(&st, &ptx, &poll_rx))
+        .expect("spawning github thread");
 
     let (rtx, rrx) = mpsc::channel::<()>();
     let stx = rtx.clone();
@@ -323,7 +338,7 @@ pub fn spawn(state: AppState, sink: Arc<dyn OutcomeSink>) -> Runtime {
             }
         })
         .expect("spawning rules thread");
-    Runtime { tx }
+    Runtime { tx, poll_wake }
 }
 
 /// Watch `dir` (non-recursively), calling `on_change` for every notification.
@@ -360,6 +375,29 @@ fn store_call<T>(state: &AppState, f: impl FnOnce() -> Result<T>) -> Result<T> {
             // Harmless if no transaction was open.
             let _ = state.store.rollback_tx();
             Err(anyhow::anyhow!("panicked: {}", panic_message(&*p)))
+        }
+    }
+}
+
+/// Watch the directory holding `file`, calling `on_change` only for events that
+/// mention `file`. Returns the watcher, which must be kept alive.
+pub fn watch_file(paths: &Paths, file: &Path, on_change: impl Fn() + Send + 'static) -> Option<notify::RecommendedWatcher> {
+    let dir = file.parent()?;
+    let _ = std::fs::create_dir_all(dir);
+    let name = file.file_name()?.to_os_string();
+    let res = notify::recommended_watcher(move |r: notify::Result<notify::Event>| {
+        if let Ok(ev) = r {
+            if ev.paths.iter().any(|p| p.file_name() == Some(name.as_os_str())) {
+                on_change();
+            }
+        }
+    })
+    .and_then(|mut w| w.watch(dir, RecursiveMode::NonRecursive).map(|_| w));
+    match res {
+        Ok(w) => Some(w),
+        Err(e) => {
+            log(paths, &format!("cannot watch {}: {e}", file.display()));
+            None
         }
     }
 }
@@ -651,33 +689,52 @@ fn poll_github(state: &AppState, tx: &Sender<Msg>) -> Result<usize> {
     Ok(events.len())
 }
 
-/// Poll every `poll_minutes`, or right away when poked (quest accepted or at its deadline).
-/// Errors (no `gh`, logged out, API errors) are logged once per failure streak and the poll
-/// is skipped until the next interval. Every finished poll, failed or not, sends `Polled`.
-fn poll_loop(state: &AppState, tx: &Sender<Msg>, poke: &Receiver<()>) {
+/// How long a disabled poller sleeps between checks of `github.enabled` if never woken.
+const IDLE: Duration = Duration::from_secs(60);
+
+/// Poll every `poll_minutes` while `github.enabled`; idle otherwise. A send on `wake`
+/// (settings changed, or a quest poke: accepted with a GitHub step, or at its deadline)
+/// re-reads the settings and, if enabled, polls right away. Errors (no `gh`, logged out,
+/// API errors) are logged once per failure streak and the poll is skipped until the next
+/// interval. Every poll attempt, failed or not, sends `Polled` to the inbox thread.
+fn poll_loop(state: &AppState, tx: &Sender<Msg>, wake: &Receiver<()>) {
+    poll_loop_with(state, wake, || poll_github(state, tx), || {
+        let _ = tx.send(Msg::Polled);
+    });
+}
+
+fn poll_loop_with(state: &AppState, wake: &Receiver<()>, mut poll: impl FnMut() -> Result<usize>, mut polled: impl FnMut()) {
     let mut failing = false;
     loop {
-        match poll_github(state, tx) {
-            Ok(n) => {
-                if failing {
-                    log(&state.paths, &format!("github poll recovered ({n} events)"));
+        let (enabled, minutes) = {
+            let cfg = read(&state.cfg);
+            (cfg.github.enabled, cfg.github.poll_minutes.max(1))
+        };
+        let wait = if enabled {
+            match poll() {
+                Ok(n) => {
+                    if failing {
+                        log(&state.paths, &format!("github poll recovered ({n} events)"));
+                    }
+                    failing = false;
                 }
-                failing = false;
-            }
-            Err(e) => {
-                if !failing {
-                    log(&state.paths, &format!("github poll failed; skipping until it recovers: {e:#}"));
+                Err(e) => {
+                    if !failing {
+                        log(&state.paths, &format!("github poll failed; skipping until it recovers: {e:#}"));
+                    }
+                    failing = true;
                 }
-                failing = true;
             }
-        }
-        let _ = tx.send(Msg::Polled);
-        let interval = Duration::from_secs(read(&state.cfg).github.poll_minutes.max(1) * 60);
-        match poke.recv_timeout(interval) {
-            // Fold pokes that piled up during the poll into this one.
-            Ok(()) => while poke.try_recv().is_ok() {},
+            polled();
+            Duration::from_secs(minutes.saturating_mul(60))
+        } else {
+            IDLE
+        };
+        match wake.recv_timeout(wait) {
+            // Fold wakes that piled up during the poll into this one.
+            Ok(()) => while wake.try_recv().is_ok() {},
             Err(RecvTimeoutError::Timeout) => {}
-            Err(RecvTimeoutError::Disconnected) => std::thread::sleep(interval),
+            Err(RecvTimeoutError::Disconnected) => return,
         }
     }
 }
@@ -706,7 +763,7 @@ mod tests {
             store: Arc::new(Store::open_in_memory().unwrap()),
             rules: Arc::new(RwLock::new(rules)),
             cfg: Arc::new(RwLock::new(Config::default())),
-            gen,
+            gen: Arc::new(RwLock::new(gen)),
         };
         Fixture { _tmp: tmp, state }
     }
@@ -1177,5 +1234,73 @@ fallback = "Commit more."
         assert_eq!(hash, "abc");
         assert_eq!(files, vec!["a.rs".to_string(), "b/c.rs".to_string()]);
         assert!(commit_enrich_args(&push(1)).is_none());
+    }
+
+    #[test]
+    fn poller_idles_while_disabled_and_resumes_on_wake() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let f = fixture(Rules::default(), None);
+        f.state.cfg.write().unwrap().github.enabled = false;
+        let count = Arc::new(AtomicUsize::new(0));
+        let (tx, rx) = mpsc::channel::<()>();
+        let (st, c) = (f.state.clone(), count.clone());
+        let h = std::thread::spawn(move || {
+            poll_loop_with(
+                &st,
+                &rx,
+                || {
+                    c.fetch_add(1, Ordering::SeqCst);
+                    Ok(0)
+                },
+                || {},
+            )
+        });
+        tx.send(()).unwrap();
+        std::thread::sleep(Duration::from_millis(200));
+        assert_eq!(count.load(Ordering::SeqCst), 0, "disabled: no polling");
+        f.state.cfg.write().unwrap().github.enabled = true;
+        tx.send(()).unwrap();
+        let start = std::time::Instant::now();
+        while count.load(Ordering::SeqCst) < 1 && start.elapsed() < Duration::from_secs(2) {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(count.load(Ordering::SeqCst) >= 1, "polls once enabled");
+        drop(tx);
+        h.join().unwrap();
+    }
+
+    #[test]
+    fn poller_reports_every_attempt_and_polls_on_a_poke() {
+        let f = fixture(Rules::default(), None);
+        f.state.cfg.write().unwrap().github.enabled = true;
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let (tx, rx) = mpsc::channel::<()>();
+        let (done_tx, done_rx) = mpsc::channel::<()>();
+        let (st, a) = (f.state.clone(), attempts.clone());
+        let h = std::thread::spawn(move || {
+            poll_loop_with(
+                &st,
+                &rx,
+                || {
+                    // The first attempt fails, the rest work: `Polled` follows both.
+                    if a.fetch_add(1, SeqCst) == 0 {
+                        Err(anyhow!("gh missing"))
+                    } else {
+                        Ok(0)
+                    }
+                },
+                || {
+                    let _ = done_tx.send(());
+                },
+            )
+        });
+        let wait = Duration::from_secs(2);
+        done_rx.recv_timeout(wait).expect("Polled after a failed attempt");
+        // A quest poke on the same wake channel polls right away, not after `poll_minutes`.
+        tx.send(()).unwrap();
+        done_rx.recv_timeout(wait).expect("Polled after the poked attempt");
+        assert_eq!(attempts.load(SeqCst), 2);
+        drop(tx);
+        h.join().unwrap();
     }
 }

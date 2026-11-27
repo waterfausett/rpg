@@ -88,14 +88,7 @@ pub fn progress(rule: &Rule, store: &Store, tz: FixedOffset) -> Result<Option<u6
                 let total: f64 = events.iter().map(|e| e.data[field.as_str()].as_f64().unwrap_or(0.0)).sum();
                 total.max(0.0).floor() as u64
             } else if distinct.is_some() {
-                // `distinct` is validated to be "repo": the GitHub repo when the event knows
-                // it, so worktrees and clones of one repo count once, else the local path.
-                let repo_key = |e: &Event| -> Option<String> {
-                    match e.data["github_repo"].as_str().filter(|g| !g.is_empty()) {
-                        Some(gh) => Some(format!("gh:{gh}")),
-                        None => e.repo.as_ref().map(|r| format!("path:{r}")),
-                    }
-                };
+                // `distinct` is validated to be "repo".
                 events.iter().filter_map(repo_key).collect::<BTreeSet<_>>().len() as u64
             } else {
                 events.len() as u64
@@ -106,6 +99,34 @@ pub fn progress(rule: &Rule, store: &Store, tz: FixedOffset) -> Result<Option<u6
         // `skill_level` is per skill, and moment counters have no running value.
         _ => None,
     })
+}
+
+/// Which repo an event belongs to: the GitHub repo when the event knows it (compared ignoring
+/// ASCII case, as GitHub does), so worktrees and clones of one repo are the same repo, else
+/// the local path.
+fn repo_key(e: &Event) -> Option<String> {
+    match e.data["github_repo"].as_str().filter(|g| !g.is_empty()) {
+        Some(gh) => Some(format!("gh:{}", gh.to_ascii_lowercase())),
+        None => e.repo.as_ref().map(|r| format!("path:{r}")),
+    }
+}
+
+/// Matching events of the rule's `trigger` kinds in `ev`'s repo with the same string
+/// `data[key]`, up to and including `ev`. Fires when there are exactly `at`, so once per key.
+/// An event without that field (or with an empty one) never fires.
+fn per_key(rule: &Rule, ctx: &EvalCtx, key: &str, at: u32) -> Result<Option<Value>> {
+    let ev = ctx.ev;
+    let (Some(value), Some(repo)) = (ev.data[key].as_str().filter(|v| !v.is_empty()), repo_key(ev)) else {
+        return Ok(None);
+    };
+    let n = ctx
+        .store
+        .events_with_field(&rule.trigger, key, value)?
+        .iter()
+        .filter(|e| (e.ts, e.id.as_str()) <= (ev.ts, ev.id.as_str()))
+        .filter(|e| repo_key(e).as_deref() == Some(repo.as_str()) && rule.filter.matches(e, ctx.tz))
+        .count();
+    Ok((n == at as usize).then(|| json!({ "key": key, "value": value, "count": n })))
 }
 
 /// Every step's unlock key already has an unlock.
@@ -222,6 +243,7 @@ fn moment(rule: &Rule, ctx: &EvalCtx) -> Result<Option<Value>> {
                 .count();
             (n == *at as usize).then(|| json!({ "count": n }))
         }
+        Counter::PerKey { key, at } => per_key(rule, ctx, key, *at)?,
         Counter::Run { at } => {
             let history = history(ctx, |e| e.repo == ev.repo)?;
             let run = history.iter().rev().take_while(|e| rule.filter.matches(e, ctx.tz)).count();
@@ -315,7 +337,7 @@ fn local_midnight(day: NaiveDate, tz: FixedOffset) -> DateTime<Utc> {
 /// `repo` for GitHub events, none otherwise.
 fn github_key(e: &Event) -> Option<&str> {
     match e.kind {
-        EventKind::Commit | EventKind::Push => e.data["github_repo"].as_str(),
+        EventKind::Commit | EventKind::MergeConflictResolved | EventKind::Push => e.data["github_repo"].as_str(),
         EventKind::PrOpened | EventKind::PrMerged | EventKind::ReviewSubmitted => e.repo.as_deref(),
         EventKind::ClaudeSessionStart | EventKind::ClaudeSessionEnd | EventKind::QuestCompleted | EventKind::QuestFailed => None,
     }
@@ -816,6 +838,57 @@ counter = { type = \"streak_days\" }");
             }
         }
         assert_eq!(fired, vec![8], "third wip commit only");
+    }
+
+    #[test]
+    fn per_key_fires_once_per_key_and_repo() {
+        let store = Store::open_in_memory().unwrap();
+        let r = rule("\"merge_conflict_resolved\"", "counter = { type = \"per_key\", key = \"branch\", at = 3 }");
+        let conflict = |i: u32, repo: &str, branch: &str| {
+            let ts = format!("2026-03-01T{:02}:00:00Z", i + 1);
+            mk(EventKind::MergeConflictResolved, &ts, repo, json!({ "branch": branch }))
+        };
+        // Interleaved branches in repo r, plus the same branch name in another repo.
+        let seq = [("r", "a"), ("r", "b"), ("r", "a"), ("s", "a"), ("r", "b"), ("r", "a"), ("r", "b"), ("r", "a")];
+        let mut fired = vec![];
+        for (i, (repo, branch)) in seq.iter().enumerate() {
+            if let Some(f) = add(&r, &store, &conflict(i as u32, repo, branch)) {
+                fired.push((i, f));
+            }
+        }
+        let at: Vec<usize> = fired.iter().map(|(i, _)| *i).collect();
+        assert_eq!(at, vec![5, 6], "third `a` and third `b` in r; not the 4th `a`, not repo s");
+        assert_eq!(fired[0].1, json!({ "key": "branch", "value": "a", "count": 3 }));
+    }
+
+    #[test]
+    fn per_key_groups_by_github_repo_and_skips_missing_keys() {
+        let store = Store::open_in_memory().unwrap();
+        let r = rule("\"merge_conflict_resolved\"", "counter = { type = \"per_key\", key = \"branch\", at = 2 }");
+        // Two worktrees of one GitHub repo (different local paths) count together.
+        let a = mk(EventKind::MergeConflictResolved, "2026-03-01T01:00:00Z", "/w1", json!({ "branch": "x", "github_repo": "O/R" }));
+        let b = mk(EventKind::MergeConflictResolved, "2026-03-01T02:00:00Z", "/w2", json!({ "branch": "x", "github_repo": "o/r" }));
+        assert_eq!(add(&r, &store, &a), None);
+        assert!(add(&r, &store, &b).is_some());
+        // No branch (or an empty one): never fires, however many there are.
+        for (i, data) in [json!({}), json!({}), json!({ "branch": "" }), json!({ "branch": "" })].into_iter().enumerate() {
+            let e = mk(EventKind::MergeConflictResolved, &format!("2026-03-01T1{i}:00:00Z"), "/w1", data);
+            assert_eq!(add(&r, &store, &e), None);
+        }
+    }
+
+    #[test]
+    fn per_key_counts_only_matching_and_not_later_events() {
+        let store = Store::open_in_memory().unwrap();
+        let r = rule("\"commit\"", "filter = { message = 'wip' }
+counter = { type = \"per_key\", key = \"branch\", at = 2 }");
+        let c = |h: u32, msg: &str| mk(EventKind::Commit, &format!("2026-03-01T{h:02}:00:00Z"), "r", json!({ "branch": "f", "message": msg }));
+        let (first, fix, second, later) = (c(1, "wip"), c(2, "fix"), c(3, "wip"), c(9, "wip"));
+        for e in [&first, &fix, &later] {
+            store.insert_event(e).unwrap();
+        }
+        // Stored out of order: `later` doesn't count toward `second`.
+        assert!(add(&r, &store, &second).is_some(), "second wip on f, with the fix commit ignored");
     }
 
     #[test]

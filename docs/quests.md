@@ -70,7 +70,7 @@ fallback = "You committed. Bold. Now finish the job before your nerve runs out."
 | `kind` | string | yes | Event kind to count. Any kind except `quest_completed` and `quest_failed`. |
 | `filter` | table | no | Which events of that kind count. It must be able to match `kind` (for example `message` is rejected on `push`). |
 | `count` | integer | no, default 1 | How many matching events the step needs. At least 1. |
-| `label` | string | no | Shown on the pill's card. Defaults by kind: Commit, Push, Open a PR, Merge a PR, Review a PR, Start a Claude session, Finish a Claude session. When `count` is above 1, ` ×<count>` is appended. |
+| `label` | string | no | Shown on the pill's card. Defaults by kind: Commit, Resolve a merge conflict, Push, Open a PR, Merge a PR, Review a PR, Start a Claude session, Finish a Claude session. When `count` is above 1, ` ×<count>` is appended. |
 
 Unknown fields in a step are errors too.
 
@@ -129,7 +129,7 @@ chain_max = 5.0          # multiplier cap
 min_gap_minutes = 30     # min time between any two offers
 ```
 
-Config is read at startup. The tray **Quests** check item turns quests off or on for the session only. It is not saved and starts from `enabled` at launch.
+The tray **Quests** check item and the Settings window's Quests section turn quests off or on and save the choice to `enabled`, like Mute and Do not disturb. Changes apply without a restart.
 
 ## Events and achievements
 

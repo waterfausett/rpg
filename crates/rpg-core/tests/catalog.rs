@@ -82,6 +82,11 @@ const COVERED: &[&str] = &[
     "quest_givers_pet",
     "chain_gang",
     "fumble",
+    // merge conflicts
+    "conflict_resolution",
+    "diamond_cutter",
+    "biggest_knot",
+    "recurring_nightmare",
 ];
 
 fn starter() -> Rules {
@@ -98,7 +103,7 @@ fn at(s: &str) -> DateTime<Utc> {
 /// An event in repo "r" at a fixed UTC time.
 fn ev(kind: EventKind, ts: &str, data: Value) -> Event {
     let source = match kind {
-        EventKind::Commit | EventKind::Push => Source::Git,
+        EventKind::Commit | EventKind::MergeConflictResolved | EventKind::Push => Source::Git,
         EventKind::PrOpened | EventKind::PrMerged | EventKind::ReviewSubmitted => Source::Github,
         _ => Source::Claude,
     };
@@ -1169,4 +1174,68 @@ fn fumble() {
     // Three failures spread over two days don't count.
     let split = [quest_lost("2026-11-23T10:00:00Z"), quest_lost("2026-11-24T11:00:00Z")];
     assert!(!fires(&r, &split, quest_lost("2026-11-24T12:00:00Z"), "fumble"));
+}
+
+/// A resolved merge conflict with `n` conflicted files.
+fn conflict(ts: &str, n: usize) -> Event {
+    let files: Vec<Value> = (0..n).map(|i| json!({ "path": format!("f{i}") })).collect();
+    ev(EventKind::MergeConflictResolved, ts, json!({ "files": files, "file_count": n }))
+}
+
+#[test]
+fn conflict_resolution() {
+    let r = starter();
+    let h = many(4, |_| conflict("2026-11-23T10:00:00Z", 1));
+    assert!(fires_seeded(&r, &h, &[], conflict("2026-11-24T10:00:00Z", 1), "conflict_resolution.bronze"));
+    assert!(!fires_seeded(&r, &h[..3], &[], conflict("2026-11-24T10:00:00Z", 1), "conflict_resolution.bronze"));
+    // Commits don't count, merges or not.
+    let commits = many(4, |_| commit("2026-11-23T10:00:00Z"));
+    assert!(!fires_seeded(&r, &commits, &[], commit("2026-11-24T10:00:00Z"), "conflict_resolution.bronze"));
+}
+
+#[test]
+fn diamond_cutter() {
+    let r = starter();
+    let h = [conflict("2026-11-24T09:00:00Z", 1), conflict("2026-11-24T11:00:00Z", 2)];
+    assert!(fires(&r, &h, conflict("2026-11-24T15:00:00Z", 1), "diamond_cutter"));
+    assert!(!fires(&r, &h[..1], conflict("2026-11-24T15:00:00Z", 1), "diamond_cutter"));
+    // Yesterday's conflicts don't carry over.
+    let h = [conflict("2026-11-23T09:00:00Z", 1), conflict("2026-11-24T11:00:00Z", 1)];
+    assert!(!fires(&r, &h, conflict("2026-11-24T15:00:00Z", 1), "diamond_cutter"));
+}
+
+#[test]
+fn biggest_knot() {
+    let r = starter();
+    // The first merge seeds the record; a bigger one beats it, an equal one doesn't.
+    let h = [conflict("2026-11-23T10:00:00Z", 3)];
+    assert!(fires(&r, &h, conflict("2026-11-24T10:00:00Z", 4), "biggest_knot"));
+    assert!(!fires(&r, &h, conflict("2026-11-24T10:00:00Z", 3), "biggest_knot"));
+    assert!(!fires(&r, &[], conflict("2026-11-24T10:00:00Z", 9), "biggest_knot"));
+}
+
+#[test]
+fn recurring_nightmare() {
+    let r = starter();
+    let on = |ts: &str, branch: &str| {
+        let mut e = conflict(ts, 1);
+        e.data["branch"] = json!(branch);
+        e
+    };
+    let two = [on("2026-11-23T10:00:00Z", "feat/x"), on("2026-11-24T09:00:00Z", "feat/x")];
+    // The 3rd on one branch fires; the 4th doesn't fire again.
+    assert!(fires(&r, &two, on("2026-11-24T10:00:00Z", "feat/x"), "recurring_nightmare"));
+    let three = [two[0].clone(), two[1].clone(), on("2026-11-24T10:00:00Z", "feat/x")];
+    assert!(!fires(&r, &three, on("2026-11-24T11:00:00Z", "feat/x"), "recurring_nightmare"));
+    // Repeatable: a third on another branch fires too.
+    let other = [three.as_slice(), &[on("2026-11-25T09:00:00Z", "feat/y"), on("2026-11-25T10:00:00Z", "feat/y")]].concat();
+    assert!(fires(&r, &other, on("2026-11-25T11:00:00Z", "feat/y"), "recurring_nightmare"));
+    // Three spread across branches don't.
+    let spread = [on("2026-11-24T09:00:00Z", "a"), on("2026-11-24T10:00:00Z", "b")];
+    assert!(!fires(&r, &spread, on("2026-11-24T11:00:00Z", "c"), "recurring_nightmare"));
+    // Default branches and a detached HEAD are excluded.
+    for b in ["main", "master", "HEAD"] {
+        let h = [on("2026-11-24T09:00:00Z", b), on("2026-11-24T10:00:00Z", b)];
+        assert!(!fires(&r, &h, on("2026-11-24T11:00:00Z", b), "recurring_nightmare"), "{b}");
+    }
 }

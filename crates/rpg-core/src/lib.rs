@@ -1,4 +1,5 @@
 pub mod config;
+pub mod config_edit;
 pub mod emit;
 pub mod event;
 pub mod inbox;

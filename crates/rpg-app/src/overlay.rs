@@ -772,8 +772,10 @@ fn drop_offer(inner: &Inner, id: u64) {
 fn resolve_offer_flavor(state: &AppState, offer: &Offer) -> String {
     let llm = state.cfg.read().unwrap_or_else(|p| p.into_inner()).llm.clone();
     let tz = local_offset(offer.trigger.ts);
+    // Cloned out of the lock, so a live LLM swap never waits on this call.
+    let gen = state.gen.read().unwrap_or_else(|p| p.into_inner()).clone();
     catch_unwind(AssertUnwindSafe(|| {
-        flavor::render_offer(&offer.name, &offer.fallback, &offer.flavor, &offer.trigger, &llm, state.gen.as_deref(), tz)
+        flavor::render_offer(&offer.name, &offer.fallback, &offer.flavor, &offer.trigger, &llm, gen.as_deref(), tz)
     }))
     .unwrap_or_else(|p| {
         log(&state.paths, &format!("flavor for quest {} panicked: {}", offer.quest_id, panic_message(&*p)));
@@ -813,8 +815,9 @@ pub fn resolve_flavor(state: &AppState, unlock: &Unlock, ev: &Event) -> String {
     // The rule was removed since the unlock: nothing to say beyond its name.
     let Some(rule) = rule else { return String::new() };
     let llm = state.cfg.read().unwrap_or_else(|p| p.into_inner()).llm.clone();
+    let gen = state.gen.read().unwrap_or_else(|p| p.into_inner()).clone();
     let tz = local_offset(ev.ts);
-    let text = catch_unwind(AssertUnwindSafe(|| flavor::render(&rule, unlock, ev, &llm, state.gen.as_deref(), tz)))
+    let text = catch_unwind(AssertUnwindSafe(|| flavor::render(&rule, unlock, ev, &llm, gen.as_deref(), tz)))
         .unwrap_or_else(|p| {
             log(&state.paths, &format!("flavor for {} panicked: {}", rule.id, panic_message(&*p)));
             rule.fallback.clone()
@@ -865,7 +868,7 @@ flavor = {flavor}
             store: Arc::new(Store::open_in_memory().unwrap()),
             rules: Arc::new(RwLock::new(Rules { list: vec![rule], ..Default::default() })),
             cfg: Arc::new(RwLock::new(Config::default())),
-            gen,
+            gen: Arc::new(RwLock::new(gen)),
         };
         (tmp, st)
     }

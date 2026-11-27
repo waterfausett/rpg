@@ -25,6 +25,14 @@ pub struct Updates {
     item: MenuItem<Wry>,
     pending: Mutex<Option<Update>>,
     busy: AtomicBool,
+    /// Wakes the background loop when `updates.check_hours` changes.
+    changed: tokio::sync::Notify,
+}
+
+/// Background check interval: `None` when off (0 hours) or in debug builds, which would
+/// otherwise offer to replace the installed app with a release.
+pub fn background_interval(hours: u64, debug: bool) -> Option<Duration> {
+    (hours > 0 && !debug).then(|| Duration::from_secs(hours.saturating_mul(3600)))
 }
 
 fn install_label(version: &str) -> String {
@@ -38,7 +46,7 @@ fn is_new_find(announced: Option<&str>, found: &str) -> bool {
 
 impl Updates {
     pub fn new(state: AppState, item: MenuItem<Wry>) -> Arc<Self> {
-        Arc::new(Updates { state, item, pending: Mutex::new(None), busy: AtomicBool::new(false) })
+        Arc::new(Updates { state, item, pending: Mutex::new(None), busy: AtomicBool::new(false), changed: tokio::sync::Notify::new() })
     }
 
     fn pending(&self) -> std::sync::MutexGuard<'_, Option<Update>> {
@@ -64,20 +72,35 @@ impl Updates {
         });
     }
 
-    /// Background checks every `updates.check_hours` (0 = off). Off in debug builds, which
-    /// would otherwise offer to replace the installed app with a release.
+    /// The settings changed: have the background loop re-read `updates.check_hours`.
+    pub fn settings_changed(&self) {
+        self.changed.notify_one();
+    }
+
+    /// Background checks every `updates.check_hours` (0 = off), re-read every cycle and
+    /// whenever `settings_changed` fires.
     pub fn spawn_background(self: &Arc<Self>, app: &AppHandle) {
-        let hours = self.state.cfg.read().unwrap_or_else(|p| p.into_inner()).updates.check_hours;
-        if hours == 0 || cfg!(debug_assertions) {
-            return;
-        }
         let me = self.clone();
         let app = app.clone();
         tauri::async_runtime::spawn(async move {
-            tokio::time::sleep(FIRST_CHECK).await;
+            let mut first = true;
             loop {
+                let hours = me.state.cfg.read().unwrap_or_else(|p| p.into_inner()).updates.check_hours;
+                let Some(every) = background_interval(hours, cfg!(debug_assertions)) else {
+                    me.changed.notified().await;
+                    first = true;
+                    continue;
+                };
+                let wait = if first { FIRST_CHECK } else { every };
+                tokio::select! {
+                    _ = me.changed.notified() => {
+                        first = true;
+                        continue;
+                    }
+                    _ = tokio::time::sleep(wait) => {}
+                }
                 me.check(&app, false).await;
-                tokio::time::sleep(Duration::from_secs(hours * 3600)).await;
+                first = false;
             }
         });
     }
@@ -146,6 +169,13 @@ impl Updates {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn background_interval_rules() {
+        assert_eq!(background_interval(0, false), None);
+        assert_eq!(background_interval(6, true), None);
+        assert_eq!(background_interval(6, false), Some(Duration::from_secs(6 * 3600)));
+    }
 
     #[test]
     fn labels_and_announcements() {

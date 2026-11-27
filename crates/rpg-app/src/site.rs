@@ -350,7 +350,7 @@ mod tests {
             store: Arc::new(Store::open_in_memory().unwrap()),
             rules: Arc::new(RwLock::new(rules)),
             cfg: Arc::new(RwLock::new(Config::default())),
-            toggles: Arc::new(Toggles::new(true)),
+            toggles: Arc::new(Toggles::from_config(&Config::default())),
             port: 47474,
         }
     }
@@ -913,6 +913,7 @@ fallback = "Shipped."
 
     const OVERLAY_CSS: &str = include_str!("../../../ui/overlay/overlay.css");
     const SITE_CSS: &str = include_str!("../../../ui/site/site.css");
+    const SETTINGS_CSS: &str = include_str!("../../../ui/settings/settings.css");
 
     /// The value of the first `--<name>:` declaration in `css`.
     fn css_var<'a>(css: &'a str, name: &str) -> Option<&'a str> {
@@ -934,7 +935,7 @@ fallback = "Shipped."
     fn event_log_uses_chips_for_every_kind() {
         let html = include_str!("../../../ui/site/index.html");
         assert!(!html.contains("<select"), "the kind dropdown should be chips now");
-        for kind in ["", "commit", "push", "pr_opened", "pr_merged", "review_submitted", "claude_session_start", "claude_session_end"] {
+        for kind in ["", "commit", "merge_conflict_resolved", "push", "pr_opened", "pr_merged", "review_submitted", "claude_session_start", "claude_session_end"] {
             assert!(html.contains(&format!("data-kind=\"{kind}\"")), "no chip for {kind:?}");
         }
     }
@@ -949,11 +950,27 @@ fallback = "Shipped."
     }
 
     #[test]
+    fn settings_page_has_four_sections_and_invokes_known_commands() {
+        let html = include_str!("../../../ui/settings/index.html");
+        for section in ["notifications", "sounds", "integrations", "repos"] {
+            assert!(html.contains(&format!("data-section=\"{section}\"")), "no section {section:?}");
+        }
+        let js = include_str!("../../../ui/settings/settings.js");
+        for name in [
+            "settings_get", "settings_set", "settings_choose_sound", "settings_add_folder",
+            "settings_preview_sound", "settings_open_sounds_folder", "settings_open_config_file", "settings-changed",
+        ] {
+            assert!(js.contains(name), "settings.js never uses {name}");
+        }
+    }
+
+    #[test]
     fn tier_palette_matches_between_overlay_and_site() {
         for tier in ["bronze", "silver", "gold", "platinum", "legendary", "celestial"] {
             let (o, s) = (css_var(OVERLAY_CSS, tier), css_var(SITE_CSS, tier));
             assert!(o.is_some() && s.is_some(), "--{tier} missing: overlay {o:?}, site {s:?}");
             assert_eq!(o, s, "--{tier} differs between overlay.css and site.css");
+            assert_eq!(css_var(SETTINGS_CSS, tier), s, "--{tier} differs between settings.css and site.css");
         }
         assert_eq!(css_var(OVERLAY_CSS, "silver"), Some("#c0c8d0"));
     }
