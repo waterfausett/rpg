@@ -78,6 +78,10 @@ const COVERED: &[&str] = &[
     "palindrome",
     "hash_brown",
     "lucky_sevens",
+    // merge conflicts
+    "conflict_resolution",
+    "diamond_cutter",
+    "biggest_knot",
 ];
 
 fn starter() -> Rules {
@@ -94,7 +98,7 @@ fn at(s: &str) -> DateTime<Utc> {
 /// An event in repo "r" at a fixed UTC time.
 fn ev(kind: EventKind, ts: &str, data: Value) -> Event {
     let source = match kind {
-        EventKind::Commit | EventKind::Push => Source::Git,
+        EventKind::Commit | EventKind::MergeConflictResolved | EventKind::Push => Source::Git,
         EventKind::PrOpened | EventKind::PrMerged | EventKind::ReviewSubmitted => Source::Github,
         _ => Source::Claude,
     };
@@ -1119,4 +1123,42 @@ fn typical_day_has_at_most_two_banners() {
     for id in ["surgical_strike", "polyglot", "the_novelist", "famous_last_words", "marathon", "full_combo", "speed_run", "codependent"] {
         assert!(unlocks.iter().any(|(u, a)| u == id && *a == Announce::Toast), "{id} as a toast: {unlocks:?}");
     }
+}
+
+/// A resolved merge conflict with `n` conflicted files.
+fn conflict(ts: &str, n: usize) -> Event {
+    let files: Vec<Value> = (0..n).map(|i| json!({ "path": format!("f{i}") })).collect();
+    ev(EventKind::MergeConflictResolved, ts, json!({ "files": files, "file_count": n }))
+}
+
+#[test]
+fn conflict_resolution() {
+    let r = starter();
+    let h = many(4, |_| conflict("2026-11-23T10:00:00Z", 1));
+    assert!(fires_seeded(&r, &h, &[], conflict("2026-11-24T10:00:00Z", 1), "conflict_resolution.bronze"));
+    assert!(!fires_seeded(&r, &h[..3], &[], conflict("2026-11-24T10:00:00Z", 1), "conflict_resolution.bronze"));
+    // Commits don't count, merges or not.
+    let commits = many(4, |_| commit("2026-11-23T10:00:00Z"));
+    assert!(!fires_seeded(&r, &commits, &[], commit("2026-11-24T10:00:00Z"), "conflict_resolution.bronze"));
+}
+
+#[test]
+fn diamond_cutter() {
+    let r = starter();
+    let h = [conflict("2026-11-24T09:00:00Z", 1), conflict("2026-11-24T11:00:00Z", 2)];
+    assert!(fires(&r, &h, conflict("2026-11-24T15:00:00Z", 1), "diamond_cutter"));
+    assert!(!fires(&r, &h[..1], conflict("2026-11-24T15:00:00Z", 1), "diamond_cutter"));
+    // Yesterday's conflicts don't carry over.
+    let h = [conflict("2026-11-23T09:00:00Z", 1), conflict("2026-11-24T11:00:00Z", 1)];
+    assert!(!fires(&r, &h, conflict("2026-11-24T15:00:00Z", 1), "diamond_cutter"));
+}
+
+#[test]
+fn biggest_knot() {
+    let r = starter();
+    // The first merge seeds the record; a bigger one beats it, an equal one doesn't.
+    let h = [conflict("2026-11-23T10:00:00Z", 3)];
+    assert!(fires(&r, &h, conflict("2026-11-24T10:00:00Z", 4), "biggest_knot"));
+    assert!(!fires(&r, &h, conflict("2026-11-24T10:00:00Z", 3), "biggest_knot"));
+    assert!(!fires(&r, &[], conflict("2026-11-24T10:00:00Z", 9), "biggest_knot"));
 }

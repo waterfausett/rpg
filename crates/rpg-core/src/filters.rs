@@ -207,7 +207,7 @@ impl Filter {
             }
         }
         if let Some(g) = &self.branch {
-            let ok = matches!(ev.kind, EventKind::Commit | EventKind::Push) && text("branch").is_some_and(|b| g.is_match(b));
+            let ok = matches!(ev.kind, EventKind::Commit | EventKind::MergeConflictResolved | EventKind::Push) && text("branch").is_some_and(|b| g.is_match(b));
             if !ok {
                 return false;
             }

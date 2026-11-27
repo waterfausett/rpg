@@ -1,0 +1,9 @@
+id = "diamond_cutter"
+name = "Diamond Cutter"
+tier = "silver"
+trigger = ["merge_conflict_resolved"]
+counter = { type = "per_day", at = 3 }
+repeatable = true
+hint = "Pressure makes diamonds. So do three conflicted merges in one day."
+fallback = "Three merge conflicts resolved in a single day. Under that much pressure, something was bound to crystallize."
+flavor = { type = "llm", prompt = "Rewrite this achievement announcement for this specific unlock, in the same voice: \"{fallback}\". Use the concrete details. Context: {context}" }

@@ -1,0 +1,12 @@
+id = "conflict_resolution"
+name = "Conflict Resolution"
+trigger = ["merge_conflict_resolved"]
+counter = { type = "lifetime" }
+tiers = [
+  { tier = "bronze", at = 5 },
+  { tier = "silver", at = 25 },
+  { tier = "gold", at = 100 },
+]
+hint = "Finish a merge that stopped on conflicts. Then do it again. And again."
+fallback = "Another milestone of merge conflicts resolved. You have stared into the <<<<<<< and the >>>>>>> stared back."
+flavor = { type = "llm", prompt = "Rewrite this achievement announcement for this specific unlock, in the same voice: \"{fallback}\". Use the concrete details. Context: {context}" }

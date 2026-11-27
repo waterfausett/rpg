@@ -461,3 +461,94 @@ fn rebase_emits_no_commit_events() {
     let commits = got.lines().filter(|l| *l == "emit commit").count();
     assert_eq!(commits, 1, "calls: {got:?}");
 }
+
+/// Wait until `calls` has at least `n` lines, then a little longer to catch any extra.
+fn calls_after(calls: &Path, n: usize) -> Vec<String> {
+    let start = Instant::now();
+    loop {
+        let got = std::fs::read_to_string(calls).unwrap_or_default();
+        if got.lines().count() >= n {
+            break;
+        }
+        assert!(start.elapsed() < Duration::from_secs(5), "timed out waiting for {n} calls: {got:?}");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    std::thread::sleep(Duration::from_millis(400));
+    std::fs::read_to_string(calls).unwrap().lines().map(str::to_string).collect()
+}
+
+#[test]
+fn resolved_merge_conflict_emits_once_with_its_files() {
+    let sb = Sandbox::new();
+    let repo = sb.repo("r");
+    std::fs::write(repo.join("f"), "base\n").unwrap();
+    std::fs::write(repo.join("g"), "base\n").unwrap();
+    sb.git_ok(&repo, &["add", "."]);
+    sb.git_ok(&repo, &["commit", "-q", "-m", "base"]);
+    sb.git_ok(&repo, &["checkout", "-q", "-b", "side"]);
+    std::fs::write(repo.join("f"), "side\n").unwrap();
+    std::fs::write(repo.join("g"), "side\n").unwrap();
+    sb.git_ok(&repo, &["commit", "-q", "-am", "side"]);
+    sb.git_ok(&repo, &["checkout", "-q", "-b", "clean", "main"]);
+    std::fs::write(repo.join("h"), "clean\n").unwrap();
+    sb.git_ok(&repo, &["add", "."]);
+    sb.git_ok(&repo, &["commit", "-q", "-m", "clean"]);
+    sb.git_ok(&repo, &["checkout", "-q", "main"]);
+    std::fs::write(repo.join("f"), "main\n").unwrap();
+    std::fs::write(repo.join("g"), "main\n").unwrap();
+    sb.git_ok(&repo, &["commit", "-q", "-am", "main"]);
+    let side = sb.git_ok(&repo, &["rev-parse", "side"]);
+
+    // The fake logs each call; for merge-conflict, the marker it was handed (args: emit
+    // merge-conflict --repo R --hash H --marker M), which it consumes like rpg does.
+    let calls = sb.root().join("fake-calls.txt");
+    let fake = sb.root().join("fake-rpg");
+    let log = slash(&calls);
+    write_hook(
+        &fake,
+        &format!(
+            "if [ \"$2\" = merge-conflict ]; then echo \"merge-conflict $(tr '\n' ' ' < \"$8\")\" >> '{log}'; rm -f \"$8\"; \
+             else echo \"$1 $2\" >> '{log}'; fi"
+        ),
+    );
+    sb.install(&fake);
+    let conflict = |commit: &[&str]| {
+        let o = sb.git(&repo, &["merge", "side"]);
+        assert!(!o.status.success(), "merge should stop on conflicts");
+        std::fs::write(repo.join("f"), "resolved\n").unwrap();
+        std::fs::write(repo.join("g"), "resolved\n").unwrap();
+        sb.git_ok(&repo, &["add", "."]);
+        sb.git_ok(&repo, commit);
+    };
+    let expected = format!("merge-conflict {side} f g ");
+
+    // Concluded with the prepared message.
+    conflict(&["commit", "-q", "--no-edit"]);
+    let got = calls_after(&calls, 2);
+    assert_eq!(got.iter().filter(|l| **l == "emit commit").count(), 1, "{got:?}");
+    assert_eq!(got.iter().filter(|l| l.starts_with("merge-conflict")).collect::<Vec<_>>(), [&expected], "{got:?}");
+    assert!(!repo.join(".git/rpg-conflict").exists());
+
+    // Concluded with `-m`: git passes source "message" and no conflict list, but MERGE_MSG has it.
+    sb.git_ok(&repo, &["reset", "-q", "--hard", "HEAD~1"]);
+    std::fs::remove_file(&calls).unwrap();
+    conflict(&["commit", "-q", "-m", "resolved it"]);
+    let got = calls_after(&calls, 2);
+    assert_eq!(got.iter().filter(|l| l.starts_with("merge-conflict")).collect::<Vec<_>>(), [&expected], "{got:?}");
+    sb.git_ok(&repo, &["reset", "-q", "--hard", "HEAD~1"]);
+
+    // Aborted, then an unrelated commit; a clean --no-ff merge; an auto-merge. None count.
+    std::fs::remove_file(&calls).unwrap();
+    assert!(!sb.git(&repo, &["merge", "side"]).status.success());
+    sb.git_ok(&repo, &["merge", "--abort"]);
+    std::fs::write(repo.join("z"), "z\n").unwrap();
+    sb.git_ok(&repo, &["add", "."]);
+    sb.git_ok(&repo, &["commit", "-q", "-m", "z"]);
+    sb.git_ok(&repo, &["merge", "-q", "--no-ff", "--no-edit", "clean"]);
+    sb.git_ok(&repo, &["reset", "-q", "--hard", "HEAD~1"]);
+    sb.git_ok(&repo, &["merge", "-q", "--no-ff", "--no-commit", "clean"]);
+    sb.git_ok(&repo, &["commit", "-q", "--no-edit"]);
+    let got = calls_after(&calls, 2);
+    assert!(got.iter().all(|l| !l.starts_with("merge-conflict")), "{got:?}");
+    assert!(!repo.join(".git/rpg-conflict").exists());
+}
