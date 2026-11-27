@@ -116,9 +116,18 @@ pub fn fallback(slot: Slot, cfg: &SoundConfig, root: &Path, files: &[PathBuf]) -
     }
 }
 
-/// Copy `src` into the slot's folder without overwriting anything; returns the file name used.
-/// Identical bytes reuse the existing name; a clash gets `stem (2).ext`, `stem (3).ext`, ...
-pub fn copy_into(slot: Slot, src: &Path, root: &Path) -> std::io::Result<String> {
+/// Where `copy_into` put the file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Copied {
+    /// The file name as it is on disk.
+    pub name: String,
+    /// `true` when this call wrote a new file; `false` when an identical file was reused.
+    pub created: bool,
+}
+
+/// Copy `src` into the slot's folder without overwriting anything.
+/// Identical bytes reuse the existing file; a clash gets `stem (2).ext`, `stem (3).ext`, ...
+pub fn copy_into(slot: Slot, src: &Path, root: &Path) -> std::io::Result<Copied> {
     use std::io::Write;
     let dir = slot.folder(root);
     std::fs::create_dir_all(&dir)?;
@@ -141,17 +150,28 @@ pub fn copy_into(slot: Slot, src: &Path, root: &Path) -> std::io::Result<String>
                     let _ = std::fs::remove_file(&dest);
                     return Err(e);
                 }
-                return Ok(cand);
+                return Ok(Copied { name: cand, created: true });
             }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                 if std::fs::read(&dest).is_ok_and(|b| b == bytes) {
-                    return Ok(cand);
+                    return Ok(Copied { name: on_disk_name(&dir, cand), created: false });
                 }
             }
             Err(e) => return Err(e),
         }
     }
     unreachable!()
+}
+
+/// The spelling of `name` as stored in `dir`. On a case-insensitive file system `ding.wav` can name
+/// `Ding.wav`; pins are matched exactly, so the stored spelling is the one to pin.
+fn on_disk_name(dir: &Path, name: String) -> String {
+    let Ok(entries) = std::fs::read_dir(dir) else { return name };
+    let names: Vec<String> = entries.filter_map(|e| e.ok()?.file_name().into_string().ok()).collect();
+    if names.contains(&name) {
+        return name;
+    }
+    names.into_iter().find(|n| n.to_lowercase() == name.to_lowercase()).unwrap_or(name)
 }
 
 #[cfg(test)]
@@ -216,12 +236,30 @@ mod tests {
         let src = src_dir.path().join("Fan Fare é.mp3");
         std::fs::write(&src, b"one").unwrap();
         let slot = Slot::Achievement;
-        assert_eq!(copy_into(slot, &src, tmp.path()).unwrap(), "Fan Fare é.mp3");
-        assert_eq!(copy_into(slot, &src, tmp.path()).unwrap(), "Fan Fare é.mp3");
+        let copied = |name: &str, created| Copied { name: name.into(), created };
+        assert_eq!(copy_into(slot, &src, tmp.path()).unwrap(), copied("Fan Fare é.mp3", true));
+        assert_eq!(copy_into(slot, &src, tmp.path()).unwrap(), copied("Fan Fare é.mp3", false), "identical bytes are reused, not created");
         std::fs::write(&src, b"two").unwrap();
-        assert_eq!(copy_into(slot, &src, tmp.path()).unwrap(), "Fan Fare é (2).mp3");
+        assert_eq!(copy_into(slot, &src, tmp.path()).unwrap(), copied("Fan Fare é (2).mp3", true));
         let dir = slot.folder(tmp.path());
         assert_eq!(std::fs::read(dir.join("Fan Fare é.mp3")).unwrap(), b"one");
         assert_eq!(std::fs::read(dir.join("Fan Fare é (2).mp3")).unwrap(), b"two");
+    }
+
+    /// On a case-insensitive file system, `ding.wav` lands on an existing `Ding.wav`. Reusing it must
+    /// report the name as it is on disk (pins match file names exactly) and must not claim to have created it.
+    #[cfg(windows)]
+    #[test]
+    fn reuse_reports_the_on_disk_name_and_not_created() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src_dir = tempfile::tempdir().unwrap();
+        let slot = Slot::Tier(Tier::Bronze);
+        let dir = slot.folder(tmp.path());
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("Ding.wav"), b"same").unwrap();
+        let src = src_dir.path().join("ding.wav");
+        std::fs::write(&src, b"same").unwrap();
+        assert_eq!(copy_into(slot, &src, tmp.path()).unwrap(), Copied { name: "Ding.wav".into(), created: false });
+        assert_eq!(std::fs::read(dir.join("Ding.wav")).unwrap(), b"same");
     }
 }
