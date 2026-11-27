@@ -1,7 +1,7 @@
 //! The overlay: a corner window for "+N exp" toasts and a top-center window for
 //! the Gold Banner. Drives the `Presenter` and resolves banner flavor text lazily.
 use crate::presenter::{Banner, BannerKind, Presenter, Toast};
-use crate::runtime::{local_offset, log, panic_message, AppState, OutcomeSink};
+use crate::runtime::{local_offset, log, panic_message, AppState, OutcomeSink, Runtime};
 use crate::tray::Toggles;
 use crate::{platform, sound};
 use rpg_core::engine::{Outcome, Unlock};
@@ -39,6 +39,10 @@ const TOAST_HIDE_AFTER: Duration = Duration::from_millis(3600);
 /// While the pointer rests on the banner the deadline keeps sliding forward.
 const BANNER_WATCHDOG: Duration = Duration::from_secs(15);
 const WATCHDOG_POLL: Duration = Duration::from_millis(250);
+/// An offer's banner ends by its fuse (`offer_seconds`); the watchdog allows this much more.
+const OFFER_WATCHDOG_SLACK: Duration = Duration::from_secs(5);
+/// After Accept / Pass, the page's exit animation should end within this.
+const ANSWERED_WATCHDOG: Duration = Duration::from_secs(2);
 
 #[derive(Serialize, Clone)]
 struct BannerPayload {
@@ -49,6 +53,30 @@ struct BannerPayload {
     text: String,
     reward: String,
     tier: Option<&'static str>,
+    quest: Option<QuestOfferPayload>,
+}
+
+/// What the offer banner shows beyond the common fields. The page runs the fuse.
+#[derive(Serialize, Clone)]
+struct QuestOfferPayload {
+    offer_id: u64,
+    tier_label: &'static str,
+    /// The step labels, in order.
+    goal: String,
+    minutes: u32,
+    xp: u64,
+    multiplier: f64,
+    next_multiplier: f64,
+    reward: u64,
+    /// Passes (or ignored offers) left before the chain breaks, counting this one.
+    passes_left: u32,
+    offer_seconds: u64,
+}
+
+#[derive(Deserialize)]
+struct AnswerPayload {
+    offer_id: u64,
+    accept: bool,
 }
 
 #[derive(Serialize, Clone)]
@@ -81,6 +109,10 @@ struct ReadyPayload {
 struct Current {
     id: u64,
     shown: Option<Banner>,
+    /// A quest offer banner: the runtime's offer id.
+    offer: Option<u64>,
+    /// The offer was accepted or passed (the page is playing its exit).
+    answered: bool,
 }
 
 /// Presenter plus window state. Every show/hide of an overlay window happens
@@ -101,6 +133,14 @@ struct Flow {
 impl Flow {
     fn current_id(&self) -> Option<u64> {
         self.current.as_ref().map(|c| c.id)
+    }
+
+    /// End the current banner without requeueing it (it is off screen or about to be hidden).
+    fn end_current(&mut self) -> Option<Current> {
+        self.banner_hovered = false;
+        let c = self.current.take()?;
+        self.presenter.banner_done();
+        Some(c)
     }
 }
 
@@ -154,6 +194,24 @@ impl OverlaySink {
             }
         });
 
+        // Accept / Pass / the fuse ran out. The page then plays its exit and sends `banner-done`.
+        let i = inner.clone();
+        app.listen_any("quest-answer", move |e| {
+            let Ok(p) = serde_json::from_str::<AnswerPayload>(e.payload()) else { return };
+            let fresh = match i.flow().current.as_mut() {
+                Some(c) if c.offer == Some(p.offer_id) && c.shown.is_some() && !c.answered => {
+                    c.answered = true;
+                    true
+                }
+                _ => false,
+            };
+            if fresh {
+                if let Some(rt) = runtime(&i) {
+                    rt.answer_offer(p.offer_id, p.accept);
+                }
+            }
+        });
+
         // Only now create the pages: they report `overlay-ready` as soon as they load.
         let paths = &inner.state.paths;
         let toast = build_window(app, paths, TOAST, "overlay/toast.html", TOAST_SIZE)?;
@@ -166,21 +224,31 @@ impl OverlaySink {
     /// Tray "Do not disturb": hold banners and drop toasts while on. A banner
     /// on screen is hidden and goes back to the head of the queue; one still
     /// resolving its text is requeued by its worker (`Presenter::confirm_show`).
+    /// Quest offers, queued or on screen, are dropped instead (no pass).
     pub fn set_dnd(&self, on: bool) {
-        {
+        let dropped = {
             let mut f = self.0.flow();
-            f.presenter.set_dnd(on);
+            let mut dropped = f.presenter.set_dnd(on);
             if on && f.current.as_ref().is_some_and(|c| c.shown.is_some()) {
-                let shown = f.current.take().and_then(|c| c.shown).expect("checked above");
-                f.presenter.requeue_front(shown);
+                if f.current.as_ref().is_some_and(|c| c.offer.is_some()) {
+                    let c = f.end_current().expect("checked above");
+                    cancel_on_page(&self.0, c.id);
+                    dropped.extend(c.offer.filter(|_| !c.answered));
+                } else {
+                    let shown = f.current.take().and_then(|c| c.shown).expect("checked above");
+                    f.presenter.requeue_front(shown);
+                }
                 if let Some(w) = self.0.window(BANNER) {
                     let _ = w.hide();
                 }
             }
+            dropped
+        };
+        for id in dropped {
+            drop_offer(&self.0, id);
         }
-        if !on {
-            pump(&self.0);
-        }
+        // Even under DND a failure notice may be next.
+        pump(&self.0);
     }
 }
 
@@ -203,17 +271,45 @@ impl OutcomeSink for OverlaySink {
         !t.dnd.load(Ordering::Relaxed) && t.quests.load(Ordering::Relaxed)
     }
 
-    // Stubs until the offer banner and quest pill exist (Tasks 6–7).
+    /// Jumps the banner queue. Under DND (it raced the toggle) it is dropped at once.
     fn quest_offer(&self, id: u64, offer: Offer) {
-        log(&self.0.state.paths, &format!("quest offer {id}: {} ({} exp)", offer.quest_id, offer.reward));
+        let queued = {
+            let mut f = self.0.flow();
+            let dnd = self.0.toggles.dnd.load(Ordering::Relaxed);
+            if !dnd {
+                f.presenter.offer(id, offer);
+            }
+            !dnd
+        };
+        if queued {
+            pump(&self.0);
+        } else {
+            drop_offer(&self.0, id);
+        }
     }
 
+    // Stub until the quest pill exists (Task 7).
     fn quest_update(&self, view: QuestView) {
         log(&self.0.state.paths, &format!("quest {} is {:?}", view.quest_id, view.status));
     }
 
+    /// The runtime no longer wants an answer: unqueue or hide it, without calling back.
     fn quest_offer_withdrawn(&self, id: u64) {
-        log(&self.0.state.paths, &format!("quest offer {id} withdrawn"));
+        {
+            let mut f = self.0.flow();
+            if f.presenter.withdraw_offer(id) || f.current.as_ref().and_then(|c| c.offer) != Some(id) {
+                return;
+            }
+            // Still resolving its text: its worker sees it is no longer current and stops.
+            let c = f.end_current().expect("checked above");
+            if c.shown.is_some() {
+                cancel_on_page(&self.0, c.id);
+                if let Some(w) = self.0.window(BANNER) {
+                    let _ = w.hide();
+                }
+            }
+        }
+        pump(&self.0);
     }
 }
 
@@ -290,7 +386,8 @@ fn pump(inner: &Arc<Inner>) {
     let Some(b) = f.presenter.next_banner() else { return };
     f.next_id += 1;
     let id = f.next_id;
-    f.current = Some(Current { id, shown: None });
+    let offer = b.offer.as_ref().map(|(oid, _)| *oid);
+    f.current = Some(Current { id, shown: None, offer, answered: false });
     drop(f);
 
     let i = inner.clone();
@@ -335,18 +432,30 @@ fn show_banner(inner: &Arc<Inner>, id: u64, mut b: Banner) {
     if !b.text_ready {
         if let Some(src) = &b.flavor {
             b.text = resolve_flavor(&inner.state, &src.unlock, &src.event);
+        } else if let Some((_, offer)) = &b.offer {
+            b.text = resolve_offer_flavor(&inner.state, offer);
         }
         b.text_ready = true;
     }
-    let sound_cfg = inner.state.cfg.read().unwrap_or_else(|p| p.into_inner()).sound.clone();
+    let (sound_cfg, offer_seconds) = {
+        let cfg = inner.state.cfg.read().unwrap_or_else(|p| p.into_inner());
+        (cfg.sound.clone(), cfg.quests.offer_seconds)
+    };
+    let offer_id = b.offer.as_ref().map(|(oid, _)| *oid);
     {
         let mut f = inner.flow();
         if f.current_id() != Some(id) {
             return;
         }
         let Some(b) = f.presenter.confirm_show(b) else {
-            // DND came on while resolving: requeued (with its text) for later.
+            // DND came on while resolving: requeued (with its text) for later,
+            // except an offer, which is dropped.
             f.current = None;
+            drop(f);
+            if let Some(oid) = offer_id {
+                drop_offer(inner, oid);
+                pump(inner);
+            }
             return;
         };
         let Some(win) = inner.window(BANNER) else {
@@ -358,24 +467,35 @@ fn show_banner(inner: &Arc<Inner>, id: u64, mut b: Banner) {
         let paths = inner.state.paths.clone();
         sound::play(&b.sound_key, &sound_cfg, &paths.sounds(), muted, move |msg| log(&paths, &msg));
         let _ = win.show();
-        if let Err(e) = inner.app.emit_to(BANNER, "banner", payload(id, &b)) {
+        if let Err(e) = inner.app.emit_to(BANNER, "banner", payload(id, &b, offer_seconds)) {
             log(&inner.state.paths, &format!("emitting banner failed: {e}"));
         }
         f.banner_hovered = false;
-        f.current = Some(Current { id, shown: Some(b) });
+        f.current = Some(Current { id, shown: Some(b), offer: offer_id, answered: false });
     }
     let i = inner.clone();
     let _ = std::thread::Builder::new().name("rpg-banner-clicks".into()).spawn(move || pass_clicks_outside_banner(&i, id));
-    let mut deadline = Instant::now() + BANNER_WATCHDOG;
+    // An offer ends by its fuse (or an answer), not by time on screen or hover.
+    let limit = if offer_id.is_some() { Duration::from_secs(offer_seconds) + OFFER_WATCHDOG_SLACK } else { BANNER_WATCHDOG };
+    let mut deadline = Instant::now() + limit;
+    let mut answered = false;
     while Instant::now() < deadline {
         std::thread::sleep(WATCHDOG_POLL);
         let f = inner.flow();
-        if f.current_id() != Some(id) {
-            return;
+        let Some(c) = f.current.as_ref().filter(|c| c.id == id) else { return };
+        if c.answered && !answered {
+            answered = true;
+            deadline = deadline.min(Instant::now() + ANSWERED_WATCHDOG);
         }
-        if f.banner_hovered {
+        if f.banner_hovered && offer_id.is_none() {
             deadline = Instant::now() + BANNER_WATCHDOG;
         }
+    }
+    let unanswered = inner.flow().current.as_ref().is_some_and(|c| c.id == id && !c.answered);
+    if let Some(oid) = offer_id.filter(|_| unanswered) {
+        // The page never answered (its fuse should have): not the user's pass.
+        log(&inner.state.paths, &format!("offer {oid} banner timed out unanswered"));
+        drop_offer(inner, oid);
     }
     finish_banner(inner, id);
 }
@@ -406,7 +526,7 @@ fn pass_clicks_outside_banner(inner: &Arc<Inner>, id: u64) {
     }
 }
 
-fn payload(id: u64, b: &Banner) -> BannerPayload {
+fn payload(id: u64, b: &Banner, offer_seconds: u64) -> BannerPayload {
     BannerPayload {
         id,
         kind: match b.kind {
@@ -414,13 +534,63 @@ fn payload(id: u64, b: &Banner) -> BannerPayload {
             BannerKind::LevelUp => "level_up",
             BannerKind::AwaySummary => "summary",
             BannerKind::Notice => "notice",
+            BannerKind::QuestOffer => "quest_offer",
         },
         title: b.title.clone(),
         name: b.name.clone(),
         text: b.text.clone(),
         reward: b.reward.clone(),
         tier: b.tier.map(Tier::label),
+        quest: b.offer.as_ref().map(|(offer_id, o)| QuestOfferPayload {
+            offer_id: *offer_id,
+            tier_label: o.tier.label(),
+            goal: o.step_labels.join(" → "),
+            minutes: o.minutes,
+            xp: o.xp,
+            multiplier: o.multiplier,
+            next_multiplier: o.next_multiplier,
+            reward: o.reward,
+            passes_left: o.max_passes.saturating_sub(o.passes),
+            offer_seconds,
+        }),
     }
+}
+
+/// Tell the page banner `id` is gone (DND, withdrawn): reset, with no exit and no `banner-done`.
+fn cancel_on_page(inner: &Inner, id: u64) {
+    if let Err(e) = inner.app.emit_to(BANNER, "banner-cancel", id) {
+        log(&inner.state.paths, &format!("emitting banner-cancel failed: {e}"));
+    }
+}
+
+/// The runtime, looked up when needed (it is managed after the overlay is built).
+fn runtime(inner: &Inner) -> Option<Runtime> {
+    let rt = inner.app.try_state::<Runtime>().map(|s| s.inner().clone());
+    if rt.is_none() {
+        log(&inner.state.paths, "quest offer: runtime not available");
+    }
+    rt
+}
+
+/// Forget offer `id` without counting a pass.
+fn drop_offer(inner: &Inner, id: u64) {
+    if let Some(rt) = runtime(inner) {
+        rt.drop_offer(id);
+    }
+}
+
+/// A quest offer's text: LLM text when its `flavor` opts in (waits up to
+/// `llm.timeout_secs`), else its fallback. Not stored. Call off the UI thread.
+fn resolve_offer_flavor(state: &AppState, offer: &Offer) -> String {
+    let llm = state.cfg.read().unwrap_or_else(|p| p.into_inner()).llm.clone();
+    let tz = local_offset(offer.trigger.ts);
+    catch_unwind(AssertUnwindSafe(|| {
+        flavor::render_offer(&offer.name, &offer.fallback, &offer.flavor, &offer.trigger, &llm, state.gen.as_deref(), tz)
+    }))
+    .unwrap_or_else(|p| {
+        log(&state.paths, &format!("flavor for quest {} panicked: {}", offer.quest_id, panic_message(&*p)));
+        offer.fallback.clone()
+    })
 }
 
 /// End banner `id` (no-op if it already ended or was requeued) and show what's next.
@@ -558,6 +728,47 @@ fallback = "LADDER"
         assert_eq!(u.rule_id, "pusher.bronze", "unlock key is the step id");
         assert_eq!(resolve_flavor(&st, &u, &ev), "LADDER");
         assert_eq!(st.store.list_unlocks().unwrap()[0].flavor_text.as_deref(), Some("LADDER"));
+    }
+
+    #[test]
+    fn offer_payload_carries_the_quest_fields() {
+        let ev = Event::new(EventKind::Commit, Source::Git, Some("r".into()), serde_json::json!({}));
+        let offer = Offer {
+            quest_id: "ship_it".into(),
+            name: "Ship It".into(),
+            tier: Tier::Gold,
+            fallback: "Go.".into(),
+            flavor: rpg_core::rules::Flavor::Static,
+            minutes: 15,
+            step_labels: vec!["push".into(), "pr_opened".into()],
+            xp: 400,
+            multiplier: 1.5,
+            next_multiplier: 2.0,
+            reward: 600,
+            passes: 1,
+            max_passes: 3,
+            has_github_step: true,
+            trigger: ev,
+            binding: Default::default(),
+            steps: vec![],
+        };
+        let mut p = Presenter::new();
+        p.offer(9, offer);
+        let b = p.next_banner().unwrap();
+        let v = serde_json::to_value(payload(3, &b, 60)).unwrap();
+        assert_eq!(v["kind"], "quest_offer");
+        assert_eq!(v["tier"], "Gold");
+        assert_eq!(
+            v["quest"],
+            serde_json::json!({
+                "offer_id": 9, "tier_label": "Gold", "goal": "push → pr_opened", "minutes": 15, "xp": 400,
+                "multiplier": 1.5, "next_multiplier": 2.0, "reward": 600, "passes_left": 2, "offer_seconds": 60
+            })
+        );
+        let mut p = Presenter::new();
+        p.notice(false, "x", "y");
+        let v = serde_json::to_value(payload(4, &p.next_banner().unwrap(), 60)).unwrap();
+        assert!(v["quest"].is_null(), "other banners carry no quest");
     }
 
     #[test]

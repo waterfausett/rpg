@@ -212,13 +212,11 @@ pub struct Runtime {
 
 impl Runtime {
     /// Accept or pass offer `id`. Ignored unless `id` is the pending offer.
-    #[allow(dead_code)] // called by the overlay's offer banner (Tasks 6–7)
     pub fn answer_offer(&self, id: u64, accept: bool) {
         let _ = self.tx.send(Msg::Answer(id, accept));
     }
 
     /// Forget offer `id` without counting a pass.
-    #[allow(dead_code)] // called by the overlay's offer banner (Tasks 6–7)
     pub fn drop_offer(&self, id: u64) {
         let _ = self.tx.send(Msg::DropOffer(id));
     }

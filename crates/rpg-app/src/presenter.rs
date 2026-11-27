@@ -2,6 +2,7 @@
 //! Disturb, and collapsing of achievement storms / away batches. Pure (no Tauri).
 use rpg_core::engine::{Outcome, SkillLevelUp, Unlock};
 use rpg_core::event::Event;
+use rpg_core::quests::state::Offer;
 use rpg_core::rules::{Announce, Tier};
 use std::collections::VecDeque;
 
@@ -34,6 +35,8 @@ pub enum BannerKind {
     AwaySummary,
     /// The result of something the user asked for (tray install/uninstall failed).
     Notice,
+    /// A quest offer with Accept / Pass; it jumps the queue and never waits out DND.
+    QuestOffer,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,6 +70,8 @@ pub struct Banner {
     pub flavor: Option<FlavorSource>,
     /// Summary banners: how many achievements and how much of their exp they stand for.
     pub more: Option<(usize, u64)>,
+    /// Quest offers: the runtime's offer id and the offer. `text` starts as its fallback.
+    pub offer: Option<(u64, Offer)>,
 }
 
 #[derive(Default)]
@@ -147,20 +152,51 @@ impl Presenter {
             sound_key: SoundKey::Silent,
             flavor: None,
             more: None,
+            offer: None,
         });
     }
 
-    /// DND on: pending and new toasts are dropped and banners wait. Off: banners flow again.
+    /// Queue quest offer `id` at the head of the queue (ahead of notices too: its clock
+    /// only starts once shown, but the runtime drops it if it waits too long).
+    pub fn offer(&mut self, id: u64, offer: Offer) {
+        self.banners.push_front(Banner {
+            kind: BannerKind::QuestOffer,
+            title: format!("◆ {} QUEST OFFERED ◆", offer.tier.label().to_uppercase()),
+            name: offer.name.clone(),
+            text: offer.fallback.clone(),
+            text_ready: false,
+            reward: format!("+{} exp", offer.reward),
+            tier: Some(offer.tier),
+            sound_key: SoundKey::Silent,
+            flavor: None,
+            more: None,
+            offer: Some((id, offer)),
+        });
+    }
+
+    /// Remove queued offer `id`. False if it isn't queued (showing, or already gone).
+    pub fn withdraw_offer(&mut self, id: u64) -> bool {
+        let before = self.banners.len();
+        self.banners.retain(|b| offer_id(b) != Some(id));
+        self.banners.len() != before
+    }
+
+    /// DND on: pending and new toasts are dropped, banners wait, and queued offers are
+    /// removed (their ids are returned, for the caller to drop). Off: banners flow again.
     /// Turning DND off with more than `STORM_CAP` achievement banners queued
     /// collapses the backlog into storm form (3 biggest, one summary, last level-up).
-    pub fn set_dnd(&mut self, on: bool) {
+    pub fn set_dnd(&mut self, on: bool) -> Vec<u64> {
         let was = self.dnd;
         self.dnd = on;
         if on {
             self.toasts.clear();
+            let withdrawn = self.banners.iter().filter_map(offer_id).collect();
+            self.banners.retain(|b| b.kind != BannerKind::QuestOffer);
+            return withdrawn;
         } else if was {
             self.collapse_backlog();
         }
+        vec![]
     }
 
     fn collapse_backlog(&mut self) {
@@ -174,7 +210,7 @@ impl Presenter {
         let mut notices = vec![];
         for b in self.banners.drain(..) {
             match b.kind {
-                BannerKind::Notice => notices.push(b),
+                BannerKind::Notice | BannerKind::QuestOffer => notices.push(b),
                 BannerKind::Achievement => achievements.push(b),
                 BannerKind::AwaySummary => {
                     let (n, xp) = b.more.unwrap_or_default();
@@ -219,14 +255,26 @@ impl Presenter {
     }
 
     /// Last check before a taken banner goes on screen: `Some` to show it, or
-    /// `None` when DND came on meanwhile (it is requeued at the front).
+    /// `None` when DND came on meanwhile (it is requeued at the front, except an
+    /// offer, which is dropped: the caller tells the runtime).
     pub fn confirm_show(&mut self, b: Banner) -> Option<Banner> {
-        if self.dnd && b.kind != BannerKind::Notice {
-            self.requeue_front(b);
-            return None;
+        match b.kind {
+            BannerKind::Notice => Some(b),
+            _ if !self.dnd => Some(b),
+            BannerKind::QuestOffer => {
+                self.showing = false;
+                None
+            }
+            _ => {
+                self.requeue_front(b);
+                None
+            }
         }
-        Some(b)
     }
+}
+
+fn offer_id(b: &Banner) -> Option<u64> {
+    b.offer.as_ref().map(|(id, _)| *id)
 }
 
 /// One toast per skill that leveled up, at its highest new level, in first-leveled order.
@@ -272,6 +320,7 @@ fn collapse(mut achs: Vec<Banner>, carried: (usize, u64), away: bool) -> Vec<Ban
             sound_key: SoundKey::Summary,
             flavor: None,
             more: Some((n, xp)),
+            offer: None,
         });
     }
     achs
@@ -289,6 +338,7 @@ fn achievement(ev: &Event, u: &Unlock) -> Banner {
         flavor: Some(FlavorSource { unlock: u.clone(), event: ev.clone() }),
         text_ready: false,
         more: None,
+        offer: None,
     }
 }
 
@@ -304,6 +354,7 @@ fn level_up(level: u32) -> Banner {
         flavor: None,
         text_ready: true,
         more: None,
+        offer: None,
     }
 }
 
@@ -313,6 +364,7 @@ mod tests {
     use chrono::{Duration, TimeZone, Utc};
     use rpg_core::engine::XpGain;
     use rpg_core::event::{EventKind, Source};
+    use rpg_core::quests::state::Offer;
 
     fn ev(secs: i64) -> Event {
         let mut e = Event::new(EventKind::Commit, Source::Git, Some("r".into()), serde_json::json!({}));
@@ -749,6 +801,92 @@ mod tests {
         assert_eq!(&got[..3], &["Ach 5", "Ach 4", "Ach 3"]);
         assert_eq!(bs.len(), 4);
         assert_eq!(bs[3].text, "…and 2 more achievements, plus 300 exp.");
+    }
+
+    fn offer(name: &str) -> Offer {
+        Offer {
+            quest_id: name.to_lowercase(),
+            name: name.into(),
+            tier: Tier::Gold,
+            fallback: "FALLBACK".into(),
+            flavor: rpg_core::rules::Flavor::Static,
+            minutes: 15,
+            step_labels: vec!["push".into(), "pr_opened".into()],
+            xp: 400,
+            multiplier: 1.5,
+            next_multiplier: 2.0,
+            reward: 600,
+            passes: 1,
+            max_passes: 3,
+            has_github_step: true,
+            trigger: ev(0),
+            binding: Default::default(),
+            steps: vec![],
+        }
+    }
+
+    #[test]
+    fn offer_jumps_the_banner_queue() {
+        let mut p = Presenter::new();
+        p.push(&batch(vec![unlock(1, Tier::Bronze, 100), unlock(2, Tier::Bronze, 100)]), false);
+        p.offer(7, offer("Ship It"));
+        let b = p.next_banner().expect("offer first");
+        assert_eq!((b.kind, b.name.as_str()), (BannerKind::QuestOffer, "Ship It"));
+        assert_eq!(b.offer.as_ref().map(|(id, _)| *id), Some(7));
+        assert_eq!(b.title, "◆ GOLD QUEST OFFERED ◆");
+        assert_eq!(b.tier, Some(Tier::Gold));
+        assert_eq!(b.sound_key, SoundKey::Silent, "offers make no sound");
+        p.banner_done();
+        assert_eq!(names(&mut p), vec!["Ach 1", "Ach 2"]);
+    }
+
+    #[test]
+    fn dnd_withdraws_queued_offer() {
+        let mut p = Presenter::new();
+        p.push(&batch(vec![unlock(1, Tier::Bronze, 100)]), false);
+        let shown = p.next_banner().unwrap(); // something is showing, so the rest wait
+        p.push(&batch(vec![unlock(2, Tier::Bronze, 100)]), false);
+        p.offer(7, offer("Ship It"));
+        assert_eq!(p.set_dnd(true), vec![7], "the queued offer is reported withdrawn");
+        p.requeue_front(shown);
+        p.set_dnd(false);
+        assert_eq!(names(&mut p), vec!["Ach 1", "Ach 2"], "achievements stay queued, the offer is gone");
+    }
+
+    #[test]
+    fn withdraw_offer_removes_only_that_offer() {
+        let mut p = Presenter::new();
+        p.push(&batch(vec![unlock(1, Tier::Bronze, 100)]), false);
+        p.offer(7, offer("Ship It"));
+        assert!(!p.withdraw_offer(8), "not queued");
+        assert!(p.withdraw_offer(7));
+        assert!(!p.withdraw_offer(7), "already gone");
+        assert_eq!(names(&mut p), vec!["Ach 1"]);
+    }
+
+    #[test]
+    fn offer_text_uses_fallback_until_resolved() {
+        let mut p = Presenter::new();
+        p.offer(7, offer("Ship It"));
+        let mut b = p.next_banner().unwrap();
+        assert_eq!((b.text.as_str(), b.text_ready), ("FALLBACK", false), "fallback shows until the flavor resolves");
+        b.text = "RESOLVED".into();
+        b.text_ready = true;
+        p.requeue_front(b);
+        let again = p.next_banner().unwrap();
+        assert_eq!((again.text.as_str(), again.text_ready), ("RESOLVED", true));
+    }
+
+    #[test]
+    fn confirm_show_drops_an_offer_when_dnd_came_on() {
+        let mut p = Presenter::new();
+        p.offer(7, offer("Ship It"));
+        p.push(&batch(vec![unlock(1, Tier::Bronze, 100)]), false);
+        let b = p.next_banner().unwrap();
+        assert!(p.set_dnd(true).is_empty(), "the offer was taken, not queued");
+        assert!(p.confirm_show(b).is_none());
+        p.set_dnd(false);
+        assert_eq!(names(&mut p), vec!["Ach 1"], "the offer is not requeued");
     }
 
     #[test]

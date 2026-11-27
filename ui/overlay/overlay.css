@@ -74,6 +74,44 @@ body { user-select: none; -webkit-user-select: none; }
                -webkit-box-orient: vertical; overflow: hidden; }
 .ach-b .desc:empty, .ach-b .rew:empty { display: none; }
 .ach-b .rew { margin-top: 10px; font-family: system-ui, sans-serif; font-size: 13px; color: var(--tier); }
+/* The quest-only parts stay hidden on every other banner. */
+.ach-b .goal, .ach-b .acts, .ach-b .stakes, .ach-b .fuse, .ach-b .spark { display: none; }
+
+/* ---- Quest offer (style A, "Blood Contract") ----
+   The same frame, recolored crimson; the tier rides on top through the [data-tier] rules
+   (header color, glow size, pop/flash, sweep, pulse, stars and aurora name).
+   Placed before the tier rules so Celestial's name treatment still wins. */
+.ach-b.quest-b { --q: #ff4d5e; --q2: #ff9a3c; color: #ffe9e6; border-color: var(--q); cursor: default;
+  padding: 12px 22px 14px;
+  background: radial-gradient(circle at 50% 0%, color-mix(in srgb, var(--tier) 18%, #4a0f18), #140406 70%);
+  box-shadow: 0 0 var(--glow) color-mix(in srgb, var(--q) var(--glow-a), transparent),
+              inset 0 0 calc(var(--glow) * .6) color-mix(in srgb, var(--tier) 40%, transparent); }
+.ach-b.quest-b .name { margin: 4px 0; text-shadow: 0 0 12px var(--q); }
+.ach-b.quest-b .desc { -webkit-line-clamp: 2; }
+.ach-b.quest-b .rew { display: none; }
+.ach-b.quest-b .goal { display: block; margin-top: 8px; font: 13px system-ui, sans-serif; }
+.ach-b.quest-b .goal b { color: var(--q2); }
+.ach-b.quest-b .acts { display: flex; gap: 10px; justify-content: center; margin-top: 10px; }
+.ach-b.quest-b .acts button { padding: 6px 18px; border-radius: 6px; font: 700 13px system-ui, sans-serif; cursor: pointer;
+  border: 1px solid transparent; }
+.ach-b.quest-b .acc { background: var(--q); color: #1a0306; }
+.ach-b.quest-b .acc:hover { filter: brightness(1.15); }
+.ach-b.quest-b .pas { background: transparent; border-color: #ffe9e655; color: #ffe9e6aa; }
+.ach-b.quest-b .pas:hover { border-color: #ffe9e6aa; color: #ffe9e6; }
+.ach-b.quest-b .stakes { display: block; margin-top: 6px; font: 12px system-ui, sans-serif; color: #ffb3ab; }
+/* The burning fuse along the bottom edge (overlay.js shrinks it), its spark and smoke. */
+.ach-b.quest-b .fuse { display: block; position: absolute; left: 0; bottom: 0; height: 4px; width: 100%;
+  transform-origin: left; background: linear-gradient(90deg, var(--q2), var(--q)); }
+.ach-b.quest-b .spark { display: block; position: absolute; bottom: -5px; width: 14px; height: 14px; margin-left: -7px;
+  border-radius: 50%; pointer-events: none;
+  background: radial-gradient(#fff, #ffd27a 30%, var(--q2) 55%, transparent 70%); animation: quest-spark .15s steps(2) infinite; }
+.ach-b.quest-b .smoke { position: absolute; bottom: 4px; width: 4px; height: 4px; border-radius: 50%; background: #ffb07a;
+  pointer-events: none; opacity: 0; animation: quest-puff .9s ease-out forwards; }
+/* Accept: shrink toward the bottom-right corner, where the quest pill appears. */
+.ach-b.quest-b.take { visibility: visible; animation: quest-take .55s cubic-bezier(.5, 0, .8, .4) forwards; }
+@keyframes quest-spark { 50% { transform: scale(1.35); } }
+@keyframes quest-puff { from { opacity: .9; transform: translate(0, 0) scale(1); } to { opacity: 0; transform: translate(-6px, -26px) scale(3); } }
+@keyframes quest-take { from { opacity: 1; transform: none; } to { opacity: 0; transform: translate(250px, 110px) scale(.15); } }
 .ach-b[data-tier="Bronze"]   { --tier: var(--bronze);   --tint: #3d2410; --glow: 14px; --glow-a: 33%; }
 .ach-b[data-tier="Silver"]   { --tier: var(--silver);   --tint: #2c3036; --glow: 18px; --glow-a: 45%; }
 .ach-b[data-tier="Gold"]     { --tier: var(--gold);     --tint: #4a3500; --glow: 28px; --glow-a: 60%; }
@@ -142,4 +180,8 @@ body { user-select: none; -webkit-user-select: none; }
   .ach-b[data-tier].in::after, .xp.ach:is([data-tier="Platinum"], [data-tier="Legendary"], [data-tier="Celestial"])::after { animation: none; }
   .ach-pulse { display: none; }
   .ach-b[data-tier="Celestial"] .name, .ach-b[data-tier="Celestial"]::before { animation: none; }
+  /* Offers: Accept fades like any exit; the fuse still shrinks, without flicker or smoke. */
+  .ach-b.quest-b.take { animation: banner-fade-out .4s ease-in forwards; }
+  .ach-b.quest-b .spark { animation: none; }
+  .ach-b.quest-b .smoke { display: none; }
 }
