@@ -297,9 +297,9 @@ mod tests {
 
     #[test]
     fn snapshot_shows_raw_paths_and_missing_pins() {
-        let text = "[paths]\nexclude = ['C:\tmp']\n[sound]\nachievement = \"gone.wav\"\n";
+        let text = "[paths]\nexclude = ['C:\\tmp']\n[sound]\nachievement = \"gone.wav\"\n";
         let s = snapshot(Some(text), Path::new("/s"), &[]);
-        assert_eq!(s["repos"]["exclude"], serde_json::json!(["C:\tmp"]));
+        assert_eq!(s["repos"]["exclude"], serde_json::json!([r"C:\tmp"]));
         let a = slot(&s, "achievement");
         assert_eq!(a["pinned"], "gone.wav");
         assert_eq!(a["exists"], false);
