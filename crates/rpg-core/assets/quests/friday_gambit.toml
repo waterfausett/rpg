@@ -1,0 +1,13 @@
+id = "friday_gambit"
+name = "Friday Gambit"
+tier = "legendary"
+trigger = ["commit"]
+filter = { weekdays = ["fri"], hours = { start = 15, end = 24 } }
+chance = 0.05
+cooldown_hours = 48
+minutes = 60
+same = "repo"
+steps = [{ kind = "push" }, { kind = "pr_opened" }, { kind = "pr_merged" }]
+hint = "Friday afternoon. Push, open a PR, and merge it within the hour."
+fallback = "Friday afternoon, and you are committing. Push, open a PR and merge it within the hour. What could possibly go wrong? Everything. Everything could."
+flavor = { type = "llm", prompt = "Rewrite this quest offer in the same snarky voice: \"{fallback}\". Use the concrete details. Context: {context}" }

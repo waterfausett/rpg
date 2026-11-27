@@ -50,3 +50,12 @@ exclude = []
 # Hours between automatic update checks; 0 = only from the tray's "Check for updates".
 [updates]
 check_hours = 6
+
+# Timed quests, offered after things you do. false turns them off (an active quest ends quietly).
+[quests]
+enabled = true
+offer_seconds = 60       # how long an offer waits for Accept
+max_passes = 3           # passes (or ignored offers) in a row that break the chain
+chain_step = 0.5         # multiplier gained per completion: x1, x1.5, x2, ...
+chain_max = 5.0          # multiplier cap
+min_gap_minutes = 30     # min time between any two offers

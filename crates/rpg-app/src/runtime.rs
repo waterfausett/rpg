@@ -10,6 +10,7 @@ use rpg_core::event::{Event, EventKind};
 use rpg_core::flavor::TextGen;
 use rpg_core::paths::Paths;
 use rpg_core::rules::{self, Rules};
+use rpg_core::quests;
 use rpg_core::skills;
 use rpg_core::store::Store;
 use rpg_core::{github, inbox};
@@ -70,6 +71,11 @@ pub fn load_rules(paths: &Paths) -> Rules {
         log(paths, &format!("skill {} skipped: {}", e.file.display(), e.message));
     }
     rules.skills = skills;
+    let (quests, errors) = quests::load_dir(&paths.quests());
+    for e in &errors {
+        log(paths, &format!("quest {} skipped: {}", e.file.display(), e.message));
+    }
+    rules.quests = quests;
     rules
 }
 
@@ -203,21 +209,26 @@ pub fn spawn(state: AppState, sink: Arc<dyn OutcomeSink>) {
 
     let (rtx, rrx) = mpsc::channel::<()>();
     let stx = rtx.clone();
+    let rtx2 = rtx.clone();
     let rules_watcher = watch(&state.paths, &state.paths.rules(), move || {
         let _ = rtx.send(());
     });
     let skills_watcher = watch(&state.paths, &state.paths.skills(), move || {
         let _ = stx.send(());
     });
+    let qtx = rtx2;
+    let quests_watcher = watch(&state.paths, &state.paths.quests(), move || {
+        let _ = qtx.send(());
+    });
     std::thread::Builder::new()
         .name("rpg-rules".into())
         .spawn(move || {
-            let _keep = (rules_watcher, skills_watcher);
+            let _keep = (rules_watcher, skills_watcher, quests_watcher);
             while rrx.recv().is_ok() {
                 std::thread::sleep(DEBOUNCE);
                 while rrx.try_recv().is_ok() {}
                 let rules = load_rules(&state.paths);
-                log(&state.paths, &format!("rules reloaded: {} achievements, {} skills", rules.list.len(), rules.skills.len()));
+                log(&state.paths, &format!("rules reloaded: {} achievements, {} skills, {} quests", rules.list.len(), rules.skills.len(), rules.quests.len()));
                 *state.rules.write().unwrap_or_else(|p| p.into_inner()) = rules;
             }
         })

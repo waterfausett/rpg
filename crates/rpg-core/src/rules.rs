@@ -340,6 +340,7 @@ pub fn parse_rule(text: &str) -> Result<Rule, String> {
 pub struct Rules {
     pub list: Vec<Rule>,
     pub skills: Vec<crate::skills::Skill>,
+    pub quests: Vec<crate::quests::QuestDef>,
 }
 
 impl Rules {

@@ -572,6 +572,7 @@ fallback = "A skill, levelled."
                 skill("id = \"docs\"\nname = \"Scribe\"\nglobs = [\"*.md\"]\n"),
                 skill("id = \"idle\"\nname = \"Idle\"\nglobs = [\"*.zz\"]\n"),
             ],
+            ..Default::default()
         };
         let st = state_with(rules);
         let mut c = ev("c1", EventKind::Commit);
