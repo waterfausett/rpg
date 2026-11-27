@@ -26,7 +26,7 @@ Output: `target/release/rpg-app.exe` plus installers in `target/release/bundle/{
    This sets a global git `core.hooksPath` to rpg's shim folder and adds `SessionStart`/`SessionEnd` entries to `~/.claude/settings.json` (a backup is written next to it as `settings.json.rpg-backup`, and your other settings are kept). Every standard git hook except `reference-transaction` and `post-index-change` (see Known limitations) gets a pass-through shim, so a repo's own `.git/hooks/*` keep working.
 3. Commit something. A `+10 exp · commit` pop-up appears bottom-right; unlocks show a gold banner top-center. To write your own achievements, see the [rule format reference](docs/rules.md).
 
-Tray menu: Open character sheet, Mute sounds, Do not disturb, Start at login, Open rules folder, Install hooks, Uninstall hooks, Check for updates, Quit. **Start at login** (off by default) adds rpg to your login items (Windows: the `rpg` value under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, which Task Manager's Startup apps tab also shows); the check mark reads that setting back, so turning it off in Task Manager unchecks it. Only one app instance runs at a time. Hooks never fail a git command; errors go to `rpg.log`.
+Tray menu: Open character sheet, Settings…, Mute sounds, Do not disturb, Start at login, Open rules folder, Install hooks, Uninstall hooks, Check for updates, Quit. **Start at login** (off by default) adds rpg to your login items (Windows: the `rpg` value under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, which Task Manager's Startup apps tab also shows); the check mark reads that setting back, so turning it off in Task Manager unchecks it. Only one app instance runs at a time. Hooks never fail a git command; errors go to `rpg.log`.
 
 ## Updates
 
@@ -85,6 +85,8 @@ by_rule = { new_territory = "explore.ogg" }
 ```
 
 Names that don't exist in `sounds/` are skipped. Tray **Mute sounds** silences everything.
+
+You can also set sounds in the Settings window. **Choose…** on a sound row opens a file dialog, copies the file into the matching folder (`sounds/achievements/`, `sounds/levels/` or `sounds/achievements/<tier>/`; a name clash gets a ` (2)` suffix and nothing is overwritten) and pins it. ▶ previews it (even when muted), and ✕ stops using it (the file stays in `sounds/`).
 
 ## Adding an achievement
 
@@ -174,6 +176,10 @@ model = "haiku"
 
 [sound]             # see "Sounds"
 volume = 0.8
+muted = false       # tray Mute sounds; remembered across restarts
+
+[announce]          # see the tray's Do not disturb
+dnd = false         # remembered across restarts
 
 [site]
 port = 47474        # character sheet at http://127.0.0.1:47474
@@ -186,7 +192,7 @@ exclude = []
 check_hours = 6     # background update checks; 0 = only from the tray
 ```
 
-Config is read at startup, so restart the app after editing it.
+Changes you make in the Settings window (tray **Settings…**) are saved to `config.toml` as you make them, with your comments kept, and apply right away. A hand edit of the file applies right away too, even while the window is open. The one exception is `[site] port`, which needs a restart. `[xp]`, `[levels]`, `[skill_levels]` and `[site]` are only edited in the file.
 
 ### Including and excluding paths
 
@@ -199,7 +205,7 @@ include = ['C:/work', 'octo/*']                # optional: only these count
 ```
 
 - Patterns are matched against the event's repo: the local folder for commits, pushes and Claude sessions, `owner/name` for GitHub events.
-- A plain folder (no `*`, `?`, `[` or `{`) covers itself and everything under it. Anything else is a glob, as in skills: case-insensitive, `*` crosses folders.
+- A plain folder (no `*`, `?`, `[` or `{`) covers itself and everything under it. Anything else is a glob, as in skills: case-insensitive, `*` crosses folders. To name a folder that contains one of those characters, wrap each one in brackets (`C:/work/[[]old]` for `C:\work\[old]`); the Settings window's **Add folder…** does this for you.
 - `\` or `/`, drive-letter case and a trailing slash don't matter. Use single quotes in TOML so backslashes stay literal.
 - `exclude` wins over `include`. A non-empty `include` drops everything that doesn't match it. Events with no repo always count.
 - Only new events are filtered; past ones keep their exp. A bad pattern makes the whole config invalid (the app logs it to `rpg.log` and uses defaults).
@@ -219,4 +225,4 @@ include = ['C:/work', 'octo/*']                # optional: only these count
 - Merge conflicts count only when a `git merge` (or a merging `git pull`) stops on them and you commit the result. Conflicts during a rebase, cherry-pick, revert or `git stash pop` don't count yet ([#44](../../issues/44)).
 - macOS is not supported yet ([#4](../../issues/4)).
 - The installed hooks point at the exact `rpg-app.exe` (or `rpg.exe`) path they were installed from. If you move or reinstall the app somewhere else, run **Install hooks** again.
-- Do not disturb and Mute are not remembered across restarts. No autostart at login yet ([#10](../../issues/10)).
+- No autostart at login yet ([#10](../../issues/10)).
