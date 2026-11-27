@@ -18,6 +18,7 @@ pub fn metric_key(m: Metric) -> &'static str {
         Metric::PrsMergedPerDay => "prs_merged_per_day",
         Metric::CommitsPerDay => "commits_per_day",
         Metric::PrDeletions => "pr_deletions",
+        Metric::ConflictFiles => "conflict_files",
     }
 }
 
@@ -41,6 +42,7 @@ fn metrics_for(store: &Store, ev: &Event, tz: FixedOffset) -> Result<Vec<(Metric
             (Metric::PrDeletions, ev.data["deletions"].as_f64().unwrap_or(0.0)),
         ],
         EventKind::Commit => vec![(Metric::CommitsPerDay, count_today(store, ev, tz)? as f64)],
+        EventKind::MergeConflictResolved => vec![(Metric::ConflictFiles, ev.data["file_count"].as_f64().unwrap_or(0.0))],
         _ => vec![],
     })
 }

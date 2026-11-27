@@ -94,6 +94,8 @@ pub enum Metric {
     PrsMergedPerDay,
     CommitsPerDay,
     PrDeletions,
+    /// Conflicted files resolved in one merge.
+    ConflictFiles,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]

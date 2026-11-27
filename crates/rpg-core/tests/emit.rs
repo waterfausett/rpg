@@ -1,4 +1,4 @@
-use rpg_core::emit::{commit_event, push_event};
+use rpg_core::emit::{commit_event, conflict_event, parse_conflict_marker, push_event};
 use rpg_core::event::{Event, EventKind, Source};
 use rpg_core::inbox;
 use std::path::Path;
@@ -144,4 +144,65 @@ fn events_record_github_origin() {
     assert_eq!(c.data["github_repo"], "acme/app");
     let p = push_event(d.path(), "origin").unwrap();
     assert_eq!(p.data["github_repo"], "acme/app");
+}
+
+fn rev(dir: &Path, r: &str) -> String {
+    let o = Command::new("git").arg("-C").arg(dir).args(["rev-parse", r]).output().unwrap();
+    String::from_utf8_lossy(&o.stdout).trim().to_string()
+}
+
+#[test]
+fn conflict_marker_parses_hash_then_paths() {
+    assert_eq!(
+        parse_conflict_marker("abc
+src/a b.rs
+
+z
+"),
+        Some(("abc".to_string(), vec!["src/a b.rs".to_string(), "z".to_string()]))
+    );
+    assert_eq!(parse_conflict_marker("abc
+"), None);
+    assert_eq!(parse_conflict_marker("
+a
+"), None);
+    assert_eq!(parse_conflict_marker(""), None);
+}
+
+#[test]
+fn conflict_event_checks_the_merge_and_deletes_the_marker() {
+    let d = temp_repo();
+    git(d.path(), &["checkout", "-q", "-b", "side"]);
+    std::fs::write(d.path().join("s.txt"), "s
+").unwrap();
+    git(d.path(), &["add", "."]);
+    git(d.path(), &["commit", "-q", "-m", "side"]);
+    git(d.path(), &["checkout", "-q", "-"]);
+    git(d.path(), &["merge", "-q", "--no-ff", "--no-edit", "side"]);
+    let side = rev(d.path(), "side");
+    let head = rev(d.path(), "HEAD");
+    let marker = d.path().join("marker");
+
+    std::fs::write(&marker, format!("{side}
+a.txt
+b.txt
+")).unwrap();
+    let e = conflict_event(d.path(), &head, &marker).unwrap().expect("event");
+    assert!(!marker.exists());
+    assert_eq!(e.kind, EventKind::MergeConflictResolved);
+    assert_eq!(e.data["hash"], head);
+    assert_eq!(e.data["file_count"], 2);
+    assert_eq!(e.data["files"][1]["path"], "b.txt");
+
+    // A marker left over from another merge, or on a commit that isn't a merge: no event.
+    std::fs::write(&marker, format!("{head}
+a.txt
+")).unwrap();
+    assert!(conflict_event(d.path(), &head, &marker).unwrap().is_none());
+    assert!(!marker.exists());
+    std::fs::write(&marker, format!("{side}
+a.txt
+")).unwrap();
+    assert!(conflict_event(d.path(), &side, &marker).unwrap().is_none());
+    assert!(!marker.exists());
 }
