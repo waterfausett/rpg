@@ -195,8 +195,8 @@ const SAMPLE: &str = "# my config\n[sound]\nvolume = 0.8 # loud\nby_tier = { bro
   `toml_edit::Table` for missing parents. Inside an existing inline table, insert into it instead. Set a
   `toml_edit::value(...)` or remove the key. Re-serialize with `doc.to_string()`, then run `Config::parse` on the
   result (a failure there is `BadValue`). Validate the allow-list and value type before touching the doc.
-  `write_atomic` writes `config.toml.tmp` in the same dir with `std::fs::write`, then `std::fs::rename`. If `toml_edit` rewrites untouched line endings, detect `
-` in the input and emit CRLF throughout so the CRLF test holds.
+  `write_atomic` writes `config.toml.tmp` in the same dir with `std::fs::write`, then `std::fs::rename`. If `toml_edit` rewrites untouched line endings, detect `\r\n`
+  in the input and emit CRLF throughout so the CRLF test holds.
 - [ ] **Step 4: Run** `cargo test -p rpg-core` and expect a PASS.
 - [ ] **Step 5: Commit** `git add -A && git commit -m "Core: format-preserving config editor with allow-list (#49)"`
 
