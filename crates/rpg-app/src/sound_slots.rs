@@ -1,0 +1,215 @@
+//! The Settings window's sound rows: which folder and config key each slot uses,
+//! whether a pin exists, what plays when nothing is pinned, and safe file copying.
+use crate::presenter::SoundKey;
+use crate::sound::{is_audio, resolve_sound};
+use rpg_core::config::SoundConfig;
+use rpg_core::rules::Tier;
+use std::path::{Path, PathBuf};
+
+const ACHIEVEMENTS: &str = "achievements";
+const LEVELS: &str = "levels";
+
+const TIERS: [Tier; 6] = [Tier::Bronze, Tier::Silver, Tier::Gold, Tier::Platinum, Tier::Legendary, Tier::Celestial];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Slot {
+    Achievement,
+    LevelUp,
+    Tier(Tier),
+}
+
+impl Slot {
+    pub fn parse(s: &str) -> Option<Slot> {
+        match s {
+            "achievement" => Some(Slot::Achievement),
+            "level_up" => Some(Slot::LevelUp),
+            _ => {
+                let t = s.strip_prefix("tier:")?;
+                TIERS.iter().find(|x| x.as_str() == t).map(|x| Slot::Tier(*x))
+            }
+        }
+    }
+
+    pub fn id(&self) -> String {
+        match self {
+            Slot::Achievement => "achievement".into(),
+            Slot::LevelUp => "level_up".into(),
+            Slot::Tier(t) => format!("tier:{}", t.as_str()),
+        }
+    }
+
+    pub fn config_key(&self) -> String {
+        match self {
+            Slot::Achievement => "sound.achievement".into(),
+            Slot::LevelUp => "sound.level_up".into(),
+            Slot::Tier(t) => format!("sound.by_tier.{}", t.as_str()),
+        }
+    }
+
+    /// The 8 slots in UI order.
+    pub fn all() -> Vec<Slot> {
+        let mut v = vec![Slot::Achievement, Slot::LevelUp];
+        v.extend(TIERS.iter().map(|t| Slot::Tier(*t)));
+        v
+    }
+
+    pub fn folder(&self, root: &Path) -> PathBuf {
+        match self {
+            Slot::Achievement => root.join(ACHIEVEMENTS),
+            Slot::LevelUp => root.join(LEVELS),
+            Slot::Tier(t) => root.join(ACHIEVEMENTS).join(t.as_str()),
+        }
+    }
+
+    pub fn sound_key(&self) -> SoundKey {
+        match self {
+            Slot::Achievement => SoundKey::Summary,
+            Slot::LevelUp => SoundKey::LevelUp,
+            Slot::Tier(t) => SoundKey::Achievement { rule_id: String::new(), tier: *t },
+        }
+    }
+
+    pub fn pinned<'a>(&self, cfg: &'a SoundConfig) -> Option<&'a String> {
+        match self {
+            Slot::Achievement => cfg.achievement.as_ref(),
+            Slot::LevelUp => cfg.level_up.as_ref(),
+            Slot::Tier(t) => cfg.by_tier.get(t.as_str()),
+        }
+    }
+
+    /// Folders searched for a pin, most specific first.
+    fn pin_dirs(&self, root: &Path) -> Vec<PathBuf> {
+        let mut v = vec![self.folder(root)];
+        if matches!(self, Slot::Tier(_)) {
+            v.push(root.join(ACHIEVEMENTS));
+        }
+        v.push(root.to_path_buf());
+        v
+    }
+
+    /// Folders making up the slot's own random pool.
+    fn pool_dirs(&self, root: &Path) -> Vec<PathBuf> {
+        match self {
+            Slot::Tier(_) => vec![self.folder(root)],
+            _ => vec![self.folder(root), root.to_path_buf()],
+        }
+    }
+}
+
+fn in_dirs<'a>(files: &'a [PathBuf], dirs: &'a [PathBuf]) -> impl Iterator<Item = &'a PathBuf> {
+    files.iter().filter(move |f| f.parent().is_some_and(|p| dirs.iter().any(|d| d == p)))
+}
+
+/// Whether a file called `name` is where `resolve_sound` would find a pin for `slot`.
+pub fn pin_exists(slot: Slot, name: &str, root: &Path, files: &[PathBuf]) -> bool {
+    in_dirs(files, &slot.pin_dirs(root)).any(|f| f.file_name().is_some_and(|n| n == name))
+}
+
+/// What plays for `slot` when nothing is pinned: `"pool"`, `"default"` or `"none"`.
+pub fn fallback(slot: Slot, cfg: &SoundConfig, root: &Path, files: &[PathBuf]) -> &'static str {
+    if in_dirs(files, &slot.pool_dirs(root)).any(|f| is_audio(f)) {
+        return "pool";
+    }
+    match slot {
+        Slot::Tier(_) if resolve_sound(&SoundKey::Summary, cfg, root, files).is_some() => "default",
+        _ => "none",
+    }
+}
+
+/// Copy `src` into the slot's folder without overwriting anything; returns the file name used.
+/// Identical bytes reuse the existing name; a clash gets `stem (2).ext`, `stem (3).ext`, ...
+pub fn copy_into(slot: Slot, src: &Path, root: &Path) -> std::io::Result<String> {
+    use std::io::Write;
+    let dir = slot.folder(root);
+    std::fs::create_dir_all(&dir)?;
+    let name = src
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "bad file name"))?;
+    let (stem, ext) = match name.rfind('.') {
+        Some(i) if i > 0 => (&name[..i], &name[i..]),
+        _ => (name, ""),
+    };
+    let bytes = std::fs::read(src)?;
+    for n in 1u32.. {
+        let cand = if n == 1 { name.to_string() } else { format!("{stem} ({n}){ext}") };
+        let dest = dir.join(&cand);
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&dest) {
+            Ok(mut f) => {
+                if let Err(e) = f.write_all(&bytes) {
+                    drop(f);
+                    let _ = std::fs::remove_file(&dest);
+                    return Err(e);
+                }
+                return Ok(cand);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                if std::fs::read(&dest).is_ok_and(|b| b == bytes) {
+                    return Ok(cand);
+                }
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    unreachable!()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fs(root: &Path, names: &[&str]) -> Vec<PathBuf> {
+        names.iter().map(|n| root.join(n)).collect()
+    }
+
+    #[test]
+    fn slot_ids_round_trip_and_keys() {
+        assert_eq!(Slot::all().len(), 8);
+        for s in Slot::all() {
+            assert_eq!(Slot::parse(&s.id()), Some(s));
+        }
+        assert_eq!(Slot::Tier(Tier::Gold).config_key(), "sound.by_tier.gold");
+        assert_eq!(Slot::parse("tier:nope"), None);
+    }
+
+    #[test]
+    fn fallback_labels() {
+        let r = Path::new("/s");
+        let c = SoundConfig::default();
+        let gold = Slot::Tier(Tier::Gold);
+        assert_eq!(fallback(Slot::Achievement, &c, r, &[]), "none");
+        assert_eq!(fallback(gold, &c, r, &[]), "none");
+        let f = fs(r, &["achievements/a.mp3"]);
+        assert_eq!(fallback(Slot::Achievement, &c, r, &f), "pool");
+        assert_eq!(fallback(gold, &c, r, &f), "default");
+        let f = fs(r, &["achievements/gold/g.mp3"]);
+        assert_eq!(fallback(gold, &c, r, &f), "pool");
+        let f = fs(r, &["levels/l.mp3"]);
+        assert_eq!(fallback(Slot::LevelUp, &c, r, &f), "pool");
+        assert_eq!(fallback(Slot::Achievement, &c, r, &f), "none");
+    }
+
+    #[test]
+    fn pin_exists_searches_like_resolver() {
+        let r = Path::new("/s");
+        let gold = Slot::Tier(Tier::Gold);
+        assert!(pin_exists(gold, "gong.wav", r, &fs(r, &["gong.wav"])));
+        assert!(!pin_exists(gold, "gong.wav", r, &fs(r, &["levels/gong.wav"])));
+    }
+
+    #[test]
+    fn copy_into_never_overwrites() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src_dir = tempfile::tempdir().unwrap();
+        let src = src_dir.path().join("Fan Fare é.mp3");
+        std::fs::write(&src, b"one").unwrap();
+        let slot = Slot::Achievement;
+        assert_eq!(copy_into(slot, &src, tmp.path()).unwrap(), "Fan Fare é.mp3");
+        assert_eq!(copy_into(slot, &src, tmp.path()).unwrap(), "Fan Fare é.mp3");
+        std::fs::write(&src, b"two").unwrap();
+        assert_eq!(copy_into(slot, &src, tmp.path()).unwrap(), "Fan Fare é (2).mp3");
+        let dir = slot.folder(tmp.path());
+        assert_eq!(std::fs::read(dir.join("Fan Fare é.mp3")).unwrap(), b"one");
+        assert_eq!(std::fs::read(dir.join("Fan Fare é (2).mp3")).unwrap(), b"two");
+    }
+}

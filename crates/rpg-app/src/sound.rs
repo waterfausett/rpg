@@ -48,13 +48,13 @@ pub fn resolve_sound(key: &SoundKey, cfg: &SoundConfig, root: &Path, files: &[Pa
     }
 }
 
-fn is_audio(p: &Path) -> bool {
+pub(crate) fn is_audio(p: &Path) -> bool {
     let ext = p.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
     matches!(ext.as_deref(), Some("wav" | "mp3" | "ogg" | "flac"))
 }
 
 /// Every file under `dir`, descending `depth` folder levels (`achievements/<rule>/x.mp3` is 2).
-fn collect_files(dir: &Path, depth: u32, out: &mut Vec<PathBuf>) {
+pub(crate) fn collect_files(dir: &Path, depth: u32, out: &mut Vec<PathBuf>) {
     let Ok(rd) = std::fs::read_dir(dir) else { return };
     for p in rd.filter_map(|e| e.ok()).map(|e| e.path()) {
         if p.is_file() {
@@ -81,6 +81,35 @@ pub fn play(key: &SoundKey, cfg: &SoundConfig, sounds_dir: &Path, muted: bool, o
             on_error(format!("sound {} failed: {e:#}", file.display()));
         }
     });
+}
+
+/// Play `file` once for the Settings window. Opening and decoding happen here so the
+/// caller gets the error; playback itself runs on a background `rpg-sound` thread.
+#[allow(dead_code)] // used by settings commands (Task 7)
+pub fn preview(file: &Path, volume: f32) -> anyhow::Result<()> {
+    // The output stream isn't `Send`, so the thread opens the device and reports back.
+    let source = rodio::Decoder::new(std::io::BufReader::new(std::fs::File::open(file)?))?;
+    let volume = volume.clamp(0.0, 1.0);
+    let (tx, rx) = std::sync::mpsc::channel::<anyhow::Result<()>>();
+    std::thread::Builder::new().name("rpg-sound".into()).spawn(move || {
+        let opened = (|| -> anyhow::Result<_> {
+            let (stream, handle) = rodio::OutputStream::try_default()?;
+            let sink = rodio::Sink::try_new(&handle)?;
+            Ok((stream, sink))
+        })();
+        match opened {
+            Ok((_stream, sink)) => {
+                sink.set_volume(volume);
+                sink.append(source);
+                let _ = tx.send(Ok(()));
+                sink.sleep_until_end();
+            }
+            Err(e) => {
+                let _ = tx.send(Err(e));
+            }
+        }
+    })?;
+    rx.recv()?
 }
 
 fn play_file(file: &Path, volume: f32) -> anyhow::Result<()> {

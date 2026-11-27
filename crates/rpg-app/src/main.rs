@@ -9,6 +9,8 @@ mod runtime;
 mod settings;
 mod site;
 mod sound;
+#[allow(dead_code)] // used by settings commands (Task 7)
+mod sound_slots;
 mod tray;
 mod update;
 
