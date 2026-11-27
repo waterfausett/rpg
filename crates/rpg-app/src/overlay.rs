@@ -1041,6 +1041,16 @@ fallback = "LADDER"
     }
 
     #[test]
+    fn reduced_motion_stops_the_completed_pill_sweep() {
+        // The override must match the base rule's specificity (`:is()` counts its argument).
+        let css = include_str!("../../../ui/overlay/overlay.css");
+        let reduced = &css[css.find("prefers-reduced-motion").unwrap()..];
+        let sel = r#".qp.won:is([data-tier="Platinum"], [data-tier="Legendary"], [data-tier="Celestial"])::after"#;
+        assert!(css[..css.len() - reduced.len()].contains(sel), "base sweep rule moved");
+        assert!(reduced.contains(&format!("{sel} {{ animation: none; }}")), "reduced motion leaves the completed pill sweeping");
+    }
+
+    #[test]
     fn pill_rect_report_may_be_null() {
         assert_eq!(serde_json::from_str::<Option<PillRect>>("null").unwrap(), None);
         let r = serde_json::from_str::<Option<PillRect>>(r#"{"x":1,"y":2.5,"w":3,"h":4}"#).unwrap();

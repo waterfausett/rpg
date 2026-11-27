@@ -227,7 +227,7 @@ body { user-select: none; -webkit-user-select: none; }
   .ach-b.in, .ach-b[data-tier].in { animation: banner-fade-in .28s ease-out forwards; }
   .ach-b.out { animation: banner-fade-out .4s ease-in forwards; }
   .ach-b[data-tier].in::after, .xp.ach:is([data-tier="Platinum"], [data-tier="Legendary"], [data-tier="Celestial"])::after,
-  .qp.won::after { animation: none; }
+  .qp.won:is([data-tier="Platinum"], [data-tier="Legendary"], [data-tier="Celestial"])::after { animation: none; }
   /* Quest pill: no slide, pop or shake; the last 2 minutes glow red without pulsing; it fades out. */
   .qp, .qp.hurry, .qp.won, .qp.lost { animation: none; transition: none; }
   .qp.hurry { border-color: #ff8a95; box-shadow: 0 0 26px var(--q); }
