@@ -9,6 +9,7 @@ use std::sync::Arc;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Manager};
+use tauri_plugin_autostart::ManagerExt;
 
 /// User toggles from the tray (not persisted). The overlay reads `muted` when
 /// it plays a sound; `dnd` is pushed to the overlay when toggled.
@@ -21,6 +22,7 @@ pub struct Toggles {
 const OPEN_SHEET: &str = "open_sheet";
 const MUTE: &str = "mute";
 const DND: &str = "dnd";
+const AUTOSTART: &str = "autostart";
 const OPEN_RULES: &str = "open_rules";
 const INSTALL: &str = "install_hooks";
 const UNINSTALL: &str = "uninstall_hooks";
@@ -29,6 +31,12 @@ const QUIT: &str = "quit";
 pub fn build(app: &AppHandle, state: &AppState, toggles: Arc<Toggles>) -> tauri::Result<()> {
     let mute = CheckMenuItem::with_id(app, MUTE, "Mute sounds", true, false, None::<&str>)?;
     let dnd = CheckMenuItem::with_id(app, DND, "Do not disturb", true, false, None::<&str>)?;
+    // Unlike mute and DND, this lives in the OS (login items), so read it back from there.
+    let autostart_on = app.autolaunch().is_enabled().unwrap_or_else(|e| {
+        log(&state.paths, &format!("autostart: can't read login item: {e}"));
+        false
+    });
+    let autostart = CheckMenuItem::with_id(app, AUTOSTART, "Start at login", true, autostart_on, None::<&str>)?;
     let update_item = MenuItem::with_id(app, update::MENU_ID, update::CHECK_LABEL, true, None::<&str>)?;
     let updates = Updates::new(state.clone(), update_item.clone());
     app.manage(updates.clone());
@@ -39,6 +47,7 @@ pub fn build(app: &AppHandle, state: &AppState, toggles: Arc<Toggles>) -> tauri:
             &PredefinedMenuItem::separator(app)?,
             &mute,
             &dnd,
+            &autostart,
             &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(app, OPEN_RULES, "Open rules folder", true, None::<&str>)?,
             &MenuItem::with_id(app, INSTALL, "Install hooks", true, None::<&str>)?,
@@ -71,6 +80,7 @@ pub fn build(app: &AppHandle, state: &AppState, toggles: Arc<Toggles>) -> tauri:
                     overlay.set_dnd(on);
                 }
             }
+            AUTOSTART => set_autostart(app, paths, &autostart),
             OPEN_RULES => {
                 if let Err(e) = tauri_plugin_opener::open_path(paths.rules(), None::<&str>) {
                     log(paths, &format!("open rules folder failed: {e}"));
@@ -88,6 +98,25 @@ pub fn build(app: &AppHandle, state: &AppState, toggles: Arc<Toggles>) -> tauri:
         updates.spawn_background(app);
     }
     Ok(())
+}
+
+/// Add or remove the login item to match the check mark (the menu has already
+/// flipped it). On failure, put the check mark back and say why.
+fn set_autostart(app: &AppHandle, paths: &Paths, item: &CheckMenuItem<tauri::Wry>) {
+    let on = item.is_checked().unwrap_or(false);
+    let manager = app.autolaunch();
+    let res = if on { manager.enable() } else { manager.disable() };
+    let verb = if on { "enable" } else { "disable" };
+    match res {
+        Ok(()) => log(paths, &format!("autostart {verb}: ok")),
+        Err(e) => {
+            log(paths, &format!("autostart {verb}: FAILED: {e}"));
+            let _ = item.set_checked(!on);
+            if let Some(overlay) = app.try_state::<Arc<OverlaySink>>() {
+                overlay.notice(false, &format!("Couldn't {verb} start at login"), &format!("{e} (details in rpg.log)"));
+            }
+        }
+    }
 }
 
 /// Install or uninstall git + Claude Code hooks off the UI thread (same steps as
