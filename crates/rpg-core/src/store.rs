@@ -5,7 +5,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use std::path::Path;
 use std::sync::Mutex;
 
-const SCHEMA_VERSION: &str = "3";
+const SCHEMA_VERSION: &str = "4";
 
 /// SQLite-backed store. Timestamps are stored as fixed-width RFC3339 UTC
 /// strings with millisecond precision, which sort lexicographically.
@@ -61,6 +61,66 @@ pub struct Gain {
     pub reason: String,
     pub amount: u64,
     pub tier: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewQuest {
+    pub quest_id: String,
+    pub name: String,
+    pub tier: String,
+    pub trigger_event_id: String,
+    pub binding: serde_json::Value,
+    pub steps: serde_json::Value,
+    pub accepted_at: DateTime<Utc>,
+    pub deadline: DateTime<Utc>,
+    pub chain_at_start: u32,
+    pub multiplier: f64,
+    pub xp: u64,
+}
+
+/// A stored quest attempt. `status` is `active`, `completed`, `failed` or `cancelled`.
+#[derive(Debug, Clone)]
+pub struct QuestRow {
+    pub id: i64,
+    pub quest_id: String,
+    pub name: String,
+    pub tier: String,
+    pub status: String,
+    pub trigger_event_id: String,
+    pub binding: serde_json::Value,
+    pub steps: serde_json::Value,
+    /// Matches so far, one count per step.
+    pub progress: Vec<u32>,
+    pub accepted_at: DateTime<Utc>,
+    pub deadline: DateTime<Utc>,
+    pub chain_at_start: u32,
+    pub multiplier: f64,
+    pub xp: u64,
+    pub resolved_at: Option<DateTime<Utc>>,
+    pub result_event_id: Option<String>,
+}
+
+const QUEST_COLS: &str = "id, quest_id, name, tier, status, trigger_event_id, binding, steps, progress, accepted_at,      deadline, chain_at_start, multiplier, xp, resolved_at, result_event_id";
+
+fn quest_from_row(r: &rusqlite::Row) -> rusqlite::Result<QuestRow> {
+    Ok(QuestRow {
+        id: r.get(0)?,
+        quest_id: r.get(1)?,
+        name: r.get(2)?,
+        tier: r.get(3)?,
+        status: r.get(4)?,
+        trigger_event_id: r.get(5)?,
+        binding: json_from(&r.get::<_, String>(6)?)?,
+        steps: json_from(&r.get::<_, String>(7)?)?,
+        progress: serde_json::from_str(&r.get::<_, String>(8)?).map_err(conv_err)?,
+        accepted_at: parse_ts(&r.get::<_, String>(9)?)?,
+        deadline: parse_ts(&r.get::<_, String>(10)?)?,
+        chain_at_start: r.get::<_, i64>(11)?.max(0) as u32,
+        multiplier: r.get(12)?,
+        xp: r.get::<_, i64>(13)?.max(0) as u64,
+        resolved_at: r.get::<_, Option<String>>(14)?.map(|s| parse_ts(&s)).transpose()?,
+        result_event_id: r.get(15)?,
+    })
 }
 
 fn conv_err<E: std::error::Error + Send + Sync + 'static>(e: E) -> rusqlite::Error {
@@ -137,6 +197,13 @@ impl Store {
                 name TEXT NOT NULL, amount INTEGER NOT NULL, ts TEXT NOT NULL);
              CREATE INDEX IF NOT EXISTS idx_skill_xp_skill ON skill_xp(skill_id);
              CREATE TABLE IF NOT EXISTS records(metric TEXT PRIMARY KEY, value REAL NOT NULL, ts TEXT NOT NULL);
+             CREATE TABLE IF NOT EXISTS quests(
+                id INTEGER PRIMARY KEY AUTOINCREMENT, quest_id TEXT NOT NULL, name TEXT NOT NULL, tier TEXT NOT NULL,
+                status TEXT NOT NULL, trigger_event_id TEXT NOT NULL, binding TEXT NOT NULL, steps TEXT NOT NULL,
+                progress TEXT NOT NULL, accepted_at TEXT NOT NULL, deadline TEXT NOT NULL,
+                chain_at_start INTEGER NOT NULL, multiplier REAL NOT NULL, xp INTEGER NOT NULL,
+                resolved_at TEXT, result_event_id TEXT);
+             CREATE INDEX IF NOT EXISTS idx_quests_status ON quests(status);
              CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);",
         )?;
         conn.execute("INSERT OR IGNORE INTO meta(key, value) VALUES('schema_version', ?1)", params![SCHEMA_VERSION])?;
@@ -185,6 +252,10 @@ impl Store {
                  UPDATE meta SET value='3' WHERE key='schema_version';",
             )?;
             tx.commit()?;
+        }
+        if version()? == "3" {
+            // v4: the quests table (created by `init`).
+            conn.execute("UPDATE meta SET value='4' WHERE key='schema_version'", [])?;
         }
         Ok(())
     }
@@ -470,6 +541,67 @@ impl Store {
         Ok(rows)
     }
 
+    pub fn insert_quest(&self, q: &NewQuest) -> Result<i64> {
+        let n = q.steps.as_array().map_or(0, |a| a.len());
+        let progress = serde_json::to_string(&vec![0u32; n])?;
+        let conn = self.conn();
+        conn.execute(
+            "INSERT INTO quests(quest_id, name, tier, status, trigger_event_id, binding, steps, progress,
+                accepted_at, deadline, chain_at_start, multiplier, xp)
+             VALUES(?1,?2,?3,'active',?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+            params![
+                q.quest_id, q.name, q.tier, q.trigger_event_id, q.binding.to_string(), q.steps.to_string(), progress,
+                ts_str(q.accepted_at), ts_str(q.deadline), q.chain_at_start as i64, q.multiplier, q.xp as i64
+            ],
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    /// The quest in progress, if any (at most one is expected; the newest wins).
+    pub fn active_quest(&self) -> Result<Option<QuestRow>> {
+        let sql = format!("SELECT {QUEST_COLS} FROM quests WHERE status='active' ORDER BY id DESC LIMIT 1");
+        Ok(self.conn().query_row(&sql, [], quest_from_row).optional()?)
+    }
+
+    pub fn set_quest_progress(&self, id: i64, progress: &[u32]) -> Result<()> {
+        self.conn().execute(
+            "UPDATE quests SET progress=?1 WHERE id=?2",
+            params![serde_json::to_string(progress)?, id],
+        )?;
+        Ok(())
+    }
+
+    pub fn resolve_quest(&self, id: i64, status: &str, result_event_id: Option<&str>, ts: DateTime<Utc>) -> Result<()> {
+        self.conn().execute(
+            "UPDATE quests SET status=?1, result_event_id=?2, resolved_at=?3 WHERE id=?4",
+            params![status, result_event_id, ts_str(ts), id],
+        )?;
+        Ok(())
+    }
+
+    /// Resolved quests (completed or failed), newest first.
+    pub fn list_quests(&self, limit: u32) -> Result<Vec<QuestRow>> {
+        let conn = self.conn();
+        let sql = format!(
+            "SELECT {QUEST_COLS} FROM quests WHERE status IN ('completed','failed')
+             ORDER BY resolved_at DESC, id DESC LIMIT ?1"
+        );
+        let mut st = conn.prepare(&sql)?;
+        let rows = st.query_map(params![limit as i64], quest_from_row)?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// `(quest_id, completed, failed)` per quest with any resolved attempt, ordered by `quest_id`.
+    pub fn quest_counts(&self) -> Result<Vec<(String, u32, u32)>> {
+        let conn = self.conn();
+        let mut st = conn.prepare(
+            "SELECT quest_id, SUM(status='completed'), SUM(status='failed') FROM quests
+             WHERE status IN ('completed','failed') GROUP BY quest_id ORDER BY quest_id",
+        )?;
+        let rows = st.query_map([], |r| Ok((r.get(0)?, r.get::<_, i64>(1)? as u32, r.get::<_, i64>(2)? as u32)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     pub fn meta_get(&self, key: &str) -> Result<Option<String>> {
         Ok(self.conn().query_row("SELECT value FROM meta WHERE key=?1", params![key], |r| r.get(0)).optional()?)
     }
@@ -510,7 +642,7 @@ mod tests {
         let repos: Vec<_> = s.list_events(None, 10).unwrap().into_iter().map(|r| r.event.repo.unwrap()).collect();
         assert!(repos.contains(&"C:/work/rpg".to_string()), "{repos:?}");
         assert!(repos.contains(&"octo/widgets".to_string()), "{repos:?}");
-        assert_eq!(s.meta_get("schema_version").unwrap().as_deref(), Some("3"));
+        assert_eq!(s.meta_get("schema_version").unwrap().as_deref(), Some("4"));
     }
 
     #[test]
@@ -670,7 +802,7 @@ mod tests {
         assert_eq!(s.list_events(None, 10).unwrap().len(), 2);
         s.meta_set("k", "v").unwrap();
         assert_eq!(s.meta_get("k").unwrap().as_deref(), Some("v"));
-        assert_eq!(s.meta_get("schema_version").unwrap().as_deref(), Some("3"));
+        assert_eq!(s.meta_get("schema_version").unwrap().as_deref(), Some("4"));
         let id = s.insert_unlock(&nu("r1", now)).unwrap();
         s.set_unlock_flavor(id, "hi").unwrap();
         let u = s.list_unlocks().unwrap();
@@ -737,8 +869,88 @@ mod tests {
         s.insert_event(&ev("c1", EventKind::Commit, now)).unwrap();
         let g = &s.list_events(None, 10).unwrap()[0].gains;
         assert_eq!((g[0].tier.as_deref(), g[1].tier.as_deref()), (None, Some("silver")));
-        assert_eq!(s.meta_get("schema_version").unwrap().as_deref(), Some("3"));
+        assert_eq!(s.meta_get("schema_version").unwrap().as_deref(), Some("4"));
         let idx: i64 = s.conn().query_row("SELECT COUNT(*) FROM sqlite_master WHERE name='idx_unlocks_name_ts'", [], |r| r.get(0)).unwrap();
         assert_eq!(idx, 0, "the name/ts index is only needed for the one-time backfill");
+    }
+
+    fn nq(quest_id: &str, now: DateTime<Utc>) -> NewQuest {
+        NewQuest {
+            quest_id: quest_id.into(), name: "Q".into(), tier: "silver".into(), trigger_event_id: "t1".into(),
+            binding: serde_json::json!({"repo": "r"}), steps: serde_json::json!([{"n": 1}, {"n": 2}]),
+            accepted_at: now, deadline: now + Duration::hours(1), chain_at_start: 2, multiplier: 1.5, xp: 100,
+        }
+    }
+
+    #[test]
+    fn quest_roundtrip() {
+        let s = Store::open_in_memory().unwrap();
+        let now = Utc::now();
+        assert!(s.active_quest().unwrap().is_none());
+        let id = s.insert_quest(&nq("q1", now)).unwrap();
+        let q = s.active_quest().unwrap().unwrap();
+        assert_eq!((q.id, q.status.as_str(), q.progress.clone()), (id, "active", vec![0, 0]));
+        assert_eq!((q.quest_id.as_str(), q.chain_at_start, q.multiplier, q.xp), ("q1", 2, 1.5, 100));
+        assert_eq!(q.binding, serde_json::json!({"repo": "r"}));
+        assert!(q.resolved_at.is_none() && q.result_event_id.is_none());
+        s.set_quest_progress(id, &[1, 0]).unwrap();
+        assert_eq!(s.active_quest().unwrap().unwrap().progress, vec![1, 0]);
+        s.resolve_quest(id, "completed", Some("e9"), now).unwrap();
+        assert!(s.active_quest().unwrap().is_none());
+        let l = s.list_quests(10).unwrap();
+        assert_eq!(l.len(), 1);
+        assert_eq!((l[0].status.as_str(), l[0].result_event_id.as_deref()), ("completed", Some("e9")));
+        assert_eq!(l[0].resolved_at, Some(parse_ts(&ts_str(now)).unwrap()));
+    }
+
+    #[test]
+    fn cancelled_quests_not_listed() {
+        let s = Store::open_in_memory().unwrap();
+        let now = Utc::now();
+        let id = s.insert_quest(&nq("q1", now)).unwrap();
+        s.resolve_quest(id, "cancelled", None, now).unwrap();
+        assert!(s.list_quests(10).unwrap().is_empty());
+        assert!(s.active_quest().unwrap().is_none());
+    }
+
+    #[test]
+    fn quest_counts_by_status() {
+        let s = Store::open_in_memory().unwrap();
+        let now = Utc::now();
+        for (q, st) in [("a", "completed"), ("a", "failed"), ("a", "completed"), ("b", "failed"), ("c", "cancelled")] {
+            let id = s.insert_quest(&nq(q, now)).unwrap();
+            s.resolve_quest(id, st, None, now).unwrap();
+        }
+        s.insert_quest(&nq("d", now)).unwrap();
+        assert_eq!(s.quest_counts().unwrap(), vec![("a".to_string(), 2, 1), ("b".to_string(), 0, 1)]);
+    }
+
+    #[test]
+    fn list_quests_newest_first_and_limited() {
+        let s = Store::open_in_memory().unwrap();
+        let now = Utc::now();
+        for (q, d) in [("old", 2), ("new", 0), ("mid", 1)] {
+            let id = s.insert_quest(&nq(q, now)).unwrap();
+            s.resolve_quest(id, "failed", None, now - Duration::days(d)).unwrap();
+        }
+        let l: Vec<_> = s.list_quests(2).unwrap().into_iter().map(|q| q.quest_id).collect();
+        assert_eq!(l, ["new", "mid"]);
+    }
+
+    #[test]
+    fn migrates_v3_to_v4() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rpg.db");
+        {
+            let c = Connection::open(&path).unwrap();
+            c.execute_batch(
+                "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                 INSERT INTO meta VALUES('schema_version', '3');",
+            )
+            .unwrap();
+        }
+        let s = Store::open(&path).unwrap();
+        assert_eq!(s.meta_get("schema_version").unwrap().as_deref(), Some("4"));
+        assert!(s.active_quest().unwrap().is_none());
     }
 }
