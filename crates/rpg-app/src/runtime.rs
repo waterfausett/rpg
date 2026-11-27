@@ -36,6 +36,8 @@ const CHECK_CAP: chrono::Duration = chrono::Duration::seconds(30);
 /// Grace beyond `offer_seconds` before a pending offer the overlay never answered is dropped
 /// (its clock only starts once the banner is on screen).
 const OFFER_GRACE_SECS: i64 = 300;
+/// After a failed quest expiry, how long until it is tried again.
+const EXPIRE_RETRY: chrono::Duration = chrono::Duration::seconds(60);
 
 /// Shared app state. The presenter lives inside the overlay's `OutcomeSink` (Task 10).
 #[derive(Clone)]
@@ -242,11 +244,22 @@ pub(crate) struct QuestRuntime {
     polled: bool,
     /// Wake the GitHub poller now.
     poke: Box<dyn Fn() + Send>,
+    /// Expiry failed (error or panic): don't try again before this. Logged once per streak.
+    expire_retry_at: Option<DateTime<Utc>>,
 }
 
 impl QuestRuntime {
     pub(crate) fn new(enabled: bool, poke: Box<dyn Fn() + Send>) -> QuestRuntime {
-        QuestRuntime { enabled, next_id: 0, pending: None, checked: None, checking_since: None, polled: false, poke }
+        QuestRuntime {
+            enabled,
+            next_id: 0,
+            pending: None,
+            checked: None,
+            checking_since: None,
+            polled: false,
+            poke,
+            expire_retry_at: None,
+        }
     }
 }
 
@@ -340,6 +353,19 @@ fn guarded(state: &AppState, what: &str, f: impl FnOnce()) {
     }
 }
 
+/// Run a store write that may run user rules. A panic rolls back an open transaction (as
+/// `process_inbox_with` does) and becomes an error, so the inbox thread survives it.
+fn store_call<T>(state: &AppState, f: impl FnOnce() -> Result<T>) -> Result<T> {
+    match catch_unwind(AssertUnwindSafe(f)) {
+        Ok(r) => r,
+        Err(p) => {
+            // Harmless if no transaction was open.
+            let _ = state.store.rollback_tx();
+            Err(anyhow::anyhow!("panicked: {}", panic_message(&*p)))
+        }
+    }
+}
+
 /// Process the inbox and present the batch, then forward quest progress and, for a live
 /// batch, maybe raise an offer.
 fn run_once(state: &AppState, sink: &dyn OutcomeSink, away: bool, quest: &mut QuestRuntime) {
@@ -372,7 +398,7 @@ fn maybe_offer(state: &AppState, sink: &dyn OutcomeSink, quest: &mut QuestRuntim
     cfg.quests.enabled = true;
     let tz = local_offset(now);
     for ev in events {
-        match quests::state::offer_for(&state.store, &rules.quests, &cfg, ev, now, tz, &mut || fastrand::f64()) {
+        match store_call(state, || quests::state::offer_for(&state.store, &rules.quests, &cfg, ev, now, tz, &mut || fastrand::f64())) {
             Ok(Some(offer)) => {
                 quest.next_id += 1;
                 let id = quest.next_id;
@@ -420,7 +446,7 @@ fn answer(state: &AppState, sink: &dyn OutcomeSink, quest: &mut QuestRuntime, id
     };
     let cfg = read(&state.cfg);
     if !yes {
-        match quests::state::pass(&state.store, &cfg.quests) {
+        match store_call(state, || quests::state::pass(&state.store, &cfg.quests)) {
             Ok(true) => log(&state.paths, &format!("quest {} passed; chain broken", offer.quest_id)),
             Ok(false) => {}
             Err(e) => log(&state.paths, &format!("quest pass failed: {e:#}")),
@@ -438,7 +464,7 @@ fn answer(state: &AppState, sink: &dyn OutcomeSink, quest: &mut QuestRuntime, id
             return;
         }
     }
-    match quests::state::accept(&state.store, &offer, now) {
+    match store_call(state, || quests::state::accept(&state.store, &offer, now)) {
         Ok(view) => {
             quest.checked = None;
             quest.checking_since = None;
@@ -461,7 +487,7 @@ fn set_quests(state: &AppState, sink: &dyn OutcomeSink, quest: &mut QuestRuntime
         guarded(state, "quest offer withdrawal", || sink.quest_offer_withdrawn(id));
     }
     quest.checking_since = None;
-    match quests::state::cancel(&state.store, now) {
+    match store_call(state, || quests::state::cancel(&state.store, now)) {
         Ok(Some(view)) => guarded(state, "quest update", || sink.quest_update(view)),
         Ok(None) => {}
         Err(e) => log(&state.paths, &format!("quest cancel failed: {e:#}")),
@@ -481,6 +507,12 @@ fn offer_ttl(cfg: &Config) -> chrono::Duration {
 /// Drop a stale pending offer, and resolve the active quest once its deadline has passed:
 /// first one early GitHub poll if a GitHub step is left (`Checking`), then `expire_quest`.
 fn deadline_check(state: &AppState, sink: &dyn OutcomeSink, quest: &mut QuestRuntime, now: DateTime<Utc>) {
+    deadline_check_with(state, sink, quest, now, &engine::expire_quest)
+}
+
+type ExpireFn<'a> = &'a dyn Fn(&Store, &Rules, &Config, DateTime<Utc>, FixedOffset) -> Result<Option<(Event, Outcome, QuestView)>>;
+
+fn deadline_check_with(state: &AppState, sink: &dyn OutcomeSink, quest: &mut QuestRuntime, now: DateTime<Utc>, expire: ExpireFn) {
     let cfg = read(&state.cfg);
     if let Some((id, _, at)) = &quest.pending {
         if now - *at > offer_ttl(&cfg) {
@@ -494,6 +526,7 @@ fn deadline_check(state: &AppState, sink: &dyn OutcomeSink, quest: &mut QuestRun
         Ok(Some(v)) => v,
         Ok(None) => {
             quest.checking_since = None;
+            quest.expire_retry_at = None;
             return;
         }
         Err(e) => {
@@ -501,7 +534,7 @@ fn deadline_check(state: &AppState, sink: &dyn OutcomeSink, quest: &mut QuestRun
             return;
         }
     };
-    if view.deadline >= now {
+    if view.deadline >= now || quest.expire_retry_at.is_some_and(|t| now < t) {
         return;
     }
     if let Some(since) = quest.checking_since {
@@ -519,13 +552,24 @@ fn deadline_check(state: &AppState, sink: &dyn OutcomeSink, quest: &mut QuestRun
     }
     quest.checking_since = None;
     let rules = state.rules.read().unwrap_or_else(|p| p.into_inner());
-    match engine::expire_quest(&state.store, &rules, &cfg, now, local_offset(now)) {
-        Ok(Some((ev, out, view))) => {
-            guarded(state, "quest update", || sink.quest_update(view));
-            guarded(state, "presenting a batch", || sink.present(vec![(ev, out)], false));
+    let res = store_call(state, || expire(&state.store, &rules, &cfg, now, local_offset(now)));
+    drop(rules);
+    match res {
+        Ok(resolved) => {
+            if quest.expire_retry_at.take().is_some() {
+                log(&state.paths, "quest expiry recovered");
+            }
+            if let Some((ev, out, view)) = resolved {
+                guarded(state, "quest update", || sink.quest_update(view));
+                guarded(state, "presenting a batch", || sink.present(vec![(ev, out)], false));
+            }
         }
-        Ok(None) => {}
-        Err(e) => log(&state.paths, &format!("quest expiry failed: {e:#}")),
+        Err(e) => {
+            if quest.expire_retry_at.is_none() {
+                log(&state.paths, &format!("quest expiry failed; retrying every minute until it works: {e:#}"));
+            }
+            quest.expire_retry_at = Some(now + EXPIRE_RETRY);
+        }
     }
 }
 
@@ -538,6 +582,8 @@ fn next_wait(state: &AppState, quest: &QuestRuntime, now: DateTime<Utc>) -> Dura
     }
     if let Some(since) = quest.checking_since {
         wait = wait.min(since + CHECK_CAP - now);
+    } else if let Some(retry) = quest.expire_retry_at {
+        wait = wait.min(retry - now);
     } else if let Ok(Some(row)) = state.store.active_quest() {
         wait = wait.min(row.deadline - now);
     }
@@ -1044,6 +1090,53 @@ fallback = "Commit more."
         handle(&f.state, &sink, &mut q, Msg::Answer(id, true), Utc::now());
         live_commit(&f, &sink, &mut q);
         assert_eq!(sink.updates(), vec![QuestStatus::Active, QuestStatus::Active], "step progress sent");
+    }
+
+    #[test]
+    fn panicking_expiry_rolls_back_and_backs_off() {
+        let f = quest_fixture();
+        let sink = RecSink::default();
+        let mut q = quiet();
+        live_commit(&f, &sink, &mut q);
+        let id = sink.offers()[0].0;
+        handle(&f.state, &sink, &mut q, Msg::Answer(id, true), Utc::now());
+        let calls = AtomicUsize::new(0);
+        let boom = |s: &Store, _: &Rules, _: &Config, _: DateTime<Utc>, _: FixedOffset| -> Result<Option<(Event, Outcome, QuestView)>> {
+            calls.fetch_add(1, SeqCst);
+            s.begin_tx().unwrap();
+            panic!("rule exploded");
+        };
+        let late = Utc::now() + chrono::Duration::minutes(2);
+        deadline_check_with(&f.state, &sink, &mut q, late, &boom);
+        assert_eq!(calls.load(SeqCst), 1);
+        // Not left mid-transaction: a new one can start.
+        f.state.store.begin_tx().expect("transaction was rolled back");
+        f.state.store.rollback_tx().unwrap();
+        assert!(quests::state::active_view(&f.state.store).unwrap().is_some(), "still active, to retry");
+        // Backs off: no retry (or log line) on every pass.
+        deadline_check_with(&f.state, &sink, &mut q, late + chrono::Duration::seconds(5), &boom);
+        assert_eq!(calls.load(SeqCst), 1, "not retried within the back-off");
+        deadline_check_with(&f.state, &sink, &mut q, late + chrono::Duration::seconds(61), &boom);
+        assert_eq!(calls.load(SeqCst), 2, "retried after the back-off");
+        let log = std::fs::read_to_string(f.state.paths.log()).unwrap();
+        assert_eq!(log.matches("quest expiry failed").count(), 1, "logged once per streak: {log}");
+        assert!(log.contains("panicked: rule exploded"), "{log}");
+        // Once expiry works again, the quest resolves.
+        deadline_check(&f.state, &sink, &mut q, late + chrono::Duration::seconds(122));
+        assert_eq!(sink.updates(), vec![QuestStatus::Active, QuestStatus::Failed]);
+        assert!(std::fs::read_to_string(f.state.paths.log()).unwrap().contains("quest expiry recovered"));
+    }
+
+    #[test]
+    fn panicking_store_call_rolls_back() {
+        let f = quest_fixture();
+        let r: Result<()> = store_call(&f.state, || {
+            f.state.store.begin_tx().unwrap();
+            panic!("accept exploded");
+        });
+        assert!(format!("{:#}", r.unwrap_err()).contains("panicked: accept exploded"));
+        f.state.store.begin_tx().expect("transaction was rolled back");
+        f.state.store.rollback_tx().unwrap();
     }
 
     #[test]
