@@ -16,6 +16,8 @@ use rpg_core::xp;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::net::{Ipv4Addr, SocketAddr};
+use crate::tray::Toggles;
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, RwLock};
 
 #[derive(Clone)]
@@ -23,6 +25,8 @@ pub struct SiteState {
     pub store: Arc<Store>,
     pub rules: Arc<RwLock<Rules>>,
     pub cfg: Arc<RwLock<Config>>,
+    /// The tray's toggles, shared with the overlay; the sheet reads `quests`.
+    pub toggles: Arc<Toggles>,
     /// The port the site listens on; the only port accepted in `Host`.
     pub port: u16,
 }
@@ -272,7 +276,7 @@ async fn events(State(st): State<SiteState>, Query(q): Query<EventsQuery>) -> Re
 const QUEST_LOG: u32 = 50;
 
 /// Chain, counts, the newest resolved quests and the board of every loaded quest.
-/// `enabled` is the config setting; the tray's per-session toggle is not visible here.
+/// `enabled` is the config setting and the tray's per-session toggle together.
 async fn quests(State(st): State<SiteState>) -> Result<Json<Value>, ApiError> {
     let rules = st.rules.read().unwrap_or_else(|p| p.into_inner()).clone();
     let cfg = st.cfg.read().unwrap_or_else(|p| p.into_inner()).clone();
@@ -310,7 +314,7 @@ async fn quests(State(st): State<SiteState>) -> Result<Json<Value>, ApiError> {
         })
         .collect();
     Ok(Json(json!({
-        "enabled": cfg.quests.enabled, "chain": ch.n, "multiplier": mult, "best_chain": ch.best,
+        "enabled": cfg.quests.enabled && st.toggles.quests.load(Ordering::Relaxed), "chain": ch.n, "multiplier": mult, "best_chain": ch.best,
         "completed": completed, "failed": failed, "log": log, "board": board,
     })))
 }
@@ -346,6 +350,7 @@ mod tests {
             store: Arc::new(Store::open_in_memory().unwrap()),
             rules: Arc::new(RwLock::new(rules)),
             cfg: Arc::new(RwLock::new(Config::default())),
+            toggles: Arc::new(Toggles::new(true)),
             port: 47474,
         }
     }
@@ -818,6 +823,15 @@ fallback = "Shipped."
         assert_eq!((board[0]["completions"].clone(), board[1]["completions"].clone()), (json!(1), json!(0)));
         assert_eq!((board[0]["name"].clone(), board[0]["tier"].clone(), board[0]["hint"].clone()), (json!("Ship It"), json!("gold"), json!("Push it.")));
         assert_eq!((board[0]["chance"].clone(), board[0]["minutes"].clone(), board[0]["enabled"].clone()), (json!(0.25), json!(15), json!(true)));
+    }
+
+    #[tokio::test]
+    async fn quests_toggled_off_in_tray_reports_off() {
+        let st = state_with(quest_rules(""));
+        st.toggles.quests.store(false, Ordering::Relaxed);
+        assert_eq!(get_json(&st, "/api/quests").await["enabled"], false);
+        st.toggles.quests.store(true, Ordering::Relaxed);
+        assert_eq!(get_json(&st, "/api/quests").await["enabled"], true);
     }
 
     #[tokio::test]

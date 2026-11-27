@@ -6,7 +6,8 @@ Quest files are TOML, like rules. This page is the format reference. For the eve
 
 ## How a quest runs
 
-- An offer comes only from a **live** event: not backfill, not part of the startup "while you were away" batch, and not older than 5 minutes. Never while Do not disturb is on or quests are off.
+- An offer comes only from a **live** event: not backfill, not part of the startup "while you were away" batch, and not older than 5 minutes (for a GitHub event, `poll_minutes` + 5 minutes, since the poll finds it late). Never while Do not disturb is on or quests are off.
+- A quest with a GitHub step (`pr_opened`, `pr_merged`, `review_submitted`) is never offered while `[github] enabled = false`. With `same = "repo"` or `"branch"`, it is also not offered for a trigger in a repo with no GitHub remote, since its PR events could never match.
 - At most one offer or active quest exists at a time.
 - For one event, the quests whose `trigger` and `filter` match, whose own `cooldown_hours` and the global `min_gap_minutes` have passed, roll their `chance` in filename order. The first that hits is offered.
 - **Accept** starts the deadline at that moment and resets the pass count. **Pass**, or letting the offer run out (`offer_seconds`), counts as a pass. After `max_passes` passes in a row the chain resets.
@@ -77,9 +78,9 @@ Unknown fields in a step are errors too.
 
 Binds the steps to the event that triggered the offer:
 
-- `"repo"`: the step event must be in the same repo (the GitHub repo when both have one, otherwise the local repo path).
-- `"branch"`: the same repo and the same branch.
-- `"pr"`: the same pull request, matched on the PR url (`github_repo` plus number). It needs a `trigger` made only of `pr_opened`, `pr_merged` and `review_submitted`.
+- `"repo"`: the step event must be in the same repo (the GitHub repo when both have one, compared ignoring case, otherwise the local repo path).
+- `"branch"`: the same repo and the same branch. PR events have no branch, so a quest with a PR step (`pr_opened`, `pr_merged`, `review_submitted`) can't use it (use `"repo"`).
+- `"pr"`: the same pull request, matched on the PR url. It needs a `trigger` made only of `pr_opened`, `pr_merged` and `review_submitted`.
 
 ## Examples
 
@@ -132,6 +133,6 @@ Config is read at startup. The tray **Quests** check item turns quests off or on
 
 ## Events and achievements
 
-Resolving a quest records `quest_completed` (`quest_id`, `tier`, `chain`, `multiplier`, `xp`) or `quest_failed` (`quest_id`, `tier`, `chain_lost`), and rules run on them in the same transaction. They earn no base exp and never trigger quests. Rules can use the `chain = { min, max }` filter (`quest_completed`) and `quest = [globs]` (both). The starter achievements are Quest Giver's Pet (10 / 50 / 200 completions), Chain Gang (a chain of 5) and Fumble (three failures in one day).
+Resolving a quest records `quest_completed` (`quest_id`, `tier`, `chain`, `multiplier`, `xp`) or `quest_failed` (`quest_id`, `tier`, `chain_lost`), and rules run on them in the same transaction. They earn no base exp and never trigger quests. Rules can use the `chain = { min, max }` filter (`quest_completed`) and `quest = [globs]` (both). The starter achievements are Quest Giver's Pet (10 / 50 / 200 completions), Chain Gang (reaching a chain of 5, once per run) and Fumble (three failures in one day).
 
 The character sheet's Achievements tab has a Quests section: current and best chain, completions and failures, a log of resolved quests and a board of every loaded quest.

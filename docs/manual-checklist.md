@@ -85,8 +85,8 @@ Use a quest file with `chance = 1.0` (and `cooldown_hours = 0`, `min_gap_minutes
 
 ### Character sheet
 - [ ] With quests enabled, the Achievements tab shows a Quests section below the grid: the chain and multiplier, the best chain, completions and failures, a log of resolved quests tinted by tier, and a board of every quest (disabled ones with an "off" badge).
-- [ ] The quest's exp shows in the exp column of its log row. Event log rows for quests show a label and a Quest badge, with no base exp.
-- [ ] `[quests] enabled = false` hides the section. It still looks right at about 400px wide and with reduced motion.
+- [ ] The quest's exp shows in the exp column of its log row. In the event log, a completed quest's row shows its reward as "+N exp" in the exp column, with no base exp.
+- [ ] `[quests] enabled = false`, or Quests turned off in the tray (then reload the sheet), hides the section. It still looks right at about 400px wide and with reduced motion.
 
 ## Real install
 - [ ] First note `git config --global --get core.hooksPath` (probably unset) and keep a copy of `~/.claude/settings.json`.

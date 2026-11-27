@@ -107,7 +107,7 @@ fn main() {
                 }
             };
             // A busy port only costs us the site, never the app.
-            let site = site::SiteState { store: state.store.clone(), rules: state.rules.clone(), cfg: state.cfg.clone(), port: 0 };
+            let site = site::SiteState { store: state.store.clone(), rules: state.rules.clone(), cfg: state.cfg.clone(), toggles: toggles.clone(), port: 0 };
             let port = state.cfg.read().unwrap_or_else(|p| p.into_inner()).site.port;
             let site_paths = state.paths.clone();
             tauri::async_runtime::spawn(async move {
