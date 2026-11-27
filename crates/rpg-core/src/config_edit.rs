@@ -12,6 +12,7 @@ pub enum EditError {
     UnknownKey(String),
     BadValue { key: String, msg: String },
     InvalidFile(String),
+    Io(String),
 }
 
 impl fmt::Display for EditError {
@@ -20,6 +21,7 @@ impl fmt::Display for EditError {
             EditError::UnknownKey(k) => write!(f, "unknown setting: {k}"),
             EditError::BadValue { key, msg } => write!(f, "bad value for {key}: {msg}"),
             EditError::InvalidFile(m) => write!(f, "config file is invalid: {m}"),
+            EditError::Io(m) => write!(f, "could not save config: {m}"),
         }
     }
 }

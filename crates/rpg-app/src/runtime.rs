@@ -23,7 +23,7 @@ use std::time::Duration;
 /// Fallback inbox scan interval, in case a filesystem notification is missed.
 const TICK: Duration = Duration::from_secs(30);
 /// Coalesce bursts of filesystem events (e.g. tmp write + rename) into one pass.
-const DEBOUNCE: Duration = Duration::from_millis(250);
+pub(crate) const DEBOUNCE: Duration = Duration::from_millis(250);
 /// Max files per commit to look up ages for.
 const FILE_AGE_CAP: usize = 50;
 const BACKFILL_KEY: &str = "github_backfill_done";
@@ -237,6 +237,29 @@ fn watch(paths: &Paths, dir: &Path, on_change: impl Fn() + Send + 'static) -> Op
         Ok(w) => Some(w),
         Err(e) => {
             log(paths, &format!("cannot watch {}: {e}", dir.display()));
+            None
+        }
+    }
+}
+
+/// Watch the directory holding `file`, calling `on_change` only for events that
+/// mention `file`. Returns the watcher, which must be kept alive.
+pub fn watch_file(paths: &Paths, file: &Path, on_change: impl Fn() + Send + 'static) -> Option<notify::RecommendedWatcher> {
+    let dir = file.parent()?;
+    let _ = std::fs::create_dir_all(dir);
+    let name = file.file_name()?.to_os_string();
+    let res = notify::recommended_watcher(move |r: notify::Result<notify::Event>| {
+        if let Ok(ev) = r {
+            if ev.paths.iter().any(|p| p.file_name() == Some(name.as_os_str())) {
+                on_change();
+            }
+        }
+    })
+    .and_then(|mut w| w.watch(dir, RecursiveMode::NonRecursive).map(|_| w));
+    match res {
+        Ok(w) => Some(w),
+        Err(e) => {
+            log(paths, &format!("cannot watch {}: {e}", file.display()));
             None
         }
     }
