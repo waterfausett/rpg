@@ -3,7 +3,8 @@ use crate::config::Config;
 use crate::counters::{evaluate, EvalCtx};
 use crate::enrich::FileAge;
 use crate::event::{Event, EventKind};
-use crate::records;
+use crate::quests::{self, state::QuestView};
+use crate::records::{self, RecordBroken};
 use crate::rules::{Announce, Counter, Rule, Rules, Tier};
 use crate::store::{NewUnlock, Store};
 use crate::xp::level_for;
@@ -66,6 +67,8 @@ pub struct Outcome {
     pub level: u32,
     pub skill_gains: Vec<SkillGain>,
     pub skill_level_ups: Vec<SkillLevelUp>,
+    /// Set when this event advanced or completed the active quest.
+    pub quest: Option<QuestView>,
 }
 
 /// Process one event: record it, update records, award XP, evaluate rules.
@@ -80,8 +83,13 @@ pub fn process(
     file_ages: &[FileAge],
     tz: FixedOffset,
 ) -> Result<Outcome> {
+    in_tx(store, || process_inner(store, rules, cfg, ev, file_ages, tz))
+}
+
+/// Run `f` in one transaction: committed if it succeeds, rolled back if anything fails.
+pub(crate) fn in_tx<T>(store: &Store, f: impl FnOnce() -> Result<T>) -> Result<T> {
     store.begin_tx()?;
-    match process_inner(store, rules, cfg, ev, file_ages, tz) {
+    match f() {
         Ok(out) => {
             if let Err(e) = store.commit_tx() {
                 let _ = store.rollback_tx();
@@ -174,6 +182,57 @@ fn process_inner(
         award_skills(store, rules, cfg, ev, &mut out)?;
     }
 
+    apply_rules(store, rules, cfg, ev, file_ages, tz, &broken, &mut out)?;
+    if !ev.kind.is_quest() {
+        quests::state::advance(store, rules, cfg, ev, tz, &mut out)?;
+    }
+
+    finish(store, cfg, before, &mut out)?;
+    Ok(out)
+}
+
+/// Fail the active quest if its deadline is before `now`: mark it failed, reset the chain and
+/// record a `quest_failed` event (at the deadline) whose rules run like any event's. One transaction.
+pub fn expire_quest(
+    store: &Store,
+    rules: &Rules,
+    cfg: &Config,
+    now: DateTime<Utc>,
+    tz: FixedOffset,
+) -> Result<Option<(Event, Outcome, QuestView)>> {
+    in_tx(store, || {
+        let Some(row) = store.active_quest()? else { return Ok(None) };
+        if row.deadline >= now {
+            return Ok(None);
+        }
+        let mut out = Outcome::default();
+        let before = store.total_xp()?;
+        let (ev, view) = quests::state::fail(store, rules, cfg, &row, tz, &mut out)?;
+        finish(store, cfg, before, &mut out)?;
+        Ok(Some((ev, out, view)))
+    })
+}
+
+/// Fill in the totals and the level-ups since `before` (total exp before the event).
+fn finish(store: &Store, cfg: &Config, before: u64, out: &mut Outcome) -> Result<()> {
+    out.total_xp = store.total_xp()?;
+    out.level = level_for(out.total_xp, &cfg.levels);
+    out.level_ups = (level_for(before, &cfg.levels) + 1..=out.level).collect();
+    Ok(())
+}
+
+/// Run the rules `ev`'s kind triggers, recording their unlocks and exp and adding them to `out`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn apply_rules(
+    store: &Store,
+    rules: &Rules,
+    cfg: &Config,
+    ev: &Event,
+    file_ages: &[FileAge],
+    tz: FixedOffset,
+    broken: &[RecordBroken],
+    out: &mut Outcome,
+) -> Result<()> {
     // Meta rules run last so their counts include this event's unlocks.
     let is_meta = |r: &&Rule| matches!(r.counter, Counter::Meta { .. });
     let ordered = rules.for_kind(ev.kind).filter(|r| !is_meta(r)).chain(rules.for_kind(ev.kind).filter(is_meta));
@@ -193,7 +252,7 @@ fn process_inner(
                 }
             }
         }
-        let ctx = EvalCtx { ev, store, broken: &broken, file_ages, tz, skill_curve: cfg.skill_levels.curve() };
+        let ctx = EvalCtx { ev, store, broken, file_ages, tz, skill_curve: cfg.skill_levels.curve() };
         for f in evaluate(rule, &ctx)? {
             let count = store.unlock_count(&f.unlock_key)?;
             let last = store.last_unlock_at(&f.unlock_key)?;
@@ -231,11 +290,7 @@ fn process_inner(
             });
         }
     }
-
-    out.total_xp = store.total_xp()?;
-    out.level = level_for(out.total_xp, &cfg.levels);
-    out.level_ups = (level_for(before, &cfg.levels) + 1..=out.level).collect();
-    Ok(out)
+    Ok(())
 }
 
 fn award_skills(store: &Store, rules: &Rules, cfg: &Config, ev: &Event, out: &mut Outcome) -> Result<()> {
