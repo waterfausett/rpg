@@ -7,7 +7,8 @@ use rpg_core::config::Config;
 use rpg_core::engine::{self, Outcome};
 use rpg_core::enrich::{self, FileAge};
 use rpg_core::event::{Event, EventKind};
-use rpg_core::flavor::TextGen;
+use rpg_core::config::LlmConfig;
+use rpg_core::flavor::{ClaudeCli, TextGen};
 use rpg_core::paths::Paths;
 use rpg_core::rules::{self, Rules};
 use rpg_core::skills;
@@ -37,7 +38,14 @@ pub struct AppState {
     pub store: Arc<Store>,
     pub rules: Arc<RwLock<Rules>>,
     pub cfg: Arc<RwLock<Config>>,
-    pub gen: Option<Arc<dyn TextGen>>,
+    /// Swapped live when the `llm` settings change; readers clone the inner `Arc` at use.
+    pub gen: Arc<RwLock<Option<Arc<dyn TextGen>>>>,
+}
+
+/// Build the flavor generator for `llm`: `None` when disabled or `claude` is not installed.
+pub fn make_gen(llm: &LlmConfig, paths: &Paths) -> Option<Arc<dyn TextGen>> {
+    (llm.enabled && ClaudeCli::available())
+        .then(|| Arc::new(ClaudeCli { model: llm.model.clone(), workdir: paths.data.join("llm-sandbox") }) as Arc<dyn TextGen>)
 }
 
 /// Receives processed batches. `away` is true for the startup batch (events
@@ -175,8 +183,9 @@ enum Msg {
 }
 
 /// Start the background threads: inbox processing (the only thread that calls
-/// the engine), the GitHub poller, and the rules watcher.
-pub fn spawn(state: AppState, sink: Arc<dyn OutcomeSink>) {
+/// the engine), the GitHub poller, and the rules watcher. Returns the wake sender of the
+/// poller: send on it after the `github` settings change.
+pub fn spawn(state: AppState, sink: Arc<dyn OutcomeSink>) -> Sender<()> {
     let (tx, rx) = mpsc::channel::<Msg>();
 
     let wake = tx.clone();
@@ -193,13 +202,13 @@ pub fn spawn(state: AppState, sink: Arc<dyn OutcomeSink>) {
         .expect("spawning inbox thread");
 
     // `gh` has no timeout, so polling lives on its own thread.
-    if read(&state.cfg).github.enabled {
-        let st = state.clone();
-        std::thread::Builder::new()
-            .name("rpg-github".into())
-            .spawn(move || poll_loop(&st, &tx))
-            .expect("spawning github thread");
-    }
+    // Always spawned: it idles while `github.enabled` is off, so enabling needs no restart.
+    let (poll_wake, poll_rx) = mpsc::channel::<()>();
+    let st = state.clone();
+    std::thread::Builder::new()
+        .name("rpg-github".into())
+        .spawn(move || poll_loop(&st, &tx, &poll_rx))
+        .expect("spawning github thread");
 
     let (rtx, rrx) = mpsc::channel::<()>();
     let stx = rtx.clone();
@@ -222,6 +231,7 @@ pub fn spawn(state: AppState, sink: Arc<dyn OutcomeSink>) {
             }
         })
         .expect("spawning rules thread");
+    poll_wake
 }
 
 /// Watch `dir` (non-recursively), calling `on_change` for every notification.
@@ -330,27 +340,46 @@ fn poll_github(state: &AppState, tx: &Sender<Msg>) -> Result<usize> {
     Ok(events.len())
 }
 
-/// Poll every `poll_minutes`. Errors (no `gh`, logged out, API errors) are
+/// How long a disabled poller sleeps between checks of `github.enabled` if never woken.
+const IDLE: Duration = Duration::from_secs(60);
+
+/// Poll every `poll_minutes` while `github.enabled`; idle otherwise. A send on `wake`
+/// re-reads the settings immediately. Errors (no `gh`, logged out, API errors) are
 /// logged once per failure streak and the poll is skipped until the next interval.
-fn poll_loop(state: &AppState, tx: &Sender<Msg>) {
+fn poll_loop(state: &AppState, tx: &Sender<Msg>, wake: &Receiver<()>) {
+    poll_loop_with(state, wake, || poll_github(state, tx));
+}
+
+fn poll_loop_with(state: &AppState, wake: &Receiver<()>, mut poll: impl FnMut() -> Result<usize>) {
     let mut failing = false;
     loop {
-        match poll_github(state, tx) {
-            Ok(n) => {
-                if failing {
-                    log(&state.paths, &format!("github poll recovered ({n} events)"));
+        let (enabled, minutes) = {
+            let cfg = read(&state.cfg);
+            (cfg.github.enabled, cfg.github.poll_minutes.max(1))
+        };
+        let wait = if enabled {
+            match poll() {
+                Ok(n) => {
+                    if failing {
+                        log(&state.paths, &format!("github poll recovered ({n} events)"));
+                    }
+                    failing = false;
                 }
-                failing = false;
-            }
-            Err(e) => {
-                if !failing {
-                    log(&state.paths, &format!("github poll failed; skipping until it recovers: {e:#}"));
+                Err(e) => {
+                    if !failing {
+                        log(&state.paths, &format!("github poll failed; skipping until it recovers: {e:#}"));
+                    }
+                    failing = true;
                 }
-                failing = true;
             }
+            Duration::from_secs(minutes * 60)
+        } else {
+            IDLE
+        };
+        match wake.recv_timeout(wait) {
+            Ok(()) | Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => return,
         }
-        let minutes = read(&state.cfg).github.poll_minutes.max(1);
-        std::thread::sleep(Duration::from_secs(minutes * 60));
     }
 }
 
@@ -376,7 +405,7 @@ mod tests {
             store: Arc::new(Store::open_in_memory().unwrap()),
             rules: Arc::new(RwLock::new(rules)),
             cfg: Arc::new(RwLock::new(Config::default())),
-            gen,
+            gen: Arc::new(RwLock::new(gen)),
         };
         Fixture { _tmp: tmp, state }
     }
@@ -499,5 +528,33 @@ mod tests {
         assert_eq!(hash, "abc");
         assert_eq!(files, vec!["a.rs".to_string(), "b/c.rs".to_string()]);
         assert!(commit_enrich_args(&push(1)).is_none());
+    }
+
+    #[test]
+    fn poller_idles_while_disabled_and_resumes_on_wake() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let f = fixture(Rules::default(), None);
+        f.state.cfg.write().unwrap().github.enabled = false;
+        let count = Arc::new(AtomicUsize::new(0));
+        let (tx, rx) = mpsc::channel::<()>();
+        let (st, c) = (f.state.clone(), count.clone());
+        let h = std::thread::spawn(move || {
+            poll_loop_with(&st, &rx, || {
+                c.fetch_add(1, Ordering::SeqCst);
+                Ok(0)
+            })
+        });
+        tx.send(()).unwrap();
+        std::thread::sleep(Duration::from_millis(200));
+        assert_eq!(count.load(Ordering::SeqCst), 0, "disabled: no polling");
+        f.state.cfg.write().unwrap().github.enabled = true;
+        tx.send(()).unwrap();
+        let start = std::time::Instant::now();
+        while count.load(Ordering::SeqCst) < 1 && start.elapsed() < Duration::from_secs(2) {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(count.load(Ordering::SeqCst) >= 1, "polls once enabled");
+        drop(tx);
+        h.join().unwrap();
     }
 }

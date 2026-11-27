@@ -1,7 +1,6 @@
 // No console window in release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-#[allow(dead_code)]
 mod config_store;
 mod overlay;
 mod platform;
@@ -12,17 +11,22 @@ mod sound;
 mod tray;
 mod update;
 
+use config_store::ConfigStore;
 use overlay::OverlaySink;
 use rpg_core::config::Config;
 use rpg_core::engine::Outcome;
 use rpg_core::event::Event;
-use rpg_core::flavor::{ClaudeCli, TextGen};
+use rpg_core::flavor::TextGen;
 use rpg_core::paths::Paths;
 use rpg_core::store::Store;
 use runtime::{log, AppState, OutcomeSink};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use tauri::Manager;
 use tray::Toggles;
+
+/// Keeps the config file watcher alive for the life of the app.
+#[allow(dead_code)]
+struct ConfigWatcher(Mutex<Option<notify::RecommendedWatcher>>);
 
 /// Fallback sink when the overlay windows can't be created: records batches in the log.
 struct LogSink(Paths);
@@ -44,16 +48,14 @@ fn init_state() -> anyhow::Result<AppState> {
     });
     let store = Store::open(&paths.db())?;
     let rules = runtime::load_rules(&paths);
-    let gen: Option<Arc<dyn TextGen>> = (cfg.llm.enabled && ClaudeCli::available()).then(|| {
-        Arc::new(ClaudeCli { model: cfg.llm.model.clone(), workdir: paths.data.join("llm-sandbox") }) as Arc<dyn TextGen>
-    });
+    let gen: Option<Arc<dyn TextGen>> = runtime::make_gen(&cfg.llm, &paths);
     log(&paths, &format!("starting: {} rules, llm flavor {}", rules.list.len(), if gen.is_some() { "on" } else { "off" }));
     Ok(AppState {
         paths,
         store: Arc::new(store),
         rules: Arc::new(RwLock::new(rules)),
         cfg: Arc::new(RwLock::new(cfg)),
-        gen,
+        gen: Arc::new(RwLock::new(gen)),
     })
 }
 
@@ -99,7 +101,28 @@ fn main() {
                 }
             });
             tray::setup(app, &state, toggles)?;
-            runtime::spawn(state, sink);
+            // Live settings: later tasks fetch the store with `app.state::<Arc<ConfigStore>>()`.
+            let store = ConfigStore::new(state.paths.clone(), state.cfg.clone());
+            app.manage(store.clone());
+            app.manage(ConfigWatcher(Mutex::new(store.watch())));
+            let gen_state = state.clone();
+            let poll_wake = runtime::spawn(state, sink);
+            let handle = app.handle().clone();
+            // Runs under the save lock of the store: only cheap, non-blocking work here.
+            store.on_change(move |old, new| {
+                if old.llm.enabled != new.llm.enabled || old.llm.model != new.llm.model {
+                    let g = runtime::make_gen(&new.llm, &gen_state.paths);
+                    *gen_state.gen.write().unwrap_or_else(|p| p.into_inner()) = g;
+                }
+                if old.github.enabled != new.github.enabled || old.github.poll_minutes != new.github.poll_minutes {
+                    let _ = poll_wake.send(());
+                }
+                if old.updates.check_hours != new.updates.check_hours {
+                    if let Some(updates) = handle.try_state::<Arc<update::Updates>>() {
+                        updates.settings_changed();
+                    }
+                }
+            });
             Ok(())
         })
         .build(tauri::generate_context!())

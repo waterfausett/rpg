@@ -39,6 +39,7 @@ impl ConfigStore {
         lock(&self.on_change).push(Box::new(f));
     }
 
+    #[allow(dead_code)] // used by the tray (Task 5)
     pub fn on_external(&self, f: impl Fn() + Send + Sync + 'static) {
         lock(&self.on_external).push(Box::new(f));
     }
@@ -53,6 +54,7 @@ impl ConfigStore {
         }
     }
 
+    #[allow(dead_code)] // used by the settings commands (Task 7)
     pub fn set(&self, key: &str, value: &serde_json::Value) -> Result<(), EditError> {
         let mut last_written = lock(&self.save);
         let file = self.paths.config_file();
