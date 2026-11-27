@@ -117,6 +117,7 @@ Counters (set `type` plus the params):
 | `each` | | every matching event |
 | `first` | `scope = "ever"` or `"repo"` | first event ever / first commit in this repo |
 | `per_day` | `at` | the `at`-th event in the local day |
+| `per_key` | `key`, `at` | the `at`-th event in this repo with the same `data[key]` (e.g. `key = "branch"`) |
 | `personal_record` | `metric = "prs_merged_per_day"`, `"commits_per_day"`, `"pr_deletions"` or `"conflict_files"` | a new personal best |
 | `file_age` | `min_years` | a commit touches a file untouched for that long |
 

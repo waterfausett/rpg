@@ -66,7 +66,7 @@ pub struct Filter {
     message: Option<Regex>,
     title: Option<Regex>,
     hash: Option<Regex>,
-    branch: Option<GlobSet>,
+    branch: Option<Branches>,
     repo: Option<GlobSet>,
     files_any: Option<GlobSet>,
     files_only: Option<GlobSet>,
@@ -83,6 +83,37 @@ pub struct Filter {
     session_minutes: Option<RawRange>,
     message_length: Option<RawRange>,
     open_sessions: Option<u64>,
+}
+
+/// `branch` globs. A `!` prefix excludes: a branch matches when it matches no exclusion and
+/// either one of the other globs or, with only exclusions, anything.
+#[derive(Debug, Clone)]
+struct Branches {
+    include: Option<GlobSet>,
+    exclude: Option<GlobSet>,
+}
+
+impl Branches {
+    fn new(patterns: Option<Vec<String>>) -> Result<Option<Branches>, String> {
+        let Some(patterns) = patterns else { return Ok(None) };
+        if patterns.is_empty() {
+            return Err("`branch` is empty (leave it out to match everything)".into());
+        }
+        let (mut include, mut exclude) = (Vec::new(), Vec::new());
+        for p in patterns {
+            match p.strip_prefix('!') {
+                Some("") => return Err("bad branch pattern `!`: nothing after `!`".into()),
+                Some(rest) => exclude.push(rest.to_string()),
+                None => include.push(p),
+            }
+        }
+        let some = |v: Vec<String>| (!v.is_empty()).then_some(v);
+        Ok(Some(Branches { include: glob_set("branch", some(include))?, exclude: glob_set("branch", some(exclude))? }))
+    }
+
+    fn is_match(&self, b: &str) -> bool {
+        self.include.as_ref().is_none_or(|g| g.is_match(b)) && !self.exclude.as_ref().is_some_and(|g| g.is_match(b))
+    }
 }
 
 fn regex(field: &str, p: Option<String>) -> Result<Option<Regex>, String> {
@@ -152,7 +183,7 @@ impl TryFrom<RawFilter> for Filter {
             message: regex("message", r.message)?,
             title: regex("title", r.title)?,
             hash: regex("hash", r.hash)?,
-            branch: glob_set("branch", r.branch)?,
+            branch: Branches::new(r.branch)?,
             repo: glob_set("repo", r.repo)?,
             files_any: glob_set("files_any", r.files_any)?,
             files_only: glob_set("files_only", r.files_only)?,
@@ -459,6 +490,24 @@ mod tests {
         assert!(!filt("branch = ['main']").matches(&e, utc()));
         assert!(filt("repo = ['octo/*']").matches(&e, utc()));
         assert!(filt("message_length = {min = 5, max = 5}").matches(&e, utc()));
+    }
+
+    #[test]
+    fn branch_exclusions() {
+        let on = |b: &str| commit(json!({"branch": b}));
+        let not_default = filt("branch = ['!main', '!master']");
+        assert!(not_default.matches(&on("feat/x"), utc()));
+        assert!(!not_default.matches(&on("main"), utc()));
+        assert!(!not_default.matches(&on("MASTER"), utc()));
+        // No branch field: still no match, exclusions or not.
+        assert!(!not_default.matches(&commit(json!({})), utc()));
+        // Mixed: inside `feat/*`, but not `feat/old-*`.
+        let mixed = filt("branch = ['feat/*', '!feat/old-*']");
+        assert!(mixed.matches(&on("feat/new"), utc()));
+        assert!(!mixed.matches(&on("feat/old-x"), utc()));
+        assert!(!mixed.matches(&on("fix/y"), utc()));
+        let bare: RawFilter = toml::from_str("branch = ['!']").unwrap();
+        assert!(Filter::try_from(bare).unwrap_err().contains("`!`"));
     }
 
     #[test]

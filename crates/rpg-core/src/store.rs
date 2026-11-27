@@ -290,6 +290,27 @@ impl Store {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
+    /// Events of the given kinds whose top-level `data[field]` is the string `value`, oldest
+    /// first (`events_of` order), backfill included. `field` must be a plain field name (rule
+    /// loading checks it). An empty `kinds` slice yields no events.
+    pub fn events_with_field(&self, kinds: &[EventKind], field: &str, value: &str) -> Result<Vec<Event>> {
+        if kinds.is_empty() {
+            return Ok(Vec::new());
+        }
+        let marks = vec!["?"; kinds.len()].join(",");
+        let mut args: Vec<String> = kinds.iter().map(|k| k.as_str().to_string()).collect();
+        args.push(format!("$.{field}"));
+        args.push(value.to_string());
+        let sql = format!(
+            "SELECT {EVENT_COLS} FROM events e WHERE e.kind IN ({marks}) AND json_extract(e.data, ?) = ?
+             ORDER BY e.ts ASC, e.id ASC"
+        );
+        let conn = self.conn();
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(args.iter()), event_from_row)?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
     /// Up to `limit` events of `kind` (optionally only in `repo`) that sort strictly before
     /// `(ts, id)` in `events_of` order, newest first (`ts DESC, id DESC`). Pass the last one
     /// returned as the next `(ts, id)` to page further back.

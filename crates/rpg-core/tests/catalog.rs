@@ -82,6 +82,7 @@ const COVERED: &[&str] = &[
     "conflict_resolution",
     "diamond_cutter",
     "biggest_knot",
+    "recurring_nightmare",
 ];
 
 fn starter() -> Rules {
@@ -1161,4 +1162,30 @@ fn biggest_knot() {
     assert!(fires(&r, &h, conflict("2026-11-24T10:00:00Z", 4), "biggest_knot"));
     assert!(!fires(&r, &h, conflict("2026-11-24T10:00:00Z", 3), "biggest_knot"));
     assert!(!fires(&r, &[], conflict("2026-11-24T10:00:00Z", 9), "biggest_knot"));
+}
+
+#[test]
+fn recurring_nightmare() {
+    let r = starter();
+    let on = |ts: &str, branch: &str| {
+        let mut e = conflict(ts, 1);
+        e.data["branch"] = json!(branch);
+        e
+    };
+    let two = [on("2026-11-23T10:00:00Z", "feat/x"), on("2026-11-24T09:00:00Z", "feat/x")];
+    // The 3rd on one branch fires; the 4th doesn't fire again.
+    assert!(fires(&r, &two, on("2026-11-24T10:00:00Z", "feat/x"), "recurring_nightmare"));
+    let three = [two[0].clone(), two[1].clone(), on("2026-11-24T10:00:00Z", "feat/x")];
+    assert!(!fires(&r, &three, on("2026-11-24T11:00:00Z", "feat/x"), "recurring_nightmare"));
+    // Repeatable: a third on another branch fires too.
+    let other = [three.as_slice(), &[on("2026-11-25T09:00:00Z", "feat/y"), on("2026-11-25T10:00:00Z", "feat/y")]].concat();
+    assert!(fires(&r, &other, on("2026-11-25T11:00:00Z", "feat/y"), "recurring_nightmare"));
+    // Three spread across branches don't.
+    let spread = [on("2026-11-24T09:00:00Z", "a"), on("2026-11-24T10:00:00Z", "b")];
+    assert!(!fires(&r, &spread, on("2026-11-24T11:00:00Z", "c"), "recurring_nightmare"));
+    // Default branches and a detached HEAD are excluded.
+    for b in ["main", "master", "HEAD"] {
+        let h = [on("2026-11-24T09:00:00Z", b), on("2026-11-24T10:00:00Z", b)];
+        assert!(!fires(&r, &h, on("2026-11-24T11:00:00Z", b), "recurring_nightmare"), "{b}");
+    }
 }
