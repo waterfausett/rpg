@@ -39,9 +39,17 @@ impl ConfigStore {
         lock(&self.on_change).push(Box::new(f));
     }
 
-    #[allow(dead_code)] // used by the tray (Task 5)
     pub fn on_external(&self, f: impl Fn() + Send + Sync + 'static) {
         lock(&self.on_external).push(Box::new(f));
+    }
+
+    pub fn paths(&self) -> &Paths {
+        &self.paths
+    }
+
+    /// A copy of the live config (the last good one).
+    pub fn current(&self) -> Config {
+        self.cfg.read().unwrap_or_else(|p| p.into_inner()).clone()
     }
 
     fn swap(&self, new: Config) -> Config {

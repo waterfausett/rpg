@@ -35,8 +35,12 @@ pub fn resolve_sound(key: &SoundKey, cfg: &SoundConfig, root: &Path, files: &[Pa
         SoundKey::Achievement { rule_id, tier } => {
             let rule_dir = [ACHIEVEMENTS, rule_id.as_str()];
             let tier_dir = [ACHIEVEMENTS, tier.as_str()];
-            pin(cfg.by_rule.get(rule_id), &[&rule_dir, ACH, ROOT])
-                .or_else(|| random(&[&rule_dir]))
+            // An empty rule id (the Settings window's tier preview) has no rule level:
+            // `achievements/<"">` would otherwise be `achievements/` itself.
+            let has_rule = !rule_id.is_empty();
+            has_rule
+                .then(|| pin(cfg.by_rule.get(rule_id), &[&rule_dir, ACH, ROOT]).or_else(|| random(&[&rule_dir])))
+                .flatten()
                 .or_else(|| pin(cfg.by_tier.get(tier.as_str()), &[&tier_dir, ACH, ROOT]))
                 .or_else(|| random(&[&tier_dir]))
                 .or_else(|| pin(cfg.achievement.as_ref(), &[ACH, ROOT]))
@@ -85,7 +89,6 @@ pub fn play(key: &SoundKey, cfg: &SoundConfig, sounds_dir: &Path, muted: bool, o
 
 /// Play `file` once for the Settings window. Opening and decoding happen here so the
 /// caller gets the error; playback itself runs on a background `rpg-sound` thread.
-#[allow(dead_code)] // used by settings commands (Task 7)
 pub fn preview(file: &Path, volume: f32) -> anyhow::Result<()> {
     // The output stream isn't `Send`, so the thread opens the device and reports back.
     let source = rodio::Decoder::new(std::io::BufReader::new(std::fs::File::open(file)?))?;

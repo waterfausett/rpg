@@ -9,7 +9,6 @@ mod runtime;
 mod settings;
 mod site;
 mod sound;
-#[allow(dead_code)] // used by settings commands (Task 7)
 mod sound_slots;
 mod tray;
 mod update;
@@ -73,6 +72,16 @@ fn main() {
         // Must be the first plugin: a second launch just exits.
         .plugin(tauri_plugin_single_instance::init(|_app, _argv, _cwd| {}))
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_dialog::init())
+        .invoke_handler(tauri::generate_handler![
+            settings::settings_get,
+            settings::settings_set,
+            settings::settings_choose_sound,
+            settings::settings_add_folder,
+            settings::settings_preview_sound,
+            settings::settings_open_sounds_folder,
+            settings::settings_open_config_file,
+        ])
         .setup(|app| {
             platform::configure_app(app);
             let state = init_state().map_err(|e| {
@@ -104,13 +113,16 @@ fn main() {
                 }
             });
             tray::setup(app, &state, toggles.clone())?;
-            // Live settings: later tasks fetch the store with `app.state::<Arc<ConfigStore>>()`.
+            // Live settings: the tray and the settings commands fetch it with `app.state::<Arc<ConfigStore>>()`.
             let store = ConfigStore::new(state.paths.clone(), state.cfg.clone());
             app.manage(store.clone());
             app.manage(ConfigWatcher(Mutex::new(store.watch())));
             let gen_state = state.clone();
             let poll_wake = runtime::spawn(state, sink);
             let handle = app.handle().clone();
+            // A hand edit (valid or not): an open settings window re-reads its fields.
+            let external = handle.clone();
+            store.on_external(move || tray::notify_settings_changed(&external));
             // Runs under the save lock of the store: only cheap, non-blocking work here.
             store.on_change(move |old, new| {
                 if old.sound.muted != new.sound.muted || old.announce.dnd != new.announce.dnd {

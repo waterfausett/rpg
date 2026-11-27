@@ -190,6 +190,18 @@ mod tests {
     }
 
     #[test]
+    fn tier_slot_key_plays_the_tier_pin() {
+        let r = Path::new("/s");
+        let gold = Slot::Tier(Tier::Gold);
+        let mut c = SoundConfig::default();
+        c.by_tier.insert("gold".into(), "g.wav".into());
+        let f = fs(r, &["achievements/a.mp3", "achievements/gold/g.wav"]);
+        for _ in 0..50 {
+            assert_eq!(resolve_sound(&gold.sound_key(), &c, r, &f), Some(r.join("achievements/gold/g.wav")));
+        }
+    }
+
+    #[test]
     fn pin_exists_searches_like_resolver() {
         let r = Path::new("/s");
         let gold = Slot::Tier(Tier::Gold);
