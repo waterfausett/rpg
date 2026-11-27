@@ -117,10 +117,15 @@ fn set_in(table: &mut dyn TableLike, parts: &[&str], item: Option<Item>) -> Resu
         match item {
             Some(mut new) => {
                 // Keep the old value's surrounding whitespace and trailing comment.
-                if let (Some(Item::Value(old)), Item::Value(nv)) = (table.get(first), &mut new) {
-                    *nv.decor_mut() = old.decor().clone();
+                // Mutate in place so the key's own decor (comments above, indent) survives.
+                if let Some(slot) = table.get_mut(first) {
+                    if let (Item::Value(old), Item::Value(nv)) = (&*slot, &mut new) {
+                        *nv.decor_mut() = old.decor().clone();
+                    }
+                    *slot = new;
+                } else {
+                    table.insert(first, new);
                 }
-                table.insert(first, new);
             }
             None => {
                 table.remove(first);
@@ -225,6 +230,34 @@ mod tests {
         assert!(t.contains("volume = 1.0"));
         assert_eq!(c.sound.volume, 1.0);
         assert!(apply_edit("", "sound.volume", &json!(0)).is_ok());
+    }
+    #[test] fn edit_keeps_key_decor_and_neighbours() {
+        let src = "[sound]
+# how loud
+volume = 0.8 # x
+  muted = true
+";
+        let (t, _) = apply_edit(src, "sound.volume", &json!(0.5)).unwrap();
+        assert_eq!(t, "[sound]
+# how loud
+volume = 0.5 # x
+  muted = true
+");
+        let (t, _) = apply_edit(src, "sound.muted", &json!(false)).unwrap();
+        assert_eq!(t, "[sound]
+# how loud
+volume = 0.8 # x
+  muted = false
+");
+    }
+    #[test] fn inline_table_edit_keeps_neighbours() {
+        let src = "[sound]
+by_tier = { bronze = \"a.wav\",  silver = \"b.wav\" }
+";
+        let (t, _) = apply_edit(src, "sound.by_tier.bronze", &json!("c.wav")).unwrap();
+        assert_eq!(t, "[sound]
+by_tier = { bronze = \"c.wav\",  silver = \"b.wav\" }
+");
     }
     #[test] fn write_atomic_replaces_and_leaves_no_temp() {
         let d = tempfile::tempdir().unwrap();
