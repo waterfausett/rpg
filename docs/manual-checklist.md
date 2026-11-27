@@ -36,6 +36,15 @@ The automated and scripted checks cannot see these. Do them once on your machine
 - [ ] Open rules folder opens `rules/` in Explorer.
 - [ ] Install hooks, Uninstall hooks and Quit all work (see below).
 
+## Settings window
+- [ ] Tray **Settings…** (below Open character sheet) opens the window. A second click focuses the same window.
+- [ ] Each change applies without a restart: a tier set to Pop-up, the volume, GitHub off then on (a poll appears in `rpg.log`), and Claude flavor off.
+- [ ] The tray Mute and Do not disturb check marks and the window agree both ways, and both survive a restart.
+- [ ] A hand edit of `config.toml` while the window is open shows up in the window.
+- [ ] Breaking `config.toml` shows the error panel. The tray Mute still works and shows the "Couldn't save" pop-up. Fixing the file and pressing **Check again** restores the sections.
+- [ ] **Choose…** with a file with spaces in its name: it lands in the right folder and plays on the next matching banner. ▶ previews it even while muted. ✕ unpins it, and the file stays in `sounds/`.
+- [ ] Repos: **Add folder…** adds a path. A bad pattern shows an error and isn't saved.
+
 ## Character sheet
 - [ ] Achievements tab: a ladder card (e.g. a `lifetime` rule with `tiers`) shows its current tier and a progress bar toward the next step, labelled like `Silver · 412 / 1,000`; hovering the bar lists the steps, with `???` past the next one.
 - [ ] Before its first catch-up event, a ladder card may show progress past its next step (e.g. `Bronze · 151 / 100`, for a rule added or turned on with history already behind it); the next matching event unlocks the step and the card moves on.
