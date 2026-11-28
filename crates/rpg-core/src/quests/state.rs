@@ -528,7 +528,7 @@ mod tests {
         let e = ev(EventKind::Commit, "r", mins(0), json!({}));
         let pick = |rolls: &[f64]| {
             let store = Store::open_in_memory().unwrap();
-            let mut it = rolls.to_vec().into_iter();
+            let mut it = rolls.iter().copied();
             offer_for(&store, &quests, &cfg, &e, t0(), tz(), &mut || it.next().expect("one roll too many")).unwrap().map(|o| o.quest_id)
         };
         // A sure thing earlier in the order does not stop a later quest from rolling.
