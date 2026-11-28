@@ -1,0 +1,13 @@
+id = "mop_up_duty"
+name = "Mop-Up Duty"
+tier = "silver"
+trigger = ["commit"]
+filter = { lines = { min = 300 } }
+chance = 0.10
+cooldown_hours = 24
+minutes = 30
+same = "repo"
+steps = [{ kind = "commit", filter = { lines = { min_delete_ratio = 0.5 } }, label = "Commit a mostly-deleting cleanup" }]
+hint = "Big commit, big mess. Follow it with a commit that is at least half deletions."
+fallback = "That was a lot of new code. Someone has to clean it up, and statistically it is you. Delete more than you add, in the same repo."
+flavor = { type = "llm", prompt = "Rewrite this quest offer in the same snarky voice: \"{fallback}\". Use the concrete details. Context: {context}" }

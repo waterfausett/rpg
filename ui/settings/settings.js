@@ -125,6 +125,24 @@
     });
   }
 
+  // A decimal input that saves on change.
+  function dec(k, key, value, min, label, what) {
+    return h("input", {
+      type: "number", class: "num", min, step: "any", value: String(value), "aria-label": label, "data-k": k,
+      onchange: (e) => {
+        const raw = e.target.value.trim();
+        const n = Number(raw);
+        if (raw === "" || !Number.isFinite(n)) {
+          failed("Enter a number");
+          render(snap);
+          return;
+        }
+        if (n === value) return;
+        set(key, n, what(n));
+      },
+    });
+  }
+
   // ---- Sections ----
   function notifications(n) {
     const all = n.all;
@@ -302,7 +320,38 @@
     return [h("h2", null, "Repos"), repoList("include", r.include), repoList("exclude", r.exclude)];
   }
 
-  const BUILD = { notifications, sounds, integrations, repos };
+  function quests(q) {
+    const off = !q.enabled;
+    const row = (el) => { if (off) el.classList.add("disabled"); return el; };
+    return [
+      h("h2", null, "Quests"),
+      field("Quests", "Timed challenges offered after things you do",
+        sw("quests", q.enabled, "Quests", (on) => set("quests.enabled", on, "Quests " + (on ? "on" : "off")))),
+      h("h3", null, "Offers"),
+      row(field("Offer window", "how long an offer waits for Accept",
+        num("quests.offer", "quests.offer_seconds", q.offer_seconds, 10, "Offer window in seconds",
+          (n) => "Offers wait " + n + " s"),
+        h("span", { class: "unit" }, "s"))),
+      row(field("Minimum time between offers", null,
+        num("quests.gap", "quests.min_gap_minutes", q.min_gap_minutes, 0, "Minimum time between offers in minutes",
+          (n) => n === 0 ? "Offers can come back to back" : "At least " + n + " min between offers"),
+        h("span", { class: "unit" }, "min"))),
+      h("h3", null, "Chain"),
+      row(field("Passes before the chain breaks", "passes or ignored offers in a row",
+        num("quests.passes", "quests.max_passes", q.max_passes, 1, "Passes before the chain breaks",
+          (n) => "The chain breaks after " + n + " pass" + (n === 1 ? "" : "es")))),
+      row(field("Chain bonus per quest", "x1, then up by this per completion in a row",
+        dec("quests.step", "quests.chain_step", q.chain_step, 0.01, "Chain bonus per quest",
+          (n) => "Each quest in a chain adds ×" + n),
+        h("span", { class: "unit" }, "×"))),
+      row(field("Chain cap", null,
+        dec("quests.max", "quests.chain_max", q.chain_max, 1, "Chain cap",
+          (n) => "The chain bonus stops at ×" + n),
+        h("span", { class: "unit" }, "×"))),
+    ];
+  }
+
+  const BUILD = { notifications, sounds, integrations, quests, repos };
 
   // ---- Render ----
   function render(s) {

@@ -20,6 +20,7 @@ use rpg_core::engine::Outcome;
 use rpg_core::event::Event;
 use rpg_core::flavor::TextGen;
 use rpg_core::paths::Paths;
+use rpg_core::quests::state::{Offer, QuestView};
 use rpg_core::store::Store;
 use runtime::{log, AppState, OutcomeSink};
 use std::sync::{Arc, Mutex, RwLock};
@@ -38,6 +39,23 @@ impl OutcomeSink for LogSink {
         let xp: u64 = batch.iter().flat_map(|(_, o)| &o.xp_gains).map(|g| g.amount).sum();
         let unlocks: Vec<&str> = batch.iter().flat_map(|(_, o)| &o.unlocks).map(|u| u.name.as_str()).collect();
         log(&self.0, &format!("presented {} events (away={away}): +{xp} exp, unlocks {unlocks:?}", batch.len()));
+    }
+
+    /// Nothing could answer an offer.
+    fn offers_allowed(&self) -> bool {
+        false
+    }
+
+    fn quest_offer(&self, id: u64, offer: Offer) {
+        log(&self.0, &format!("quest offer {id}: {}", offer.quest_id));
+    }
+
+    fn quest_update(&self, view: QuestView) {
+        log(&self.0, &format!("quest {} is {:?}", view.quest_id, view.status));
+    }
+
+    fn quest_offer_withdrawn(&self, id: u64) {
+        log(&self.0, &format!("quest offer {id} withdrawn"));
     }
 }
 
@@ -106,7 +124,7 @@ fn main() {
                 }
             };
             // A busy port only costs us the site, never the app.
-            let site = site::SiteState { store: state.store.clone(), rules: state.rules.clone(), cfg: state.cfg.clone(), port: 0 };
+            let site = site::SiteState { store: state.store.clone(), rules: state.rules.clone(), cfg: state.cfg.clone(), toggles: toggles.clone(), port: 0 };
             let port = state.cfg.read().unwrap_or_else(|p| p.into_inner()).site.port;
             let site_paths = state.paths.clone();
             tauri::async_runtime::spawn(async move {
@@ -120,7 +138,10 @@ fn main() {
             app.manage(store.clone());
             app.manage(ConfigWatcher(Mutex::new(store.watch())));
             let gen_state = state.clone();
-            let poll_wake = runtime::spawn(state, sink);
+            let rt = runtime::spawn(state, sink);
+            let poll_wake = rt.poll_wake();
+            // The tray, overlay and settings sync look the runtime up when they act.
+            app.manage(rt);
             let handle = app.handle().clone();
             // A hand edit (valid or not): an open settings window re-reads its fields.
             let external = handle.clone();
@@ -130,7 +151,11 @@ fn main() {
                 // Compare against the live toggles too: tray clicks while the file was broken
                 // changed them without changing the config, and the file's values win.
                 let resync = toggles.differ_from(new);
-                if resync || old.sound.muted != new.sound.muted || old.announce.dnd != new.announce.dnd {
+                if resync
+                    || old.sound.muted != new.sound.muted
+                    || old.announce.dnd != new.announce.dnd
+                    || old.quests.enabled != new.quests.enabled
+                {
                     tray::sync_toggles(&handle, &toggles, new);
                     tray::notify_settings_changed(&handle);
                 }

@@ -1,0 +1,11 @@
+id = "review_bounty"
+name = "Review Bounty"
+tier = "silver"
+trigger = ["pr_opened"]
+chance = 0.15
+cooldown_hours = 24
+minutes = 60
+steps = [{ kind = "review_submitted", count = 2 }]
+hint = "Opened a PR? Pay it forward: review two."
+fallback = "You asked strangers for a review. Karma has opinions. Review two PRs within the hour and settle the debt."
+flavor = { type = "llm", prompt = "Rewrite this quest offer in the same snarky voice: \"{fallback}\". Use the concrete details. Context: {context}" }

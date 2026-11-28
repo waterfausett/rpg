@@ -1,0 +1,12 @@
+id = "land_the_plane"
+name = "Land the Plane"
+tier = "gold"
+trigger = ["pr_opened"]
+chance = 0.10
+cooldown_hours = 24
+minutes = 120
+same = "pr"
+steps = [{ kind = "pr_merged" }]
+hint = "Get that PR merged within two hours."
+fallback = "A PR sits open, circling the airfield. Get it merged within two hours, or it joins the fleet of eternal drafts."
+flavor = { type = "llm", prompt = "Rewrite this quest offer in the same snarky voice: \"{fallback}\". Use the concrete details. Context: {context}" }

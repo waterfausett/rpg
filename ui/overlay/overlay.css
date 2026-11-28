@@ -14,16 +14,65 @@ body { user-select: none; -webkit-user-select: none; }
          (and pixel-snapping) the text and glow every frame. */
       will-change: opacity, transform; backface-visibility: hidden; }
 .xp.skill { color: #7ee8c8; border-color: #7ee8c855; box-shadow: 0 0 18px #7ee8c844; }
-.xp.ach { color: var(--tier); border-color: var(--tier); box-shadow: 0 0 18px var(--tier); }
-.xp.ach[data-tier="Bronze"]   { --tier: var(--bronze); }
-.xp.ach[data-tier="Silver"]   { --tier: var(--silver); }
-.xp.ach[data-tier="Gold"]     { --tier: var(--gold); }
-.xp.ach[data-tier="Platinum"] { --tier: var(--platinum); }
-.xp.ach[data-tier="Legendary"] { --tier: var(--legendary); }
-.xp.ach[data-tier="Celestial"] { --tier: var(--celestial); }
+
+/* ---- Quest timer pill: first in the stack (so at the bottom, under the exp pills), crimson
+   border, tier gem, name, time left and one dot per step. A click opens it into a card.
+   Completed, it takes the achievement toast's tier look from the .xp.ach rules below. ---- */
+.qp { --q: #ff4d5e; --q2: #ff9a3c; --tier: var(--gold); --glow: 28px;
+      box-sizing: border-box; width: var(--w, 270px); background: rgba(20, 6, 8, .94); color: #ffe9e6;
+      border: 1px solid var(--q); border-radius: 18px; cursor: pointer; overflow: hidden; font: 13px system-ui, sans-serif;
+      box-shadow: 0 0 calc(var(--glow) * .7) color-mix(in srgb, var(--q) 55%, transparent);
+      transition: width .25s ease, border-radius .25s ease, box-shadow .3s;
+      animation: qp-in .45s cubic-bezier(.2, 1.3, .4, 1); }
+.qp .bar0 { display: flex; align-items: center; gap: 9px; padding: 7px 14px; white-space: nowrap; }
+.qp .gem { width: 10px; height: 10px; transform: rotate(45deg); background: var(--tier); box-shadow: 0 0 8px var(--tier); flex: none; }
+.qp .nm { font-weight: 600; overflow: hidden; text-overflow: ellipsis; flex: 1; }
+.qp .tm { color: var(--q); font-weight: 700; font-variant-numeric: tabular-nums; }
+.qp .dots i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; border: 1px solid var(--q); margin-left: 3px;
+              transition: background .3s; }
+.qp .dots i.done { background: var(--q2); border-color: var(--q2); box-shadow: 0 0 6px var(--q2); }
+.qp .more { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .25s ease; }
+.qp .more > div { overflow: hidden; padding: 0 14px; }
+.qp.open { --w: 300px; border-radius: 12px; }
+.qp.open .more { grid-template-rows: 1fr; }
+.qp:is(.open, .checking) .dots { display: none; }
+/* "checking GitHub…" is wider than a countdown: make room so the name keeps some. */
+.qp.checking { --w: 300px; }
+.qp ul { list-style: none; padding: 0; margin: 2px 0 8px; }
+.qp li { padding: 2px 0; opacity: .6; }
+.qp li.done { opacity: 1; }
+.qp li.done::before { content: "✓ "; color: var(--q2); }
+.qp li.next { opacity: 1; }
+.qp li.next::before { content: "▸ "; color: var(--q); }
+.qp .meter { height: 3px; background: #3a1418; border-radius: 2px; }
+.qp .meter i { display: block; height: 100%; background: linear-gradient(90deg, var(--q2), var(--q)); border-radius: 2px; }
+.qp .foot { font-size: 11px; color: #ffb3ab; margin: 6px 0 10px; display: flex; justify-content: space-between; gap: 8px; }
+/* The last 2 minutes. */
+.qp.hurry { animation: qp-hurry 1s ease-in-out infinite; }
+.qp:is(.won, .lost) { cursor: default; }
+.qp.won { background: rgba(10, 14, 20, .85); position: relative; animation: qp-pop .4s ease-out; }
+.qp.won .tm { color: var(--tier); }
+.qp.lost { border-color: #6b7487; color: #9aa3b2; box-shadow: none; filter: grayscale(.8); animation: qp-shake .4s; }
+.qp.lost .tm { color: #9aa3b2; text-decoration: line-through; }
+.qp.bye { animation: qp-out .5s ease-in forwards; }
+@keyframes qp-in { from { opacity: 0; transform: translateY(14px) scale(.9); } to { opacity: 1; transform: none; } }
+@keyframes qp-out { to { opacity: 0; transform: translateY(10px); } }
+@keyframes qp-hurry { 50% { box-shadow: 0 0 26px var(--q); border-color: #ff8a95; } }
+@keyframes qp-pop { 50% { transform: scale(1.08); } }
+@keyframes qp-shake { 20%, 60% { transform: translateX(-5px); } 40%, 80% { transform: translateX(5px); } }
+
+/* Achievement toasts, and a completed quest pill: the tier's color text, border and glow. */
+.xp.ach, .qp.won { color: var(--tier); border-color: var(--tier); box-shadow: 0 0 18px var(--tier); }
+.xp.ach[data-tier="Bronze"],    .qp[data-tier="Bronze"]    { --tier: var(--bronze);    --glow: 14px; }
+.xp.ach[data-tier="Silver"],    .qp[data-tier="Silver"]    { --tier: var(--silver);    --glow: 18px; }
+.xp.ach[data-tier="Gold"],      .qp[data-tier="Gold"]      { --tier: var(--gold);      --glow: 28px; }
+.xp.ach[data-tier="Platinum"],  .qp[data-tier="Platinum"]  { --tier: var(--platinum);  --glow: 32px; }
+.xp.ach[data-tier="Legendary"], .qp[data-tier="Legendary"] { --tier: var(--legendary); --glow: 38px; }
+.xp.ach[data-tier="Celestial"], .qp[data-tier="Celestial"] { --tier: var(--celestial); --glow: 44px; }
 .xp.ach:is([data-tier="Platinum"], [data-tier="Legendary"], [data-tier="Celestial"]) { position: relative; overflow: hidden; }
 /* Platinum and above: one light sweep once the pill has slid in. */
-.xp.ach:is([data-tier="Platinum"], [data-tier="Legendary"], [data-tier="Celestial"])::after { content: ""; position: absolute; inset: 0; pointer-events: none; border-radius: inherit;
+.xp.ach:is([data-tier="Platinum"], [data-tier="Legendary"], [data-tier="Celestial"])::after,
+.qp.won:is([data-tier="Platinum"], [data-tier="Legendary"], [data-tier="Celestial"])::after { content: ""; position: absolute; inset: 0; pointer-events: none; border-radius: inherit;
   opacity: 0; background: linear-gradient(105deg, transparent 35%, rgba(255, 255, 255, .35) 50%, transparent 65%);
   animation: shimmer .9s ease-in-out .3s; }
 /* Legendary and Celestial pills: a permanent gradient border, a repeating sweep, and a longer stay. */
@@ -31,11 +80,13 @@ body { user-select: none; -webkit-user-select: none; }
   border-color: transparent; animation-duration: 4.5s;
   background: linear-gradient(rgba(10, 14, 20, .9), rgba(10, 14, 20, .9)) padding-box,
               linear-gradient(90deg, var(--tier), #fff, var(--tier)) border-box; }
-.xp.ach[data-tier="Legendary"] { background: linear-gradient(rgba(10, 14, 20, .9), rgba(10, 14, 20, .9)) padding-box,
+.qp.won:is([data-tier="Legendary"], [data-tier="Celestial"]) { border-color: transparent; }
+.xp.ach[data-tier="Legendary"], .qp.won[data-tier="Legendary"] { background: linear-gradient(rgba(10, 14, 20, .9), rgba(10, 14, 20, .9)) padding-box,
               linear-gradient(90deg, var(--legendary), #ffd75e, var(--legendary)) border-box; }
-.xp.ach[data-tier="Celestial"] { background: linear-gradient(rgba(10, 14, 20, .9), rgba(10, 14, 20, .9)) padding-box,
+.xp.ach[data-tier="Celestial"], .qp.won[data-tier="Celestial"] { background: linear-gradient(rgba(10, 14, 20, .9), rgba(10, 14, 20, .9)) padding-box,
               linear-gradient(90deg, var(--celestial), var(--legendary), var(--celestial)) border-box; }
-.xp.ach:is([data-tier="Legendary"], [data-tier="Celestial"])::after { animation: shimmer 1.1s ease-in-out .3s 3; }
+.xp.ach:is([data-tier="Legendary"], [data-tier="Celestial"])::after,
+.qp.won:is([data-tier="Legendary"], [data-tier="Celestial"])::after { animation: shimmer 1.1s ease-in-out .3s 3; }
 .xp small { color: #cfd6e0; font-weight: 400; margin-left: 6px; }
 .xp small:empty { display: none; }
 .xp small::before { content: "· "; }
@@ -59,8 +110,9 @@ body { user-select: none; -webkit-user-select: none; }
    One frame for every tier; --tier colors it, --tint warms the gradient center and
    the glow grows with rarity. No tier (the summary banner) keeps the plain gold look. */
 .ach-b { --tier: var(--gold); --tint: #4a3500; --glow: 18px; --glow-a: 33%;
-         /* inset leaves room in the window for the full glow; keep in sync with BANNER_INSET in overlay.rs */
-         position: fixed; inset: 40px; box-sizing: border-box; display: flex; flex-direction: column;
+         /* inset leaves room in the window for the full glow; keep in sync with BANNER_INSET in overlay.rs.
+            The frame grows with its text; the window fits the tallest (BANNER_SIZE). */
+         position: fixed; inset: 40px 40px auto; min-height: 200px; max-height: 320px; box-sizing: border-box; display: flex; flex-direction: column;
          justify-content: center; background: radial-gradient(circle at 50% 0%, var(--tint), #140e00 70%);
          border: 2px solid var(--tier); color: #fff3cf; text-align: center; padding: 16px 22px; border-radius: 12px;
          font-family: Georgia, serif; cursor: pointer; overflow: hidden;
@@ -74,6 +126,44 @@ body { user-select: none; -webkit-user-select: none; }
                -webkit-box-orient: vertical; overflow: hidden; }
 .ach-b .desc:empty, .ach-b .rew:empty { display: none; }
 .ach-b .rew { margin-top: 10px; font-family: system-ui, sans-serif; font-size: 13px; color: var(--tier); }
+/* The quest-only parts stay hidden on every other banner. */
+.ach-b .goal, .ach-b .acts, .ach-b .stakes, .ach-b .fuse, .ach-b .spark { display: none; }
+
+/* ---- Quest offer (style A, "Blood Contract") ----
+   The same frame, recolored crimson; the tier rides on top through the [data-tier] rules
+   (header color, glow size, pop/flash, sweep, pulse, stars and aurora name).
+   Placed before the tier rules so Celestial's name treatment still wins. */
+.ach-b.quest-b { --q: #ff4d5e; --q2: #ff9a3c; color: #ffe9e6; border-color: var(--q); cursor: default;
+  padding: 12px 22px 14px;
+  background: radial-gradient(circle at 50% 0%, color-mix(in srgb, var(--tier) 18%, #4a0f18), #140406 70%);
+  box-shadow: 0 0 var(--glow) color-mix(in srgb, var(--q) var(--glow-a), transparent),
+              inset 0 0 calc(var(--glow) * .6) color-mix(in srgb, var(--tier) 40%, transparent); }
+.ach-b.quest-b .name { margin: 4px 0; text-shadow: 0 0 12px var(--q); }
+.ach-b.quest-b .desc { -webkit-line-clamp: 5; }
+.ach-b.quest-b .rew { display: none; }
+.ach-b.quest-b .goal { display: block; margin-top: 8px; font: 13px system-ui, sans-serif; }
+.ach-b.quest-b .goal b { color: var(--q2); }
+.ach-b.quest-b .acts { display: flex; gap: 10px; justify-content: center; margin-top: 10px; }
+.ach-b.quest-b .acts button { padding: 6px 18px; border-radius: 6px; font: 700 13px system-ui, sans-serif; cursor: pointer;
+  border: 1px solid transparent; }
+.ach-b.quest-b .acc { background: var(--q); color: #1a0306; }
+.ach-b.quest-b .acc:hover { filter: brightness(1.15); }
+.ach-b.quest-b .pas { background: transparent; border-color: #ffe9e655; color: #ffe9e6aa; }
+.ach-b.quest-b .pas:hover { border-color: #ffe9e6aa; color: #ffe9e6; }
+.ach-b.quest-b .stakes { display: block; margin-top: 6px; font: 12px system-ui, sans-serif; color: #ffb3ab; }
+/* The burning fuse along the bottom edge (overlay.js shrinks it), its spark and smoke. */
+.ach-b.quest-b .fuse { display: block; position: absolute; left: 0; bottom: 0; height: 4px; width: 100%;
+  transform-origin: left; background: linear-gradient(90deg, var(--q2), var(--q)); }
+.ach-b.quest-b .spark { display: block; position: absolute; bottom: -5px; width: 14px; height: 14px; margin-left: -7px;
+  border-radius: 50%; pointer-events: none;
+  background: radial-gradient(#fff, #ffd27a 30%, var(--q2) 55%, transparent 70%); animation: quest-spark .15s steps(2) infinite; }
+.ach-b.quest-b .smoke { position: absolute; bottom: 4px; width: 4px; height: 4px; border-radius: 50%; background: #ffb07a;
+  pointer-events: none; opacity: 0; animation: quest-puff .9s ease-out forwards; }
+/* Accept: shrink toward the bottom-right corner, where the quest pill appears. */
+.ach-b.quest-b.take { visibility: visible; animation: quest-take .55s cubic-bezier(.5, 0, .8, .4) forwards; }
+@keyframes quest-spark { 50% { transform: scale(1.35); } }
+@keyframes quest-puff { from { opacity: .9; transform: translate(0, 0) scale(1); } to { opacity: 0; transform: translate(-6px, -26px) scale(3); } }
+@keyframes quest-take { from { opacity: 1; transform: none; } to { opacity: 0; transform: translate(250px, 110px) scale(.15); } }
 .ach-b[data-tier="Bronze"]   { --tier: var(--bronze);   --tint: #3d2410; --glow: 14px; --glow-a: 33%; }
 .ach-b[data-tier="Silver"]   { --tier: var(--silver);   --tint: #2c3036; --glow: 18px; --glow-a: 45%; }
 .ach-b[data-tier="Gold"]     { --tier: var(--gold);     --tint: #4a3500; --glow: 28px; --glow-a: 60%; }
@@ -111,7 +201,8 @@ body { user-select: none; -webkit-user-select: none; }
 @keyframes tier-bloom { 30% { filter: brightness(1.7); } }
 /* The pulsing glow lives on its own layer behind the banner and animates opacity only: animating a big
    box-shadow's blur on the banner itself repaints every frame and visibly stutters. */
-.ach-pulse { position: fixed; inset: 40px; pointer-events: none; opacity: 0; transition: opacity .4s ease-out; }
+/* Matches the frame: the page sets --bh to its height. */
+.ach-pulse { position: fixed; inset: 40px 40px auto; height: var(--bh, 200px); pointer-events: none; opacity: 0; transition: opacity .4s ease-out; }
 .ach-pulse.on { opacity: 1; }
 .ach-pulse::before { content: ""; position: absolute; inset: 0; border-radius: 12px; opacity: 0; will-change: opacity;
   box-shadow: 0 0 60px 6px var(--tier); }
@@ -139,7 +230,16 @@ body { user-select: none; -webkit-user-select: none; }
   .ach-b { transform: none; }
   .ach-b.in, .ach-b[data-tier].in { animation: banner-fade-in .28s ease-out forwards; }
   .ach-b.out { animation: banner-fade-out .4s ease-in forwards; }
-  .ach-b[data-tier].in::after, .xp.ach:is([data-tier="Platinum"], [data-tier="Legendary"], [data-tier="Celestial"])::after { animation: none; }
+  .ach-b[data-tier].in::after, .xp.ach:is([data-tier="Platinum"], [data-tier="Legendary"], [data-tier="Celestial"])::after,
+  .qp.won:is([data-tier="Platinum"], [data-tier="Legendary"], [data-tier="Celestial"])::after { animation: none; }
+  /* Quest pill: no slide, pop or shake; the last 2 minutes glow red without pulsing; it fades out. */
+  .qp, .qp.hurry, .qp.won, .qp.lost { animation: none; transition: none; }
+  .qp.hurry { border-color: #ff8a95; box-shadow: 0 0 26px var(--q); }
+  .qp.bye { animation: banner-fade-out .5s ease-in forwards; }
   .ach-pulse { display: none; }
   .ach-b[data-tier="Celestial"] .name, .ach-b[data-tier="Celestial"]::before { animation: none; }
+  /* Offers: Accept fades like any exit; the fuse still shrinks, without flicker or smoke. */
+  .ach-b.quest-b.take { animation: banner-fade-out .4s ease-in forwards; }
+  .ach-b.quest-b .spark { animation: none; }
+  .ach-b.quest-b .smoke { display: none; }
 }

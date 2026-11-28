@@ -149,12 +149,7 @@ pub fn build_context(rule: &Rule, unlock: &Unlock, ev: &Event, tz: FixedOffset) 
         strip_text_keys(&mut findings);
     }
     serde_json::json!({
-        "event": {
-            "kind": ev.kind.as_str(),
-            "repo": ev.repo.as_deref().map(|r| repo_name(ev.source, r)),
-            "branch": ev.data.get("branch").and_then(|b| b.as_str()),
-            "local_time": ev.ts.with_timezone(&tz).format("%Y-%m-%d %H:%M (%a)").to_string(),
-        },
+        "event": event_context(ev, tz),
         "findings": findings,
         "unlock_count": unlock.unlock_count,
         "last_unlocked_at": unlock.last_unlocked_at,
@@ -170,21 +165,54 @@ pub fn render(
     gen: Option<&dyn TextGen>,
     tz: FixedOffset,
 ) -> String {
-    let Flavor::Llm { prompt } = &rule.flavor else { return rule.fallback.clone() };
-    let Some(gen) = gen.filter(|_| cfg.enabled) else { return rule.fallback.clone() };
-    let context = serde_json::to_string_pretty(&build_context(rule, unlock, ev, tz)).unwrap_or_default();
+    llm_text(&rule.flavor, &rule.name, &rule.fallback, || build_context(rule, unlock, ev, tz), cfg, gen)
+}
+
+/// The text of a quest offer: LLM-written when its `flavor` opts in and the LLM is
+/// available, else `fallback`. The prompt's context is the triggering event only
+/// (kind, repo name, branch, local time), with the same privacy limits as achievements.
+pub fn render_offer(
+    name: &str,
+    fallback: &str,
+    flavor: &Flavor,
+    ev: &Event,
+    cfg: &LlmConfig,
+    gen: Option<&dyn TextGen>,
+    tz: FixedOffset,
+) -> String {
+    llm_text(flavor, name, fallback, || serde_json::json!({ "event": event_context(ev, tz) }), cfg, gen)
+}
+
+/// The privacy-limited description of the event itself.
+fn event_context(ev: &Event, tz: FixedOffset) -> serde_json::Value {
+    serde_json::json!({
+        "kind": ev.kind.as_str(),
+        "repo": ev.repo.as_deref().map(|r| repo_name(ev.source, r)),
+        "branch": ev.data.get("branch").and_then(|b| b.as_str()),
+        "local_time": ev.ts.with_timezone(&tz).format("%Y-%m-%d %H:%M (%a)").to_string(),
+    })
+}
+
+fn llm_text(
+    flavor: &Flavor,
+    name: &str,
+    fallback: &str,
+    context: impl FnOnce() -> serde_json::Value,
+    cfg: &LlmConfig,
+    gen: Option<&dyn TextGen>,
+) -> String {
+    let Flavor::Llm { prompt } = flavor else { return fallback.to_string() };
+    let Some(gen) = gen.filter(|_| cfg.enabled) else { return fallback.to_string() };
+    let context = serde_json::to_string_pretty(&context()).unwrap_or_default();
     let full = format!(
         "{}
 
 {INSTRUCTION}",
-        prompt
-            .replace("{context}", &context)
-            .replace("{fallback}", &rule.fallback)
-            .replace("{name}", &rule.name)
+        prompt.replace("{context}", &context).replace("{fallback}", fallback).replace("{name}", name)
     );
     match gen.generate(&full, Duration::from_secs(cfg.timeout_secs)) {
         Ok(t) if !t.is_empty() && t.chars().count() <= MAX_LEN => t,
-        _ => rule.fallback.clone(),
+        _ => fallback.to_string(),
     }
 }
 
@@ -341,6 +369,20 @@ repeatable = true
         assert!(p.contains("src/old.rs"));
         assert!(p.ends_with(INSTRUCTION));
         assert!(!p.contains("{context}") && !p.contains("{fallback}") && !p.contains("{name}"));
+    }
+
+    #[test]
+    fn offer_text_uses_its_flavor_and_the_trigger_event() {
+        let cfg = LlmConfig::default();
+        let g = Fake::new(Ok("Go on then."));
+        assert_eq!(render_offer("Ship It", "OFFER LINE", &Flavor::Static, &event(), &cfg, Some(&g), tz()), "OFFER LINE");
+        assert!(g.seen.lock().unwrap().is_empty());
+        assert_eq!(render_offer("Ship It", "OFFER LINE", &llm(), &event(), &cfg, Some(&g), tz()), "Go on then.");
+        let p = g.seen.lock().unwrap()[0].clone();
+        assert!(p.contains("Ship It") && p.contains("OFFER LINE") && p.contains("\"kind\": \"commit\""), "{p}");
+        assert!(!p.contains("deadbeef") && !p.contains("secret.rs"), "only the event summary: {p}");
+        let bad = Fake::new(Err("boom"));
+        assert_eq!(render_offer("Ship It", "OFFER LINE", &llm(), &event(), &cfg, Some(&bad), tz()), "OFFER LINE");
     }
 
     #[test]

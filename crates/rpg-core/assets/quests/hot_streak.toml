@@ -1,0 +1,11 @@
+id = "hot_streak"
+name = "Hot Streak"
+tier = "bronze"
+trigger = ["commit"]
+chance = 0.05
+cooldown_hours = 12
+minutes = 30
+steps = [{ kind = "commit", count = 4 }]
+hint = "Four commits in half an hour. Small ones count."
+fallback = "Four commits in thirty minutes. Tiny, frequent, and technically still progress. The clock starts when you say so."
+flavor = { type = "llm", prompt = "Rewrite this quest offer in the same snarky voice: \"{fallback}\". Use the concrete details. Context: {context}" }

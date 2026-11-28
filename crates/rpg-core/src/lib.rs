@@ -8,6 +8,7 @@ pub mod paths;
 pub mod proc;
 pub mod rules;
 pub mod skills;
+pub mod quests;
 pub mod filters;
 pub mod store;
 pub mod xp;

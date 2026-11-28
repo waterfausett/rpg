@@ -19,6 +19,29 @@ pub struct Config {
     pub paths: PathFilter,
     pub updates: UpdatesConfig,
     pub announce: AnnounceConfig,
+    pub quests: QuestsConfig,
+}
+
+/// Timed quests. `enabled = false` turns the feature off (an active quest ends quietly).
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(default)]
+pub struct QuestsConfig {
+    pub enabled: bool,
+    /// How long an offer waits for Accept.
+    pub offer_seconds: u64,
+    /// Passes (or ignored offers) in a row that break the chain.
+    pub max_passes: u32,
+    /// Multiplier gained per completion.
+    pub chain_step: f64,
+    pub chain_max: f64,
+    /// Minimum time between any two offers.
+    pub min_gap_minutes: u64,
+}
+
+impl Default for QuestsConfig {
+    fn default() -> Self {
+        Self { enabled: true, offer_seconds: 60, max_passes: 3, chain_step: 0.5, chain_max: 5.0, min_gap_minutes: 30 }
+    }
 }
 
 /// How an unlock of each tier is announced when its rule doesn't say: a banner or just a toast.
@@ -312,6 +335,21 @@ impl Config {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn quests_config_defaults() {
+        let c = Config::default().quests;
+        assert_eq!(
+            c,
+            QuestsConfig { enabled: true, offer_seconds: 60, max_passes: 3, chain_step: 0.5, chain_max: 5.0, min_gap_minutes: 30 }
+        );
+        let off: Config = toml::from_str("[quests]
+enabled = false").unwrap();
+        assert!(!off.quests.enabled);
+        assert_eq!(off.quests.offer_seconds, 60);
+        let shipped: Config = toml::from_str(include_str!("../assets/config.default.toml")).unwrap();
+        assert_eq!(shipped.quests, c);
+    }
+
     use super::*;
 
     #[test]

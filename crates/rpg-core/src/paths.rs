@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 static STARTER_RULES: Dir = include_dir!("$CARGO_MANIFEST_DIR/assets/rules");
 static STARTER_SKILLS: Dir = include_dir!("$CARGO_MANIFEST_DIR/assets/skills");
+static STARTER_QUESTS: Dir = include_dir!("$CARGO_MANIFEST_DIR/assets/quests");
 const DEFAULT_CONFIG: &str = include_str!("../assets/config.default.toml");
 
 #[derive(Debug, Clone)]
@@ -59,6 +60,10 @@ impl Paths {
     /// Skill files live in a subfolder of `rules/`, so "Open rules folder" reaches them.
     pub fn skills(&self) -> PathBuf {
         self.rules().join("skills")
+    }
+    /// Quest files live in a subfolder of `rules/`, like skills.
+    pub fn quests(&self) -> PathBuf {
+        self.rules().join("quests")
     }
     /// Starter rule file names already seeded (or deliberately skipped), one per line.
     pub fn seeded_manifest(&self) -> PathBuf {
@@ -123,6 +128,10 @@ impl Paths {
         std::fs::create_dir_all(self.skills()).with_context(|| format!("creating {}", self.skills().display()))?;
         if std::fs::read_dir(self.skills())?.next().is_none() {
             seed(&STARTER_SKILLS, &self.skills(), "skill")?;
+        }
+        std::fs::create_dir_all(self.quests()).with_context(|| format!("creating {}", self.quests().display()))?;
+        if !has_rule_file(&self.quests())? {
+            seed(&STARTER_QUESTS, &self.quests(), "quest")?;
         }
         Ok(())
     }
@@ -202,6 +211,20 @@ mod tests {
         std::fs::remove_file(p.skills().join("rust.toml")).unwrap();
         p.ensure().unwrap();
         assert!(!p.skills().join("rust.toml").exists());
+    }
+
+    #[test]
+    fn ensure_seeds_starter_quests_once() {
+        let (_t, p) = setup();
+        p.ensure().unwrap();
+        assert_eq!(p.quests(), p.rules().join("quests"));
+        for f in STARTER_QUESTS.files() {
+            assert!(p.quests().join(f.path().file_name().unwrap()).is_file());
+        }
+        assert_eq!(STARTER_QUESTS.files().count(), 6);
+        std::fs::remove_file(p.quests().join("hot_streak.toml")).unwrap();
+        p.ensure().unwrap();
+        assert!(!p.quests().join("hot_streak.toml").exists());
     }
 
     fn starter_names() -> Vec<String> {

@@ -1,0 +1,12 @@
+id = "ship_it_speedrun"
+name = "Ship It (Speedrun)"
+tier = "gold"
+trigger = ["commit"]
+chance = 0.04
+cooldown_hours = 24
+minutes = 15
+same = "repo"
+steps = [{ kind = "push" }, { kind = "pr_opened" }]
+hint = "Commit, push, PR. Fifteen minutes. Go."
+fallback = "You committed. Bold. Now push it and open a PR in fifteen minutes, before your nerve runs out."
+flavor = { type = "llm", prompt = "Rewrite this quest offer in the same snarky voice: \"{fallback}\". Use the concrete details. Context: {context}" }

@@ -16,6 +16,8 @@ use rpg_core::xp;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::net::{Ipv4Addr, SocketAddr};
+use crate::tray::Toggles;
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, RwLock};
 
 #[derive(Clone)]
@@ -23,6 +25,8 @@ pub struct SiteState {
     pub store: Arc<Store>,
     pub rules: Arc<RwLock<Rules>>,
     pub cfg: Arc<RwLock<Config>>,
+    /// The tray's toggles, shared with the overlay; the sheet reads `quests`.
+    pub toggles: Arc<Toggles>,
     /// The port the site listens on; the only port accepted in `Host`.
     pub port: u16,
 }
@@ -49,6 +53,7 @@ pub fn router(state: SiteState) -> Router {
         .route("/api/character", get(character))
         .route("/api/achievements", get(achievements))
         .route("/api/events", get(events))
+        .route("/api/quests", get(quests))
         .fallback(static_asset)
         .layer(middleware::from_fn_with_state(state.clone(), guard))
         .with_state(state)
@@ -73,11 +78,15 @@ pub async fn serve(mut state: SiteState, port: u16) -> std::io::Result<()> {
     axum::serve(bind(port).await?, router(state)).await
 }
 
-/// `xp` is the event's total; `base_xp` plus each of `achievements` adds up to it.
-fn event_json(r: &EventRow) -> Value {
+/// `xp` is the event's total; `base_xp`, `quest_xp` and each of `achievements` add up to it.
+/// A quest event's ledger row with no achievement tier is the quest's reward (`quest_xp`),
+/// never an achievement; quest events also get a readable `label`.
+fn event_json(r: &EventRow, rules: &Rules) -> Value {
     let e = &r.event;
     let base = rpg_core::engine::base_label(e.kind);
-    let (base_gains, ach_gains): (Vec<_>, Vec<_>) = r.gains.iter().partition(|g| Some(g.reason.as_str()) == base);
+    let is_quest = e.kind.is_quest();
+    let (base_gains, rest): (Vec<_>, Vec<_>) = r.gains.iter().partition(|g| Some(g.reason.as_str()) == base);
+    let (quest_gains, ach_gains): (Vec<_>, Vec<_>) = rest.into_iter().partition(|g| is_quest && g.tier.is_none());
     let achievements: Vec<Value> = ach_gains
         .iter()
         .map(|g| {
@@ -88,12 +97,24 @@ fn event_json(r: &EventRow) -> Value {
             a
         })
         .collect();
-    json!({
+    let mut v = json!({
         "id": e.id, "kind": e.kind.as_str(), "ts": e.ts, "repo": e.repo,
         "backfill": e.backfill, "xp": r.xp,
         "base_xp": base_gains.iter().map(|g| g.amount).sum::<u64>(),
         "achievements": achievements,
-    })
+    });
+    if is_quest {
+        v["quest_xp"] = json!(quest_gains.iter().map(|g| g.amount).sum::<u64>());
+        let qid = e.data["quest_id"].as_str().unwrap_or_default();
+        let name = quest_gains
+            .iter()
+            .find_map(|g| g.reason.strip_prefix("Quest: ").map(str::to_string))
+            .or_else(|| rules.quests.iter().find(|q| q.id == qid).map(|q| q.name.clone()))
+            .unwrap_or_else(|| qid.to_string());
+        let verb = if e.kind == EventKind::QuestCompleted { "complete" } else { "failed" };
+        v["label"] = json!(format!("Quest {verb}: {name}"));
+    }
+    v
 }
 
 async fn character(State(st): State<SiteState>) -> Result<Json<Value>, ApiError> {
@@ -101,7 +122,8 @@ async fn character(State(st): State<SiteState>) -> Result<Json<Value>, ApiError>
     let total = st.store.total_xp().map_err(internal)?;
     let (level, into_level, level_span) = xp::progress(total, &cfg.levels);
     let count = |k| st.store.count_live_events(k).map_err(internal);
-    let recent: Vec<Value> = st.store.list_events(None, RECENT).map_err(internal)?.iter().map(event_json).collect();
+    let rules = st.rules.read().unwrap_or_else(|p| p.into_inner()).clone();
+    let recent: Vec<Value> = st.store.list_events(None, RECENT).map_err(internal)?.iter().map(|r| event_json(r, &rules)).collect();
     let skills = skills_json(&st, &cfg)?;
     Ok(Json(json!({
         "level": level, "total_xp": total, "into_level": into_level, "level_span": level_span,
@@ -246,7 +268,55 @@ async fn events(State(st): State<SiteState>, Query(q): Query<EventsQuery>) -> Re
     };
     let limit = q.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
     let rows = st.store.list_events(kind, limit).map_err(internal)?;
-    Ok(Json(Value::Array(rows.iter().map(event_json).collect())))
+    let rules = st.rules.read().unwrap_or_else(|p| p.into_inner()).clone();
+    Ok(Json(Value::Array(rows.iter().map(|r| event_json(r, &rules)).collect())))
+}
+
+/// Quest log lines kept on the sheet.
+const QUEST_LOG: u32 = 50;
+
+/// Chain, counts, the newest resolved quests and the board of every loaded quest.
+/// `enabled` is the config setting and the tray's per-session toggle together.
+async fn quests(State(st): State<SiteState>) -> Result<Json<Value>, ApiError> {
+    let rules = st.rules.read().unwrap_or_else(|p| p.into_inner()).clone();
+    let cfg = st.cfg.read().unwrap_or_else(|p| p.into_inner()).clone();
+    let ch = rpg_core::quests::state::chain(&st.store).map_err(internal)?;
+    let counts = st.store.quest_counts().map_err(internal)?;
+    let (completed, failed) = counts.iter().fold((0, 0), |(c, f), (_, a, b)| (c + a, f + b));
+    let mult = (rpg_core::quests::state::multiplier(ch.n, &cfg.quests) * 1000.0).round() / 1000.0;
+    let log: Vec<Value> = st
+        .store
+        .list_quests(QUEST_LOG)
+        .map_err(internal)?
+        .iter()
+        .map(|q| {
+            let done = q.status == "completed";
+            let data = q.result_event_id.as_deref().and_then(|id| st.store.event_data(id).ok().flatten());
+            let reward = done.then(|| {
+                data.as_ref().and_then(|d| d["xp"].as_u64()).unwrap_or_else(|| rpg_core::quests::state::reward(q.xp, q.multiplier))
+            });
+            let lost = (!done).then(|| data.as_ref().and_then(|d| d["chain_lost"].as_u64()).unwrap_or(q.chain_at_start as u64));
+            json!({
+                "quest_id": q.quest_id, "name": q.name, "tier": q.tier, "status": q.status,
+                "reward": reward, "chain_lost": lost, "ts": q.resolved_at,
+            })
+        })
+        .collect();
+    let board: Vec<Value> = rules
+        .quests
+        .iter()
+        .map(|q| {
+            let completions = counts.iter().find(|(id, _, _)| *id == q.id).map_or(0, |(_, c, _)| *c);
+            json!({
+                "id": q.id, "name": q.name, "tier": q.tier.as_str(), "hint": q.hint, "chance": q.chance,
+                "minutes": q.minutes, "completions": completions, "enabled": q.enabled,
+            })
+        })
+        .collect();
+    Ok(Json(json!({
+        "enabled": cfg.quests.enabled && st.toggles.quests.load(Ordering::Relaxed), "chain": ch.n, "multiplier": mult, "best_chain": ch.best,
+        "completed": completed, "failed": failed, "log": log, "board": board,
+    })))
 }
 
 async fn static_asset(uri: Uri) -> Response {
@@ -280,6 +350,7 @@ mod tests {
             store: Arc::new(Store::open_in_memory().unwrap()),
             rules: Arc::new(RwLock::new(rules)),
             cfg: Arc::new(RwLock::new(Config::default())),
+            toggles: Arc::new(Toggles::from_config(&Config::default())),
             port: 47474,
         }
     }
@@ -572,6 +643,7 @@ fallback = "A skill, levelled."
                 skill("id = \"docs\"\nname = \"Scribe\"\nglobs = [\"*.md\"]\n"),
                 skill("id = \"idle\"\nname = \"Idle\"\nglobs = [\"*.zz\"]\n"),
             ],
+            ..Default::default()
         };
         let st = state_with(rules);
         let mut c = ev("c1", EventKind::Commit);
@@ -675,6 +747,170 @@ fallback = "A skill, levelled."
         assert_eq!(v[0]["id"], "x");
     }
 
+    const QUEST_A: &str = r#"
+id = "ship_it"
+name = "Ship It"
+tier = "gold"
+trigger = ["commit"]
+chance = 0.25
+minutes = 15
+steps = [{ kind = "push" }]
+hint = "Push it."
+fallback = "Shipped."
+"#;
+
+    fn quest_rules(extra: &str) -> Rules {
+        let b = QUEST_A.replace("id = \"ship_it\"", "id = \"lazy\"").replace("Ship It", "Lazy One").replace("Push it.", "Rest.");
+        Rules { quests: vec![rpg_core::quests::parse_quest(QUEST_A).unwrap(), rpg_core::quests::parse_quest(&format!("{b}{extra}")).unwrap()], ..Default::default() }
+    }
+
+    /// Store one resolved attempt the way the engine does: row plus its result event.
+    fn resolved_quest(st: &SiteState, quest_id: &str, name: &str, ok: bool, at: &str) -> String {
+        let ts: chrono::DateTime<Utc> = at.parse().unwrap();
+        let id = st
+            .store
+            .insert_quest(&rpg_core::store::NewQuest {
+                quest_id: quest_id.into(),
+                name: name.into(),
+                tier: "gold".into(),
+                trigger_event_id: "t".into(),
+                binding: json!({}),
+                steps: json!([{ "kind": "push", "need": 1 }]),
+                accepted_at: ts,
+                deadline: ts,
+                chain_at_start: 2,
+                multiplier: 1.5,
+                xp: 500,
+            })
+            .unwrap();
+        let (kind, data) = if ok {
+            (EventKind::QuestCompleted, json!({ "quest_id": quest_id, "tier": "gold", "chain": 3, "multiplier": 1.5, "xp": 750 }))
+        } else {
+            (EventKind::QuestFailed, json!({ "quest_id": quest_id, "tier": "gold", "chain_lost": 2 }))
+        };
+        let mut e = Event::new(kind, Source::Quest, None, data);
+        e.ts = ts;
+        st.store.insert_event(&e).unwrap();
+        st.store.resolve_quest(id, if ok { "completed" } else { "failed" }, Some(&e.id), ts).unwrap();
+        if ok {
+            st.store.add_xp(&e.id, 750, &format!("Quest: {name}"), None, ts).unwrap();
+        }
+        e.id
+    }
+
+    #[tokio::test]
+    async fn quests_endpoint_shape() {
+        let st = state_with(quest_rules(""));
+        resolved_quest(&st, "ship_it", "Ship It", true, "2026-01-01T10:00:00Z");
+        resolved_quest(&st, "ship_it", "Ship It", false, "2026-01-02T10:00:00Z");
+        st.store.meta_set(rpg_core::quests::state::QUEST_CHAIN, "3").unwrap();
+        st.store.meta_set(rpg_core::quests::state::QUEST_BEST_CHAIN, "5").unwrap();
+        let v = get_json(&st, "/api/quests").await;
+        assert_eq!(v["enabled"], true);
+        assert_eq!((v["chain"].clone(), v["best_chain"].clone()), (json!(3), json!(5)));
+        assert_eq!((v["completed"].clone(), v["failed"].clone()), (json!(1), json!(1)));
+        assert_eq!(v["multiplier"], 2.5, "default chain_step 0.5: 1 + 0.5 x 3");
+        let log = v["log"].as_array().unwrap();
+        assert_eq!(log.len(), 2);
+        assert_eq!((log[0]["status"].clone(), log[1]["status"].clone()), (json!("failed"), json!("completed")), "newest first");
+        assert_eq!((log[0]["chain_lost"].clone(), log[0]["reward"].clone()), (json!(2), Value::Null));
+        assert_eq!((log[1]["reward"].clone(), log[1]["chain_lost"].clone()), (json!(750), Value::Null));
+        assert_eq!((log[1]["quest_id"].clone(), log[1]["name"].clone(), log[1]["tier"].clone()), (json!("ship_it"), json!("Ship It"), json!("gold")));
+        assert!(log[0]["ts"].is_string());
+        let board = v["board"].as_array().unwrap();
+        assert_eq!(board.len(), 2, "every loaded quest");
+        assert_eq!(board[0]["id"], "ship_it");
+        assert_eq!((board[0]["completions"].clone(), board[1]["completions"].clone()), (json!(1), json!(0)));
+        assert_eq!((board[0]["name"].clone(), board[0]["tier"].clone(), board[0]["hint"].clone()), (json!("Ship It"), json!("gold"), json!("Push it.")));
+        assert_eq!((board[0]["chance"].clone(), board[0]["minutes"].clone(), board[0]["enabled"].clone()), (json!(0.25), json!(15), json!(true)));
+    }
+
+    #[tokio::test]
+    async fn quests_toggled_off_in_tray_reports_off() {
+        let st = state_with(quest_rules(""));
+        st.toggles.quests.store(false, Ordering::Relaxed);
+        assert_eq!(get_json(&st, "/api/quests").await["enabled"], false);
+        st.toggles.quests.store(true, Ordering::Relaxed);
+        assert_eq!(get_json(&st, "/api/quests").await["enabled"], true);
+    }
+
+    #[tokio::test]
+    async fn quests_disabled_in_config_reports_off() {
+        let st = state_with(quest_rules(""));
+        st.cfg.write().unwrap().quests.enabled = false;
+        assert_eq!(get_json(&st, "/api/quests").await["enabled"], false);
+    }
+
+    #[tokio::test]
+    async fn quest_log_falls_back_to_row_without_result_event() {
+        let st = state_with(quest_rules(""));
+        let ts: chrono::DateTime<Utc> = "2026-01-01T10:00:00Z".parse().unwrap();
+        for (ok, qid) in [(true, "a"), (false, "b")] {
+            let id = st
+                .store
+                .insert_quest(&rpg_core::store::NewQuest {
+                    quest_id: qid.into(), name: qid.into(), tier: "gold".into(), trigger_event_id: "t".into(), binding: json!({}),
+                    steps: json!([]), accepted_at: ts, deadline: ts, chain_at_start: 2, multiplier: 1.5, xp: 501,
+                })
+                .unwrap();
+            st.store.resolve_quest(id, if ok { "completed" } else { "failed" }, None, ts + chrono::Duration::minutes(ok as i64)).unwrap();
+        }
+        let v = get_json(&st, "/api/quests").await;
+        assert_eq!((v["log"][0]["reward"].clone(), v["log"][0]["chain_lost"].clone()), (json!(751), Value::Null), "xp x multiplier, floored");
+        assert_eq!((v["log"][1]["reward"].clone(), v["log"][1]["chain_lost"].clone()), (Value::Null, json!(2)), "chain_at_start");
+    }
+
+    #[tokio::test]
+    async fn quest_reward_not_an_achievement_in_history() {
+        let st = state_with(quest_rules(""));
+        resolved_quest(&st, "ship_it", "Ship It", true, "2026-01-01T10:00:00Z");
+        resolved_quest(&st, "ship_it", "Ship It", false, "2026-01-02T10:00:00Z");
+        let v = get_json(&st, "/api/events").await;
+        let (failed, done) = (&v[0], &v[1]);
+        assert_eq!(done["kind"], "quest_completed");
+        assert_eq!(done["quest_xp"], 750);
+        assert_eq!(done["base_xp"], 0);
+        assert_eq!(done["achievements"], json!([]));
+        assert_eq!(done["xp"], 750);
+        assert_eq!(done["label"], "Quest complete: Ship It");
+        assert_eq!(failed["label"], "Quest failed: Ship It");
+        assert_eq!(failed["quest_xp"], 0);
+        let plain = get_json(&st, "/api/character").await;
+        assert_eq!(plain["total_xp"], 750);
+    }
+
+    #[tokio::test]
+    async fn achievement_on_quest_event_stays_an_achievement() {
+        let rule = parse_rule(&RULE.replace("pr_merged", "quest_completed").replace("first-merge", "quest-ach")).unwrap();
+        let st = state_with(Rules { list: vec![rule], ..quest_rules("") });
+        let eid = resolved_quest(&st, "ship_it", "Ship It", true, "2026-01-01T10:00:00Z");
+        let u = st
+            .store
+            .insert_unlock(&rpg_core::store::NewUnlock { rule_id: "quest-ach".into(), name: "Quester".into(), tier: "bronze".into(), xp: 250, context: json!({}), ts: Utc::now() })
+            .unwrap();
+        st.store.add_xp(&eid, 250, "Quester", Some(u), Utc::now()).unwrap();
+        let v = get_json(&st, "/api/events").await;
+        assert_eq!(v[0]["quest_xp"], 750);
+        assert_eq!(v[0]["achievements"], json!([{ "name": "Quester", "xp": 250, "tier": "bronze" }]));
+    }
+
+    #[tokio::test]
+    async fn disabled_quest_shown_off() {
+        let st = state_with(quest_rules("enabled = false
+"));
+        let v = get_json(&st, "/api/quests").await;
+        assert_eq!((v["board"][0]["enabled"].clone(), v["board"][1]["enabled"].clone()), (json!(true), json!(false)));
+    }
+
+    #[test]
+    fn quests_section_hidden_when_off_and_styled_per_tier() {
+        let html = include_str!("../../../ui/site/index.html");
+        assert!(html.contains("id=\"quests\""), "index.html lacks the quests section");
+        let js = include_str!("../../../ui/site/site.js");
+        assert!(js.contains("/api/quests") && js.contains("enabled"), "site.js doesn't load quests");
+        assert!(SITE_CSS.contains(".qlog"), "site.css lacks quest log styles");
+    }
+
     const OVERLAY_CSS: &str = include_str!("../../../ui/overlay/overlay.css");
     const SITE_CSS: &str = include_str!("../../../ui/site/site.css");
     const SETTINGS_CSS: &str = include_str!("../../../ui/settings/settings.css");
@@ -714,9 +950,9 @@ fallback = "A skill, levelled."
     }
 
     #[test]
-    fn settings_page_has_four_sections_and_invokes_known_commands() {
+    fn settings_page_has_five_sections_and_invokes_known_commands() {
         let html = include_str!("../../../ui/settings/index.html");
-        for section in ["notifications", "sounds", "integrations", "repos"] {
+        for section in ["notifications", "sounds", "integrations", "quests", "repos"] {
             assert!(html.contains(&format!("data-section=\"{section}\"")), "no section {section:?}");
         }
         let js = include_str!("../../../ui/settings/settings.js");
@@ -725,6 +961,18 @@ fallback = "A skill, levelled."
             "settings_preview_sound", "settings_open_sounds_folder", "settings_open_config_file", "settings-changed",
         ] {
             assert!(js.contains(name), "settings.js never uses {name}");
+        }
+        // Every key the section saves is one config_edit accepts (its tests cover validation).
+        for (key, value) in [
+            ("quests.enabled", serde_json::json!(false)),
+            ("quests.offer_seconds", serde_json::json!(10)),
+            ("quests.max_passes", serde_json::json!(1)),
+            ("quests.chain_step", serde_json::json!(0.5)),
+            ("quests.chain_max", serde_json::json!(1)),
+            ("quests.min_gap_minutes", serde_json::json!(0)),
+        ] {
+            assert!(js.contains(&format!("\"{key}\"")), "settings.js never saves {key}");
+            assert!(rpg_core::config_edit::apply_edit("", key, &value).is_ok(), "{key} is not a settable key");
         }
     }
 

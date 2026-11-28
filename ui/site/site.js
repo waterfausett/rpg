@@ -53,11 +53,12 @@
       li.style.setProperty("--tier", tierVar(top));
     }
     // Base exp here; achievement exp rides on its own badge, so the row adds up to ev.xp.
-    const base = ev.base_xp !== undefined ? ev.base_xp : ev.xp;
+    // A quest event's reward is its own exp (quest_xp), shown in this column.
+    const base = (ev.base_xp !== undefined ? ev.base_xp : ev.xp) + (ev.quest_xp || 0);
     const xp = el("span", "xp" + (base ? "" : " zero"), base ? "+" + num(base) + " exp" : achs.length ? "" : "no exp");
     xp.title = "Total: " + num(ev.xp) + " exp";
     li.appendChild(xp);
-    const kind = el("span", "kind", ev.kind + (ev.backfill ? " (history)" : ""));
+    const kind = el("span", "kind", (ev.label || ev.kind) + (ev.backfill ? " (history)" : ""));
     achs.forEach((a) => {
       const b = el("span", "achbadge", "★ " + a.name + " +" + num(a.xp));
       b.style.setProperty("--tier", tierVar(a.tier));
@@ -189,6 +190,51 @@
     left.textContent = hidden === 1 ? "1 hidden achievement remains" : hidden + " hidden achievements remain";
   }
 
+  const pct = (x) => Math.round(x * 1000) / 10 + "%";
+
+  // The Quests section is hidden entirely when quests are switched off.
+  async function loadQuests() {
+    const q = await api("/api/quests");
+    const sec = $("quests");
+    sec.hidden = !q.enabled;
+    if (!q.enabled) return;
+    const totals = $("questtotals");
+    totals.replaceChildren();
+    [[q.chain, "Chain"], ["×" + q.multiplier, "Multiplier"], [q.best_chain, "Best chain"],
+     [q.completed, "Completed"], [q.failed, "Failed"]].forEach(([v, label]) => {
+      const s = el("div", "stat");
+      s.appendChild(el("b", null, v));
+      s.appendChild(el("span", null, label));
+      totals.appendChild(s);
+    });
+    const log = $("questlog");
+    log.replaceChildren();
+    if (!q.log.length) log.appendChild(el("li", "empty", "No quests resolved yet."));
+    q.log.forEach((r) => {
+      const done = r.status === "completed";
+      const li = el("li", "qrow " + (done ? "done" : "lost"));
+      li.style.setProperty("--tier", tierVar(r.tier));
+      li.appendChild(el("span", "qres", done ? "Completed" : "Failed"));
+      li.appendChild(el("span", "qname", r.name));
+      li.appendChild(el("span", "qdetail", done ? "+" + num(r.reward) + " exp" : "chain lost: " + num(r.chain_lost)));
+      const when = el("span", "when", ago(r.ts));
+      when.title = r.ts || "";
+      li.appendChild(when);
+      log.appendChild(li);
+    });
+    const board = $("questboard");
+    board.replaceChildren();
+    q.board.forEach((b) => {
+      const card = el("div", "ach quest t-" + (TIERS.includes(b.tier) ? b.tier : "gold") + (b.completions ? " unlocked" : " locked"));
+      card.appendChild(el("div", "tier " + b.tier, b.tier));
+      card.appendChild(el("div", "name", b.name));
+      if (!b.enabled) card.appendChild(el("span", "off", "off"));
+      if (b.hint) card.appendChild(el("div", "desc", b.hint));
+      card.appendChild(el("div", "meta", pct(b.chance) + " chance · " + b.minutes + " min · done " + b.completions + "x"));
+      board.appendChild(card);
+    });
+  }
+
   let currentKind = "";
 
   async function loadEvents() {
@@ -199,7 +245,7 @@
     fill($("eventlog"), rows, "No events.");
   }
 
-  const loaders = { character: loadCharacter, achievements: loadAchievements, events: loadEvents };
+  const loaders = { character: loadCharacter, achievements: () => Promise.all([loadAchievements(), loadQuests().catch((e) => console.error(e))]), events: loadEvents };
   let current = "character";
 
   function show(tab) {
@@ -226,6 +272,7 @@
     loadEvents().catch((e) => console.error(e));
   }));
   loadAchievements().catch(() => {});
+  loadQuests().catch(() => {});
   refresh();
   setInterval(refresh, 5000);
 })();

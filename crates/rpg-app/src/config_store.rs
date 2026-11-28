@@ -179,6 +179,21 @@ mod tests {
     }
 
     #[test]
+    fn quests_settings_reach_the_live_config() {
+        // The runtime reads `cfg.quests` on every offer, pass and deadline check.
+        let f = fx();
+        f.store.set("quests.enabled", &json!(false)).unwrap();
+        f.store.set("quests.chain_step", &json!(0.25)).unwrap();
+        f.store.set("quests.offer_seconds", &json!(90)).unwrap();
+        let q = f.cfg.read().unwrap().quests.clone();
+        assert!(!q.enabled);
+        assert_eq!((q.chain_step, q.offer_seconds), (0.25, 90));
+        assert!(f.store.set("quests.max_passes", &json!(0)).is_err());
+        assert_eq!(f.cfg.read().unwrap().quests.max_passes, 3, "a rejected value changes nothing");
+        assert_eq!(f.changes.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
     fn own_write_is_not_an_external_change() {
         let f = fx();
         f.store.set("sound.volume", &json!(0.3)).unwrap();

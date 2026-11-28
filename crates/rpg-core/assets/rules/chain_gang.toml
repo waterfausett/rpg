@@ -1,0 +1,9 @@
+id = "chain_gang"
+name = "Chain Gang"
+tier = "gold"
+trigger = ["quest_completed"]
+filter = { chain = { min = 5, max = 5 } }
+repeatable = true
+hint = "Finish quest after quest without dropping one."
+fallback = "Five quests in a row, no fumbles. The chain is long, heavy and entirely your own doing."
+flavor = { type = "llm", prompt = "Rewrite this achievement announcement for this specific unlock, in the same voice: \"{fallback}\". Use the concrete details. Context: {context}" }

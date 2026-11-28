@@ -78,6 +78,10 @@ const COVERED: &[&str] = &[
     "palindrome",
     "hash_brown",
     "lucky_sevens",
+    // quests
+    "quest_givers_pet",
+    "chain_gang",
+    "fumble",
     // merge conflicts
     "conflict_resolution",
     "diamond_cutter",
@@ -1124,6 +1128,52 @@ fn typical_day_has_at_most_two_banners() {
     for id in ["surgical_strike", "polyglot", "the_novelist", "famous_last_words", "marathon", "full_combo", "speed_run", "codependent"] {
         assert!(unlocks.iter().any(|(u, a)| u == id && *a == Announce::Toast), "{id} as a toast: {unlocks:?}");
     }
+}
+
+// quests
+
+fn quest_done(ts: &str, chain: u64) -> Event {
+    let mut e = ev(EventKind::QuestCompleted, ts, json!({"quest_id": "hot_streak", "tier": "bronze", "chain": chain, "multiplier": 1.0, "xp": 125}));
+    e.source = Source::Quest;
+    e
+}
+
+fn quest_lost(ts: &str) -> Event {
+    let mut e = ev(EventKind::QuestFailed, ts, json!({"quest_id": "hot_streak", "tier": "bronze", "chain_lost": 1}));
+    e.source = Source::Quest;
+    e
+}
+
+#[test]
+fn quest_givers_pet() {
+    let r = starter();
+    let h = many(9, |_| quest_done("2026-11-23T10:00:00Z", 1));
+    let next = quest_done("2026-11-24T10:00:00Z", 1);
+    assert!(fires_seeded(&r, &h, &[], next.clone(), "quest_givers_pet.bronze"));
+    assert!(!fires_seeded(&r, &h[..8], &[], next, "quest_givers_pet.bronze"));
+}
+
+#[test]
+fn chain_gang() {
+    let r = starter();
+    assert!(fires(&r, &[], quest_done("2026-11-24T10:00:00Z", 5), "chain_gang"));
+    assert!(!fires(&r, &[], quest_done("2026-11-24T10:00:00Z", 4), "chain_gang"));
+    // Once per run that reaches 5: the completions after it don't fire again.
+    assert!(!fires(&r, &[], quest_done("2026-11-24T10:00:00Z", 6), "chain_gang"));
+    let run = [quest_done("2026-11-24T09:00:00Z", 5)];
+    assert!(!fires(&r, &run, quest_done("2026-11-24T10:00:00Z", 6), "chain_gang"));
+}
+
+#[test]
+fn fumble() {
+    let r = starter();
+    let h = [quest_lost("2026-11-24T10:00:00Z"), quest_lost("2026-11-24T11:00:00Z")];
+    assert!(fires(&r, &h, quest_lost("2026-11-24T12:00:00Z"), "fumble"));
+    // Only two failures in the day: not yet.
+    assert!(!fires(&r, &h[..1], quest_lost("2026-11-24T12:00:00Z"), "fumble"));
+    // Three failures spread over two days don't count.
+    let split = [quest_lost("2026-11-23T10:00:00Z"), quest_lost("2026-11-24T11:00:00Z")];
+    assert!(!fires(&r, &split, quest_lost("2026-11-24T12:00:00Z"), "fumble"));
 }
 
 /// A resolved merge conflict with `n` conflicted files.

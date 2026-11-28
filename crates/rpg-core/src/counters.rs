@@ -339,7 +339,7 @@ fn github_key(e: &Event) -> Option<&str> {
     match e.kind {
         EventKind::Commit | EventKind::MergeConflictResolved | EventKind::Push => e.data["github_repo"].as_str(),
         EventKind::PrOpened | EventKind::PrMerged | EventKind::ReviewSubmitted => e.repo.as_deref(),
-        EventKind::ClaudeSessionStart | EventKind::ClaudeSessionEnd => None,
+        EventKind::ClaudeSessionStart | EventKind::ClaudeSessionEnd | EventKind::QuestCompleted | EventKind::QuestFailed => None,
     }
     .filter(|k| !k.is_empty())
 }
