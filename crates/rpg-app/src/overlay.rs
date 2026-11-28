@@ -225,10 +225,9 @@ fn build_window(
         .focused(false)
         .focusable(false)
         .shadow(false)
-        .visible(false);
-    // macOS transparency needs tauri's `macos-private-api` feature (#4).
-    #[cfg(not(target_os = "macos"))]
-    let builder = builder.transparent(true);
+        .visible(false)
+        // On macOS this needs `app.macOSPrivateApi` and tauri's `macos-private-api` feature.
+        .transparent(true);
     let win = builder.build()?;
     if let Err(e) = platform::make_non_activating(&win) {
         log(paths, &format!("{label}: could not make non-activating: {e:#}"));
