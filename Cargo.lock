@@ -4051,6 +4051,7 @@ dependencies = [
  "fastrand",
  "http-body-util",
  "notify",
+ "objc2-app-kit",
  "rodio",
  "rpg-core",
  "rust-embed",
