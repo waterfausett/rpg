@@ -240,41 +240,48 @@ pub fn offer_for(
     let completable = |q: &QuestDef| {
         !q.has_github_step() || (cfg.github.enabled && (!matches!(q.same, Some(Same::Repo | Same::Branch)) || knows_github_repo))
     };
+    // Every candidate rolls its own `chance`, so file order doesn't matter; when several hit,
+    // one more roll picks among them.
+    let mut hits = Vec::new();
     for def in quests.iter().filter(|q| q.enabled && q.trigger.contains(&ev.kind) && q.filter.matches(ev, tz) && completable(q)) {
         if let Some(last) = meta_time(store, &last_offer_key(&def.id))? {
             if now < last + Duration::hours(def.cooldown_hours as i64) {
                 continue;
             }
         }
-        if roll() >= def.chance {
-            continue;
+        if roll() < def.chance {
+            hits.push(def);
         }
-        let stamp = now.to_rfc3339();
-        store.meta_set(QUEST_LAST_OFFER, &stamp)?;
-        store.meta_set(&last_offer_key(&def.id), &stamp)?;
-        let ch = chain(store)?;
-        let mult = multiplier(ch.n, &cfg.quests);
-        return Ok(Some(Offer {
-            quest_id: def.id.clone(),
-            name: def.name.clone(),
-            tier: def.tier,
-            fallback: def.fallback.clone(),
-            flavor: def.flavor.clone(),
-            minutes: def.minutes,
-            step_labels: def.steps.iter().map(|s| s.label.clone()).collect(),
-            xp: def.xp,
-            multiplier: mult,
-            next_multiplier: multiplier(ch.n + 1, &cfg.quests),
-            reward: reward(def.xp, mult),
-            passes: ch.passes,
-            max_passes: cfg.quests.max_passes,
-            has_github_step: def.has_github_step(),
-            trigger: ev.clone(),
-            binding: bind(def.same, ev),
-            steps: def.steps.clone(),
-        }));
     }
-    Ok(None)
+    let def = match hits.len() {
+        0 => return Ok(None),
+        1 => hits[0],
+        n => hits[((roll() * n as f64) as usize).min(n - 1)],
+    };
+    let stamp = now.to_rfc3339();
+    store.meta_set(QUEST_LAST_OFFER, &stamp)?;
+    store.meta_set(&last_offer_key(&def.id), &stamp)?;
+    let ch = chain(store)?;
+    let mult = multiplier(ch.n, &cfg.quests);
+    Ok(Some(Offer {
+        quest_id: def.id.clone(),
+        name: def.name.clone(),
+        tier: def.tier,
+        fallback: def.fallback.clone(),
+        flavor: def.flavor.clone(),
+        minutes: def.minutes,
+        step_labels: def.steps.iter().map(|s| s.label.clone()).collect(),
+        xp: def.xp,
+        multiplier: mult,
+        next_multiplier: multiplier(ch.n + 1, &cfg.quests),
+        reward: reward(def.xp, mult),
+        passes: ch.passes,
+        max_passes: cfg.quests.max_passes,
+        has_github_step: def.has_github_step(),
+        trigger: ev.clone(),
+        binding: bind(def.same, ev),
+        steps: def.steps.clone(),
+    }))
 }
 
 /// Start `offer`'s quest now: passes reset to 0 and the deadline is `minutes` from `now`.
@@ -506,6 +513,32 @@ mod tests {
         let e = ev(EventKind::Commit, "r", mins(0), json!({}));
         assert!(offer_for(&store, &half, &cfg, &e, t0(), tz(), &mut || 0.7).unwrap().is_none(), "roll misses");
         assert!(offer_for(&store, &half, &cfg, &e, t0(), tz(), &mut || 0.3).unwrap().is_some(), "a miss starts no gap");
+    }
+
+    /// Each candidate rolls its own `chance`; when several hit, one more roll picks among them.
+    #[test]
+    fn offer_rolls_are_independent_of_file_order() {
+        let named = |id: &str, chance: f64| {
+            let mut d = easy(chance);
+            d.id = id.into();
+            d
+        };
+        let quests = [named("first", 1.0), named("second", 0.5)];
+        let cfg = no_gap();
+        let e = ev(EventKind::Commit, "r", mins(0), json!({}));
+        let pick = |rolls: &[f64]| {
+            let store = Store::open_in_memory().unwrap();
+            let mut it = rolls.to_vec().into_iter();
+            offer_for(&store, &quests, &cfg, &e, t0(), tz(), &mut || it.next().expect("one roll too many")).unwrap().map(|o| o.quest_id)
+        };
+        // A sure thing earlier in the order does not stop a later quest from rolling.
+        assert_eq!(pick(&[0.0, 0.2, 0.75]).as_deref(), Some("second"), "both hit; the pick roll chooses the second");
+        assert_eq!(pick(&[0.0, 0.2, 0.25]).as_deref(), Some("first"), "both hit; the pick roll chooses the first");
+        assert_eq!(pick(&[0.0, 0.9]).as_deref(), Some("first"), "only one hit: no pick roll");
+        let halves = [named("a", 0.5), named("b", 0.5)];
+        let store = Store::open_in_memory().unwrap();
+        let mut it = [0.6, 0.7].into_iter();
+        assert!(offer_for(&store, &halves, &cfg, &e, t0(), tz(), &mut || it.next().unwrap()).unwrap().is_none(), "every roll misses");
     }
 
     #[test]

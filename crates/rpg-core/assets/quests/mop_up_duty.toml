@@ -3,7 +3,7 @@ name = "Mop-Up Duty"
 tier = "silver"
 trigger = ["commit"]
 filter = { lines = { min = 300 } }
-chance = 0.15
+chance = 0.10
 cooldown_hours = 24
 minutes = 30
 same = "repo"

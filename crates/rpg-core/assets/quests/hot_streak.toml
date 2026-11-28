@@ -2,7 +2,7 @@ id = "hot_streak"
 name = "Hot Streak"
 tier = "bronze"
 trigger = ["commit"]
-chance = 0.10
+chance = 0.05
 cooldown_hours = 12
 minutes = 30
 steps = [{ kind = "commit", count = 4 }]

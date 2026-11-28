@@ -3,7 +3,7 @@ name = "Friday Gambit"
 tier = "legendary"
 trigger = ["commit"]
 filter = { weekdays = ["fri"], hours = { start = 15, end = 24 } }
-chance = 0.05
+chance = 0.04
 cooldown_hours = 48
 minutes = 60
 same = "repo"

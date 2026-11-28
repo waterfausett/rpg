@@ -9,7 +9,7 @@ Quest files are TOML, like rules. This page is the format reference. For the eve
 - An offer comes only from a **live** event: not backfill, not part of the startup "while you were away" batch, and not older than 5 minutes (for a GitHub event, `poll_minutes` + 5 minutes, since the poll finds it late). Never while Do not disturb is on or quests are off.
 - A quest with a GitHub step (`pr_opened`, `pr_merged`, `review_submitted`) is never offered while `[github] enabled = false`. With `same = "repo"` or `"branch"`, it is also not offered for a trigger in a repo with no GitHub remote, since its PR events could never match.
 - At most one offer or active quest exists at a time.
-- For one event, the quests whose `trigger` and `filter` match, whose own `cooldown_hours` and the global `min_gap_minutes` have passed, roll their `chance` in filename order. The first that hits is offered.
+- For one event, the quests whose `trigger` and `filter` match, whose own `cooldown_hours` and the global `min_gap_minutes` have passed, each roll their own `chance`, so file order doesn't matter. If more than one hits, one of those is picked at random and offered. Keep `chance` low on quests triggered by commits: every commit rolls.
 - **Accept** starts the deadline at that moment and resets the pass count. **Pass**, or letting the offer run out (`offer_seconds`), counts as a pass. After `max_passes` passes in a row the chain resets.
 - Steps are done in order. A step is credited by an event of its `kind` that matches its `filter`, with a time between accepting and the deadline, and only after the previous step is complete. It needs `count` such events. Deadlines go by **event time**: a PR merged at 0:58 counts even if the poll finds it at 1:03.
 - **Completed:** the reward is `floor(exp * multiplier)`, then the chain goes up one. A `quest_completed` event is recorded.
@@ -33,7 +33,7 @@ name = "Ship It (Speedrun)"
 tier = "gold"
 trigger = ["commit"]
 filter = { }                 # optional, rule filter syntax
-chance = 0.10
+chance = 0.04
 cooldown_hours = 24
 minutes = 15
 same = "repo"
@@ -52,7 +52,7 @@ fallback = "You committed. Bold. Now finish the job before your nerve runs out."
 | `tier` | string | yes | `bronze`, `silver`, `gold`, `platinum`, `legendary` or `celestial`. Drives the default exp and the look of the banner. |
 | `trigger` | list of kinds | yes | Event kinds that can raise the offer. Not empty, and never `quest_completed` or `quest_failed`. |
 | `filter` | table | no | Which trigger events count. Same filters as rules; it must be able to match every `trigger` kind. |
-| `chance` | number | yes | Probability that a matching live event raises the offer. Above 0, at most 1. |
+| `chance` | number | yes | Probability that a matching live event raises the offer, rolled per event and per quest. Above 0, at most 1. |
 | `cooldown_hours` | integer | no, default 0 | Minimum hours between offers of this quest. |
 | `minutes` | integer | yes | Time limit after accepting. At least 1. |
 | `same` | string | no | Ties the steps to the triggering event. See below. |
@@ -91,7 +91,7 @@ id = "hot_streak"
 name = "Hot Streak"
 tier = "bronze"
 trigger = ["commit"]
-chance = 0.10
+chance = 0.05
 cooldown_hours = 12
 minutes = 30
 steps = [{ kind = "commit", count = 4 }]
