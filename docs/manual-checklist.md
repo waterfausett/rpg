@@ -65,7 +65,7 @@ Use a quest file with `chance = 1.0` (and `cooldown_hours = 0`, `min_gap_minutes
 ### Offer banner
 - [ ] One offer per tier (bronze to celestial) has a crimson border and dark crimson radial background, warmed slightly by the tier. The header `◆ GOLD QUEST OFFERED ◆` is in the tier color and the glow grows with the tier.
 - [ ] Gold and up: bigger pop and a flash. Platinum and up: light sweep. Legendary and up: pulsing glow behind the banner. Celestial: star field and aurora name.
-- [ ] The name, the 2-line text, the goal line (`<steps> · 15 min · 400 exp × 1.5 = 600`), the Accept (filled) and Pass (outline) buttons and the stakes line all fit inside the 540x200 frame with nothing cut off. Try a long LLM text and a 3-step goal.
+- [ ] The name, the text, the goal line (`<steps> · 15 min · 400 exp × 1.5 = 600`), the Accept (filled) and Pass (outline) buttons and the stakes line all fit with nothing cut off. The frame is 540 wide and grows from 200 to 320 tall with the text (up to 5 lines, then "…"). Try a long name, a long LLM text and a 3-step goal; clicks just below a short frame reach the window underneath, and the legendary pulse matches the frame's height.
 - [ ] Stakes copy at passes 0, 1 and 2: "3 more passes breaks it", "2 more passes breaks it", "passing breaks it".
 - [ ] The fuse along the bottom edge shrinks right to left over `offer_seconds` (set about 10 to check), with a flickering spark at the tip and smoke puffs.
 - [ ] Ignore: the fuse running out exits normally and counts as a pass.
@@ -82,9 +82,9 @@ Use a quest file with `chance = 1.0` (and `cooldown_hours = 0`, `min_gap_minutes
 - [ ] Clicking the pill widens it into the card (steps ✓ and ▸, a draining bar, the exp and "chain ×M at stake"). Clicking it again closes it.
 - [ ] Clicking anywhere else (the desktop or another app) collapses the card, and the terminal gets keyboard focus back after you click into it.
 - [ ] The toast window never appears in the taskbar or Alt-Tab while the card is open.
-- [ ] Completing a step fills its dot and moves ▸ to the next step.
+- [ ] Completing a step fills its dot and moves ▸ to the next step. A counted step shows its progress in the card (`Commit 1/2`).
 - [ ] Under 2 minutes left, the pill pulses red.
-- [ ] A GitHub step still open at the deadline shows "checking GitHub…" instead of the time, then the quest resolves.
+- [ ] A GitHub step still open at the deadline shows "checking GitHub…" instead of the time (the pill widens and drops its dots so the name stays readable), then the quest resolves.
 - [ ] Complete a quest (ideally at gold, platinum and legendary): the pill takes the tier's color, border and glow (a sweep from platinum, a gradient border from legendary) and reads "Quest complete! +N". It fades after about 3.5 s, then clicks pass through everywhere. Any level-up or achievement it caused announces as usual.
 - [ ] Let one expire: the pill turns grey with a struck-through `0:00`, shakes, reads "Quest failed · chain lost" and fades.
 - [ ] With reduced motion: no pop or shake, the hurry state is a steady red glow, and pills fade out.

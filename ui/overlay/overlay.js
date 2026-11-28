@@ -143,7 +143,7 @@
       const done = s.have >= s.need;
       const dot = document.createElement("i");
       const li = document.createElement("li");
-      li.textContent = s.label;
+      li.textContent = s.need > 1 ? s.label + " " + Math.min(s.have, s.need) + "/" + s.need : s.label;
       if (done) { dot.className = "done"; li.className = "done"; }
       else if (next) { li.className = "next"; next = false; }
       dots.appendChild(dot);
@@ -193,6 +193,7 @@
     pill.deadline = q.deadline_ms;
     if (isLive(q.status)) {
       pill.status = q.status;
+      pill.el.classList.toggle("checking", q.status === "checking");
       if (q.status === "checking") {
         pill.el.classList.remove("hurry");
         pill.el.querySelector(".tm").textContent = "checking GitHub…";
@@ -200,6 +201,7 @@
         tickPill();
       }
     } else {
+      pill.el.classList.remove("checking");
       endPill(q);
     }
     reportRect();
@@ -225,6 +227,15 @@
   function stopFuse() {
     if (offer && offer.raf) cancelAnimationFrame(offer.raf);
     $("banner").querySelectorAll(".smoke").forEach((s) => s.remove());
+  }
+
+  // The frame grows with its text: tell the app where it is (for click-through) and size the
+  // glow layer to match. Offsets ignore the entry/exit transforms.
+  function reportBanner() {
+    if (current === null) return;
+    const el = $("banner");
+    $("pulse").style.setProperty("--bh", el.offsetHeight + "px");
+    ev.emit("banner-rect", { id: current, rect: { x: el.offsetLeft, y: el.offsetTop, w: el.offsetWidth, h: el.offsetHeight } });
   }
 
   // Back to the empty, hidden banner.
@@ -331,6 +342,7 @@
     el.className = bannerClass();
     void el.offsetWidth; // restart the animation
     el.className = bannerClass("in");
+    reportBanner();
     const pulse = $("pulse"); // glow layer for the rarest tiers
     pulse.dataset.tier = b.tier || "";
     pulse.classList.add("on");
@@ -373,6 +385,7 @@
         if (!hovering) timers.push(setTimeout(() => dismiss(id), HOVER_GRACE_MS));
         ev.emit("banner-hover", { id: id, hovering: hovering });
       };
+      new ResizeObserver(() => reportBanner()).observe(banner); // e.g. a late web font
       banner.addEventListener("mouseenter", () => hover(true));
       banner.addEventListener("mouseleave", () => hover(false));
       await ev.listen("banner", (e) => showBanner(e.payload));

@@ -35,7 +35,9 @@ body { user-select: none; -webkit-user-select: none; }
 .qp .more > div { overflow: hidden; padding: 0 14px; }
 .qp.open { --w: 300px; border-radius: 12px; }
 .qp.open .more { grid-template-rows: 1fr; }
-.qp.open .dots { display: none; }
+.qp:is(.open, .checking) .dots { display: none; }
+/* "checking GitHub…" is wider than a countdown: make room so the name keeps some. */
+.qp.checking { --w: 300px; }
 .qp ul { list-style: none; padding: 0; margin: 2px 0 8px; }
 .qp li { padding: 2px 0; opacity: .6; }
 .qp li.done { opacity: 1; }
@@ -108,8 +110,9 @@ body { user-select: none; -webkit-user-select: none; }
    One frame for every tier; --tier colors it, --tint warms the gradient center and
    the glow grows with rarity. No tier (the summary banner) keeps the plain gold look. */
 .ach-b { --tier: var(--gold); --tint: #4a3500; --glow: 18px; --glow-a: 33%;
-         /* inset leaves room in the window for the full glow; keep in sync with BANNER_INSET in overlay.rs */
-         position: fixed; inset: 40px; box-sizing: border-box; display: flex; flex-direction: column;
+         /* inset leaves room in the window for the full glow; keep in sync with BANNER_INSET in overlay.rs.
+            The frame grows with its text; the window fits the tallest (BANNER_SIZE). */
+         position: fixed; inset: 40px 40px auto; min-height: 200px; max-height: 320px; box-sizing: border-box; display: flex; flex-direction: column;
          justify-content: center; background: radial-gradient(circle at 50% 0%, var(--tint), #140e00 70%);
          border: 2px solid var(--tier); color: #fff3cf; text-align: center; padding: 16px 22px; border-radius: 12px;
          font-family: Georgia, serif; cursor: pointer; overflow: hidden;
@@ -136,7 +139,7 @@ body { user-select: none; -webkit-user-select: none; }
   box-shadow: 0 0 var(--glow) color-mix(in srgb, var(--q) var(--glow-a), transparent),
               inset 0 0 calc(var(--glow) * .6) color-mix(in srgb, var(--tier) 40%, transparent); }
 .ach-b.quest-b .name { margin: 4px 0; text-shadow: 0 0 12px var(--q); }
-.ach-b.quest-b .desc { -webkit-line-clamp: 2; }
+.ach-b.quest-b .desc { -webkit-line-clamp: 5; }
 .ach-b.quest-b .rew { display: none; }
 .ach-b.quest-b .goal { display: block; margin-top: 8px; font: 13px system-ui, sans-serif; }
 .ach-b.quest-b .goal b { color: var(--q2); }
@@ -198,7 +201,8 @@ body { user-select: none; -webkit-user-select: none; }
 @keyframes tier-bloom { 30% { filter: brightness(1.7); } }
 /* The pulsing glow lives on its own layer behind the banner and animates opacity only: animating a big
    box-shadow's blur on the banner itself repaints every frame and visibly stutters. */
-.ach-pulse { position: fixed; inset: 40px; pointer-events: none; opacity: 0; transition: opacity .4s ease-out; }
+/* Matches the frame: the page sets --bh to its height. */
+.ach-pulse { position: fixed; inset: 40px 40px auto; height: var(--bh, 200px); pointer-events: none; opacity: 0; transition: opacity .4s ease-out; }
 .ach-pulse.on { opacity: 1; }
 .ach-pulse::before { content: ""; position: absolute; inset: 0; border-radius: 12px; opacity: 0; will-change: opacity;
   box-shadow: 0 0 60px 6px var(--tier); }

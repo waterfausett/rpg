@@ -21,9 +21,12 @@ use tauri::{AppHandle, Emitter, Listener, Manager, PhysicalPosition, WebviewUrl,
 const TOAST: &str = "toast";
 const BANNER: &str = "banner";
 const TOAST_SIZE: (f64, f64) = (360.0, 400.0);
-/// The banner frame is 540x200; the window adds BANNER_INSET on every side so the
-/// tier glow (up to 32px, plus the flash) is not cut off at the window edge.
-const BANNER_SIZE: (f64, f64) = (620.0, 280.0);
+/// The banner frame is 540 wide and grows with its text from 200 to 320 tall (CSS
+/// `min-height` / `max-height`); the window fits the tallest frame plus BANNER_INSET on every
+/// side so the tier glow (up to 32px, plus the flash) is not cut off at the window edge.
+const BANNER_SIZE: (f64, f64) = (620.0, 400.0);
+/// The frame before the page reports its real rect (`banner-rect`): the smallest one.
+const BANNER_FRAME: Rect = Rect { x: BANNER_INSET, y: BANNER_INSET, w: 540.0, h: 200.0 };
 /// Must match the `.ach-b` `inset` in `ui/overlay/overlay.css`.
 const BANNER_INSET: f64 = 40.0;
 // Room for the strongest glow (32px) on every side of the frame.
@@ -112,13 +115,20 @@ struct StepPayload {
     need: u32,
 }
 
-/// Where the toast page drew the pill (CSS pixels from the window's top-left), from `quest-pill-rect`.
+/// Where a page drew the quest pill (`quest-pill-rect`) or the banner frame (`banner-rect`),
+/// in CSS pixels from the window's top-left.
 #[derive(Deserialize, Debug, Clone, Copy, PartialEq)]
-struct PillRect {
+struct Rect {
     x: f64,
     y: f64,
     w: f64,
     h: f64,
+}
+
+#[derive(Deserialize)]
+struct BannerRectPayload {
+    id: u64,
+    rect: Rect,
 }
 
 #[derive(Deserialize)]
@@ -167,11 +177,13 @@ struct Flow {
     /// after an ending (completed / failed / cancelled). While set, the toast window stays up.
     quest: Option<QuestPayload>,
     /// The pill's last reported rect (`None`: no pill on the page).
-    pill_rect: Option<PillRect>,
+    pill_rect: Option<Rect>,
     /// The thread that lets clicks reach the pill is running.
     pill_polling: bool,
     /// The pointer is on the current banner (it stays up while this is set).
     banner_hovered: bool,
+    /// The current banner's frame, as its page last reported it (`None`: not yet).
+    banner_rect: Option<Rect>,
 }
 
 impl Flow {
@@ -253,6 +265,16 @@ impl OverlaySink {
             }
         });
 
+        // The banner frame grows with its text: the page reports where it ended up.
+        let i = inner.clone();
+        app.listen_any("banner-rect", move |e| {
+            let Ok(p) = serde_json::from_str::<BannerRectPayload>(e.payload()) else { return };
+            let mut f = i.flow();
+            if f.current_id() == Some(p.id) {
+                f.banner_rect = Some(p.rect);
+            }
+        });
+
         // Accept / Pass / the fuse ran out. The page then plays its exit and sends `banner-done`.
         let i = inner.clone();
         app.listen_any("quest-answer", move |e| {
@@ -274,7 +296,7 @@ impl OverlaySink {
         // The toast page reports the pill's rect after every layout change, `null` once it is gone.
         let i = inner.clone();
         app.listen_any("quest-pill-rect", move |e| {
-            let Ok(rect) = serde_json::from_str::<Option<PillRect>>(e.payload()) else { return };
+            let Ok(rect) = serde_json::from_str::<Option<Rect>>(e.payload()) else { return };
             let mut f = i.flow();
             f.pill_rect = rect;
             // Gone after its ending: the window may hide. (Gone while the latest update is
@@ -574,9 +596,9 @@ fn emit_quest(inner: &Inner, q: QuestPayload) {
     }
 }
 
-/// Whether `cursor` is over the pill drawn at `rect` (CSS pixels) in a toast window at
-/// `win` (cursor and window in physical desktop pixels) on a display with `scale`.
-fn over_pill(cursor: (f64, f64), win: (f64, f64), scale: f64, rect: &PillRect) -> bool {
+/// Whether `cursor` is over `rect` (CSS pixels: the quest pill, or the banner frame) in a
+/// window at `win` (cursor and window in physical desktop pixels) on a display with `scale`.
+fn over_rect(cursor: (f64, f64), win: (f64, f64), scale: f64, rect: &Rect) -> bool {
     let (x, y) = ((cursor.0 - win.0) / scale, (cursor.1 - win.1) / scale);
     (rect.x..rect.x + rect.w).contains(&x) && (rect.y..rect.y + rect.h).contains(&y)
 }
@@ -602,7 +624,7 @@ fn pass_clicks_outside_pill(inner: &Arc<Inner>) {
             f.pill_rect
         };
         let over = rect.is_some_and(|r| match (inner.app.cursor_position(), win.outer_position(), win.scale_factor()) {
-            (Ok(c), Ok(p), Ok(s)) => over_pill((c.x, c.y), (p.x as f64, p.y as f64), s, &r),
+            (Ok(c), Ok(p), Ok(s)) => over_rect((c.x, c.y), (p.x as f64, p.y as f64), s, &r),
             _ => true, // can't tell: keep the pill clickable
         });
         if ignoring != Some(!over) {
@@ -659,6 +681,7 @@ fn show_banner(inner: &Arc<Inner>, id: u64, mut b: Banner) {
             log(&inner.state.paths, &format!("emitting banner failed: {e}"));
         }
         f.banner_hovered = false;
+        f.banner_rect = None;
         f.current = Some(Current { id, shown: Some(b), offer: offer_id, answered: false });
     }
     let i = inner.clone();
@@ -688,12 +711,6 @@ fn show_banner(inner: &Arc<Inner>, id: u64, mut b: Banner) {
     finish_banner(inner, id);
 }
 
-/// Whether `cursor` is over the banner frame of a banner window at `win` (both in
-/// physical desktop pixels) on a display with `scale`. The glow margin around the frame isn't.
-fn over_banner(cursor: (f64, f64), win: (f64, f64), scale: f64) -> bool {
-    let (x, y) = ((cursor.0 - win.0) / scale, (cursor.1 - win.1) / scale);
-    (BANNER_INSET..BANNER_SIZE.0 - BANNER_INSET).contains(&x) && (BANNER_INSET..BANNER_SIZE.1 - BANNER_INSET).contains(&y)
-}
 
 /// While banner `id` shows, let clicks on its transparent glow margin through to the
 /// window underneath and keep the frame itself clickable. A window only ignores the
@@ -702,8 +719,9 @@ fn pass_clicks_outside_banner(inner: &Arc<Inner>, id: u64) {
     let Some(win) = inner.window(BANNER) else { return };
     let mut ignoring = None;
     while inner.flow().current_id() == Some(id) {
+        let frame = inner.flow().banner_rect.unwrap_or(BANNER_FRAME);
         let over = match (inner.app.cursor_position(), win.outer_position(), win.scale_factor()) {
-            (Ok(c), Ok(p), Ok(s)) => over_banner((c.x, c.y), (p.x as f64, p.y as f64), s),
+            (Ok(c), Ok(p), Ok(s)) => over_rect((c.x, c.y), (p.x as f64, p.y as f64), s, &frame),
             _ => true, // can't tell: keep the banner clickable
         };
         if ignoring != Some(!over) {
@@ -966,19 +984,28 @@ fallback = "LADDER"
     fn banner_window_leaves_room_for_the_glow() {
         let css = include_str!("../../../ui/overlay/overlay.css");
         assert!(css.contains(&format!("inset: {BANNER_INSET}px")), "overlay.css .ach-b inset != BANNER_INSET");
-        // The banner frame itself stays 540x200, with room for the strongest glow (32px) around it.
-        assert_eq!((BANNER_SIZE.0 - 2.0 * BANNER_INSET, BANNER_SIZE.1 - 2.0 * BANNER_INSET), (540.0, 200.0));
+        assert!(css.contains("min-height: 200px") && css.contains("max-height: 320px"), "overlay.css .ach-b height range");
+        // The frame is 540 wide and at most 320 tall, with room for the strongest glow (32px) around it.
+        assert_eq!((BANNER_SIZE.0 - 2.0 * BANNER_INSET, BANNER_SIZE.1 - 2.0 * BANNER_INSET), (540.0, 320.0));
+        assert_eq!((BANNER_FRAME.x, BANNER_FRAME.y, BANNER_FRAME.w, BANNER_FRAME.h), (BANNER_INSET, BANNER_INSET, 540.0, 200.0));
     }
 
     #[test]
     fn cursor_is_over_banner_only_inside_its_frame() {
-        // Window at (100, 50) on a 150% display: the frame spans x 160..970, y 110..410.
-        let over = |x, y| over_banner((x, y), (100.0, 50.0), 1.5);
-        assert!(over(160.0, 110.0) && over(969.0, 409.0) && over(500.0, 250.0));
+        // Window at (100, 50) on a 150% display; a frame grown to 260 tall spans x 160..970, y 110..500.
+        let frame = Rect { h: 260.0, ..BANNER_FRAME };
+        let over = |x, y| over_rect((x, y), (100.0, 50.0), 1.5, &frame);
+        assert!(over(160.0, 110.0) && over(969.0, 499.0) && over(500.0, 450.0));
         assert!(!over(159.0, 200.0), "left glow margin");
         assert!(!over(500.0, 105.0), "top glow margin");
         assert!(!over(970.0, 200.0), "right glow margin");
-        assert!(!over(500.0, 410.0), "bottom glow margin");
+        assert!(!over(500.0, 500.0), "below the frame");
+    }
+
+    #[test]
+    fn banner_rect_payload_parses() {
+        let p = serde_json::from_str::<BannerRectPayload>(r#"{"id":3,"rect":{"x":40,"y":40,"w":540,"h":251.5}}"#).unwrap();
+        assert_eq!((p.id, p.rect), (3, Rect { x: 40.0, y: 40.0, w: 540.0, h: 251.5 }));
     }
 
     #[test]
@@ -999,8 +1026,8 @@ fallback = "LADDER"
     fn cursor_over_pill() {
         // Window at (100, 50) on a 150% display; the pill at CSS (60, 350) 270x34
         // spans physical x 190..595, y 575..626.
-        let rect = PillRect { x: 60.0, y: 350.0, w: 270.0, h: 34.0 };
-        let over = |x, y| over_pill((x, y), (100.0, 50.0), 1.5, &rect);
+        let rect = Rect { x: 60.0, y: 350.0, w: 270.0, h: 34.0 };
+        let over = |x, y| over_rect((x, y), (100.0, 50.0), 1.5, &rect);
         assert!(over(190.0, 575.0) && over(594.0, 625.0) && over(400.0, 600.0));
         assert!(!over(189.0, 600.0), "left of the pill");
         assert!(!over(595.0, 600.0), "right of the pill");
@@ -1055,8 +1082,8 @@ fallback = "LADDER"
 
     #[test]
     fn pill_rect_report_may_be_null() {
-        assert_eq!(serde_json::from_str::<Option<PillRect>>("null").unwrap(), None);
-        let r = serde_json::from_str::<Option<PillRect>>(r#"{"x":1,"y":2.5,"w":3,"h":4}"#).unwrap();
-        assert_eq!(r, Some(PillRect { x: 1.0, y: 2.5, w: 3.0, h: 4.0 }));
+        assert_eq!(serde_json::from_str::<Option<Rect>>("null").unwrap(), None);
+        let r = serde_json::from_str::<Option<Rect>>(r#"{"x":1,"y":2.5,"w":3,"h":4}"#).unwrap();
+        assert_eq!(r, Some(Rect { x: 1.0, y: 2.5, w: 3.0, h: 4.0 }));
     }
 }
